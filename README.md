@@ -20,3 +20,8 @@ This produces `build/Captain Polliwog.app`, a Universal (PowerPC + Intel) binary
 From a modern Mac, `scripts/remote-build.sh [host ...]` copies the sources to
 PowerPC Macs over SSH and builds there. `scripts/remote-run.sh host [url]` launches
 the app, loads a page, and copies back a snapshot of the window.
+
+## License
+
+Captain Polliwog's own code is under the [Mozilla Public License 2.0](LICENSE).
+Bundled third-party components keep their own licenses.
