@@ -30,21 +30,31 @@ DEPS_LIBS = libcurl.a libssl.a libcrypto.a libz.a
 # Must stay the first rule: make 3.80/3.81 treat the first target as the default.
 all: app
 
-define ARCH_RULES
-OBJS_$(1) = $$(patsubst src/%.m,$(BUILD)/$(1)/%.o,$(SRCS))
+# Written out per architecture rather than generated: make 3.80 on Tiger dies
+# with "virtual memory exhausted" on the $(eval)/$(foreach) version of this.
+OBJS_ppc  = $(patsubst src/%.m,$(BUILD)/ppc/%.o,$(SRCS))
+OBJS_i386 = $(patsubst src/%.m,$(BUILD)/i386/%.o,$(SRCS))
+DEPS_ppc  = $(patsubst %,$(DEPS_ROOT)/ppc/lib/%,$(DEPS_LIBS))
+DEPS_i386 = $(patsubst %,$(DEPS_ROOT)/i386/lib/%,$(DEPS_LIBS))
 
-$(BUILD)/$(1)/%.o: src/%.m $(HEADERS)
-	@mkdir -p $(BUILD)/$(1)
-	$(CC) -arch $(1) $(CFLAGS) $(CFLAGS_$(1)) -I$(DEPS_ROOT)/$(1)/include -c $$< -o $$@
+$(BUILD)/ppc/%.o: src/%.m $(HEADERS)
+	@mkdir -p $(BUILD)/ppc
+	$(CC) -arch ppc $(CFLAGS) $(CFLAGS_ppc) -I$(DEPS_ROOT)/ppc/include -c $< -o $@
 
-$(BUILD)/$(1)/$(EXEC): $$(OBJS_$(1))
-	$(CC) -arch $(1) $$^ $(patsubst %,$(DEPS_ROOT)/$(1)/lib/%,$(DEPS_LIBS)) $(LDFLAGS) -o $$@
-endef
+$(BUILD)/i386/%.o: src/%.m $(HEADERS)
+	@mkdir -p $(BUILD)/i386
+	$(CC) -arch i386 $(CFLAGS) $(CFLAGS_i386) -I$(DEPS_ROOT)/i386/include -c $< -o $@
 
-$(foreach arch,$(ARCHS),$(eval $(call ARCH_RULES,$(arch))))
+$(BUILD)/ppc/$(EXEC): $(OBJS_ppc)
+	$(CC) -arch ppc $(OBJS_ppc) $(DEPS_ppc) $(LDFLAGS) -o $@
 
-$(BUILD)/$(EXEC): $(foreach arch,$(ARCHS),$(BUILD)/$(arch)/$(EXEC))
-	lipo -create $^ -output $@
+$(BUILD)/i386/$(EXEC): $(OBJS_i386)
+	$(CC) -arch i386 $(OBJS_i386) $(DEPS_i386) $(LDFLAGS) -o $@
+
+ARCH_BINARIES = $(patsubst %,$(BUILD)/%/$(EXEC),$(ARCHS))
+
+$(BUILD)/$(EXEC): $(ARCH_BINARIES)
+	lipo -create $(ARCH_BINARIES) -output $@
 
 app: $(BUILD)/$(EXEC) Resources/Info.plist Resources/start.html Resources/cacert.pem
 	@rm -rf "$(APP)"

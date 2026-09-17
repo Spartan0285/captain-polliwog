@@ -14,5 +14,7 @@ for host in $HOSTS; do
         ssh -o ConnectTimeout=90 "$host" "mkdir -p $REMOTE_DIR && cd $REMOTE_DIR && rm -rf src Resources &&
             cat > /tmp/polliwog-src.zip && unzip -qo /tmp/polliwog-src.zip && rm /tmp/polliwog-src.zip"
     echo "==> $host: building"
-    ssh -o ConnectTimeout=90 "$host" "cd $REMOTE_DIR && make"
+    # Tiger's shells default to a 6MB heap limit, which the compiler exceeds
+    # on the files that pull in WebKit and libcurl headers.
+    ssh -o ConnectTimeout=90 "$host" "ulimit -d unlimited 2>/dev/null || ulimit -d 262144; cd $REMOTE_DIR && make ${MAKEFLAGS_REMOTE:-}"
 done
