@@ -17,7 +17,6 @@
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
-    [[NSThread currentThread] setName:@"Captain Polliwog network"];
     [self runTransfers];
     [pool release];
 }
@@ -34,14 +33,14 @@
         int pending = 0;
         CURLMsg *message;
 
-        [condition lock];
+        pthread_mutex_lock(&mutex);
         while ([pendingTasks count] == 0 && [cancelledTasks count] == 0 && [activeTasks count] == 0)
-            [condition wait];
+            pthread_cond_wait(&queueChanged, &mutex);
         starting = [pendingTasks copy];
         stopping = [cancelledTasks copy];
         [pendingTasks removeAllObjects];
         [cancelledTasks removeAllObjects];
-        [condition unlock];
+        pthread_mutex_unlock(&mutex);
 
         for (index = 0; index < [stopping count]; index++) {
             CPNetworkTask *task = [stopping objectAtIndex:index];
@@ -117,7 +116,8 @@
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
     multiHandle = curl_multi_init();
-    condition = [[NSCondition alloc] init];
+    pthread_mutex_init(&mutex, NULL);
+    pthread_cond_init(&queueChanged, NULL);
     pendingTasks = [[NSMutableArray alloc] init];
     activeTasks = [[NSMutableArray alloc] init];
     cancelledTasks = [[NSMutableArray alloc] init];
@@ -133,23 +133,23 @@
 
 - (void)startTask:(CPNetworkTask *)task
 {
-    [condition lock];
+    pthread_mutex_lock(&mutex);
     [pendingTasks addObject:task];
     if (!threadStarted) {
         threadStarted = YES;
         [NSThread detachNewThreadSelector:@selector(networkThread:) toTarget:self withObject:nil];
     }
-    [condition signal];
-    [condition unlock];
+    pthread_cond_signal(&queueChanged);
+    pthread_mutex_unlock(&mutex);
     curl_multi_wakeup((CURLM *)multiHandle);
 }
 
 - (void)cancelTask:(CPNetworkTask *)task
 {
-    [condition lock];
+    pthread_mutex_lock(&mutex);
     [cancelledTasks addObject:task];
-    [condition signal];
-    [condition unlock];
+    pthread_cond_signal(&queueChanged);
+    pthread_mutex_unlock(&mutex);
     curl_multi_wakeup((CURLM *)multiHandle);
 }
 

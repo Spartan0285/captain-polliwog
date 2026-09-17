@@ -22,8 +22,8 @@ CFLAGS  = -isysroot $(SDK) -Os -Wall -Wno-unused-parameter
 # G3 baseline so one PowerPC build runs on every PowerPC Mac; tuned for G4 laptops.
 CFLAGS_ppc  = -mcpu=G3 -mtune=G4
 CFLAGS_i386 =
-LDFLAGS = -isysroot $(SDK) -Wl,-syslibroot,$(SDK) -framework Cocoa -framework WebKit
-DEPS_LIBS = libcurl.a libssl.a libcrypto.a
+LDFLAGS = -isysroot $(SDK) -Wl,-syslibroot,$(SDK) -framework Cocoa -framework WebKit -framework SystemConfiguration
+DEPS_LIBS = libcurl.a libssl.a libcrypto.a libz.a
 
 .PHONY: all app clean
 
@@ -38,7 +38,7 @@ $(BUILD)/$(1)/%.o: src/%.m $(HEADERS)
 	$(CC) -arch $(1) $(CFLAGS) $(CFLAGS_$(1)) -I$(DEPS_ROOT)/$(1)/include -c $$< -o $$@
 
 $(BUILD)/$(1)/$(EXEC): $$(OBJS_$(1))
-	$(CC) -arch $(1) $$^ $(patsubst %,$(DEPS_ROOT)/$(1)/lib/%,$(DEPS_LIBS)) -lz $(LDFLAGS) -o $$@
+	$(CC) -arch $(1) $$^ $(patsubst %,$(DEPS_ROOT)/$(1)/lib/%,$(DEPS_LIBS)) $(LDFLAGS) -o $$@
 endef
 
 $(foreach arch,$(ARCHS),$(eval $(call ARCH_RULES,$(arch))))

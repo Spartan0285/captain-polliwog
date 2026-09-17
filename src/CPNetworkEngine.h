@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #import <Cocoa/Cocoa.h>
+#include <pthread.h>
 
 @class CPNetworkTask;
 
@@ -12,7 +13,9 @@
 @interface CPNetworkEngine : NSObject
 {
     void            *multiHandle;   // CURLM *
-    NSCondition     *condition;     // guards the three queues below
+    // POSIX primitives rather than NSCondition, which is 10.5 and later.
+    pthread_mutex_t  mutex;         // guards the three queues below
+    pthread_cond_t   queueChanged;
     NSMutableArray  *pendingTasks;
     NSMutableArray  *activeTasks;
     NSMutableArray  *cancelledTasks;

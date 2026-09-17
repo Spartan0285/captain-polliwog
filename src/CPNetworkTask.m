@@ -6,6 +6,7 @@
 #import "CPCurlProtocol.h"
 #import "CPNetworkEngine.h"
 #include <curl/curl.h>
+#include <stdlib.h>
 
 static NSString *CPTrimmed(NSString *text)
 {
@@ -127,7 +128,8 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     // Content-Length is the encoded size; with gzip in play it would mislead
     // WebKit's progress, so only trust it when nothing was re-encoded.
     if (lengthText != nil && [responseHeaders objectForKey:@"content-encoding"] == nil)
-        length = [lengthText longLongValue];
+        // -longLongValue on NSString is 10.5 and later.
+        length = strtoll([lengthText UTF8String], NULL, 10);
 
     if (disposition != nil) {
         NSRange marker = [[disposition lowercaseString] rangeOfString:@"filename="];
