@@ -4,6 +4,7 @@
 
 #import "CPAppDelegate.h"
 #import "CPBrowserWindowController.h"
+#import "CPCurlProtocol.h"
 #import <WebKit/WebKit.h>
 #include <sys/types.h>
 #include <sys/sysctl.h>
@@ -98,8 +99,13 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
 - (id)init
 {
     self = [super init];
-    if (self != nil)
-        browserWindows = [[NSMutableArray alloc] init];
+    if (self == nil)
+        return nil;
+
+    browserWindows = [[NSMutableArray alloc] init];
+    // Registered before anything loads, so every https request in the app
+    // goes through the bundled OpenSSL instead of the system's ancient one.
+    [NSURLProtocol registerClass:[CPCurlProtocol class]];
     return self;
 }
 
