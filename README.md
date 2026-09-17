@@ -2,16 +2,30 @@
 
 A web browser for Mac OS X 10.4 Tiger and later, on PowerPC (G3 and up) and Intel.
 
-**Status: 0.1, early development.** The app currently uses the WebKit built into
-the OS, which cannot connect to most modern HTTPS sites. The next steps are:
+**Status: 0.2, early development.** The app renders with the WebKit built into
+the OS, but does its own networking: every https request goes through a bundled
+OpenSSL 3, libcurl and zlib, because the TLS in Tiger and Leopard stops at
+TLS 1.0 and cannot reach most sites any more. Current Wikipedia and DuckDuckGo
+load on a 500MHz PowerBook G3 with 256MB of RAM, in about 53MB of memory.
 
-1. Bundled modern TLS (OpenSSL), so HTTPS works on Tiger and Leopard.
+Next steps:
+
+1. A memory budget and disk cache sized to the machine (a cache hit skips the
+   download *and* the TLS handshake, which is real work at 500MHz).
 2. Tabs, bookmarks, history, downloads and private browsing.
 3. A modern WebKit engine ported to Tiger/PowerPC.
 
 ## Building
 
-On a Mac running Tiger (Xcode 2.5) or Leopard (Xcode 3.1) with the 10.4u SDK:
+The bundled libraries are built once per architecture, on a PowerPC Mac with
+Perl 5.10+ available (OpenSSL's Configure rejects the Perl 5.8 that Tiger and
+Leopard ship). With the source tarballs in `$HOME`:
+
+    scripts/build-deps.sh ppc
+    scripts/build-deps.sh i386
+
+Then, on a Mac running Tiger (Xcode 2.5) or Leopard (Xcode 3.1) with the 10.4u
+SDK:
 
     make
 

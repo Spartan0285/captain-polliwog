@@ -40,6 +40,13 @@ i386)
     ;;
 esac
 
+# The machine doing the building, so libcurl's configure can tell when it is
+# cross-compiling: an Intel binary cannot be run on a PowerPC Mac to test.
+case `uname -p` in
+powerpc) BUILD_TRIPLE=powerpc-apple-darwin8 ;;
+*)       BUILD_TRIPLE=i386-apple-darwin8 ;;
+esac
+
 CFLAGS_COMMON="-mmacosx-version-min=10.4 -Os"
 # OpenSSL keeps its target's own -O3: TLS handshakes are real work at 500MHz,
 # and its assembly paths are the reason for using it over a smaller library.
@@ -118,7 +125,7 @@ extract "$HOME/$CURL.tar.gz"
 mv "$CURL" "$CURL-$ARCH"
 cd "$SRC/$CURL-$ARCH"
 # No CA bundle path is compiled in; the app points libcurl at its own copy.
-./configure --host="$HOST" --build="$HOST" --prefix="$PREFIX" \
+./configure --host="$HOST" --build="$BUILD_TRIPLE" --prefix="$PREFIX" \
     --with-openssl="$PREFIX" --without-ca-bundle --without-ca-path \
     --disable-shared --enable-static --with-zlib="$PREFIX" \
     --disable-ldap --disable-ldaps --disable-manual --disable-dict \

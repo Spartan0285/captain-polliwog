@@ -3,7 +3,7 @@
 
 APP_NAME = Captain Polliwog
 EXEC     = CaptainPolliwog
-VERSION  = 0.1
+VERSION  = 0.2
 
 SDK       ?= /Developer/SDKs/MacOSX10.4u.sdk
 # Static OpenSSL and libcurl, built per architecture by scripts/build-deps.sh.
