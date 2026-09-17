@@ -5,6 +5,7 @@
 #import "CPBrowserWindowController.h"
 #import "CPAppDelegate.h"
 #import "CPIcons.h"
+#import "CPDebugSnapshot.h"
 #import <WebKit/WebKit.h>
 
 #define CPBarHeight     34.0f
@@ -234,22 +235,12 @@ static NSString *CPEscapeHTML(NSString *text)
     [frame loadAlternateHTMLString:html baseURL:nil forUnreachableURL:failingURL];
 }
 
-// Testing aid: "defaults write org.captainpolliwog.browser CPDebugSnapshotPath /tmp/x.png"
-// saves a picture of the window after each page load. Screenshots taken over
-// SSH come back black on Leopard, so the scripts in scripts/ rely on this.
 - (void)writeDebugSnapshot
 {
-    NSString *path = [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugSnapshotPath"];
-    NSView *view = [[[self window] contentView] superview];
-    NSBitmapImageRep *bitmap;
-
-    if (path == nil)
+    // When the scripts are photographing Preferences, stay out of the way.
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugShowPreferences"])
         return;
-    if (view == nil)
-        view = [[self window] contentView];
-    bitmap = [view bitmapImageRepForCachingDisplayInRect:[view bounds]];
-    [view cacheDisplayInRect:[view bounds] toBitmapImageRep:bitmap];
-    [[bitmap representationUsingType:NSPNGFileType properties:nil] writeToFile:path atomically:YES];
+    CPWriteWindowSnapshot([self window]);
 }
 
 @end
@@ -285,6 +276,7 @@ static NSString *CPEscapeHTML(NSString *text)
 - (void)dealloc
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [loadStarted release];
     [webView release];
     [super dealloc];
 }
@@ -405,6 +397,8 @@ static NSString *CPEscapeHTML(NSString *text)
 {
     if (frame != [sender mainFrame])
         return;
+    [loadStarted release];
+    loadStarted = [[NSDate date] retain];
     [self setAddressFromURL:[[[frame provisionalDataSource] request] URL]];
     [self setLoading:YES];
 }
@@ -434,8 +428,12 @@ static NSString *CPEscapeHTML(NSString *text)
         return;
     [self setLoading:NO];
     [self updateNavigationButtons];
+    if (CPDebugSnapshotPath() != nil && loadStarted != nil)
+        NSLog(@"Captain Polliwog: page-load %.1fs %@",
+              -[loadStarted timeIntervalSinceNow], [[[frame dataSource] request] URL]);
 
-    if ([[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugSnapshotPath"] != nil) {
+    if (CPDebugSnapshotPath() != nil &&
+        ![[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugShowPreferences"]) {
         NSLog(@"Captain Polliwog: finished %@", [[[frame dataSource] request] URL]);
         [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(writeDebugSnapshot) object:nil];
         [self performSelector:@selector(writeDebugSnapshot) withObject:nil afterDelay:2.0];

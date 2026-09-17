@@ -7,6 +7,7 @@
 #import "CPCurlProtocol.h"
 #import "CPSettings.h"
 #import "CPPreferencesController.h"
+#import "CPDebugSnapshot.h"
 #import <WebKit/WebKit.h>
 
 static NSMenuItem *CPAddItem(NSMenu *menu, NSString *title, SEL action, NSString *key)
@@ -172,6 +173,13 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
         [self newWindow:self];
     if (debugURL != nil)
         [[browserWindows lastObject] loadAddressString:debugURL];
+    // Lets the test scripts photograph the Preferences window too.
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugShowPreferences"]) {
+        [self showPreferences:self];
+        [[CPPreferencesController sharedController] performSelector:@selector(writeDebugSnapshot)
+                                                         withObject:nil
+                                                         afterDelay:2.0];
+    }
 }
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag

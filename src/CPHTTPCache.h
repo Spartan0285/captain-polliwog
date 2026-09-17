@@ -10,6 +10,14 @@
 // the connection and the TLS handshake.
 @interface CPHTTPCache : NSObject
 
+// Storage of our own rather than NSURLCache: CFNetwork crashes reading back
+// entries it did not write itself, and files avoid SQLite work on a G3.
++ (NSString *)cachePath;
++ (void)configureWithMemoryCapacity:(unsigned)memoryCapacity
+                       diskCapacity:(unsigned)diskCapacity
+                               path:(NSString *)path;
++ (void)removeAllCachedResponses;
+
 // nil unless the request may be served or revalidated from the cache.
 + (NSCachedURLResponse *)cachedResponseForRequest:(NSURLRequest *)request;
 
@@ -20,6 +28,7 @@
 + (NSDictionary *)validatorHeadersForCachedResponse:(NSCachedURLResponse *)cached;
 
 + (BOOL)mayStoreResponse:(NSHTTPURLResponse *)response forRequest:(NSURLRequest *)request;
++ (NSDictionary *)varyValuesForResponse:(NSHTTPURLResponse *)response request:(NSURLRequest *)request;
 + (void)storeData:(NSData *)data
          response:(NSHTTPURLResponse *)response
        forRequest:(NSURLRequest *)request;

@@ -6,6 +6,7 @@
 #import "CPNetworkEngine.h"
 #import "CPNetworkTask.h"
 #import "CPHTTPCache.h"
+#import "CPDebugSnapshot.h"
 
 @implementation CPCurlProtocol
 
@@ -31,6 +32,8 @@
     NSCachedURLResponse *cached = [CPHTTPCache cachedResponseForRequest:[self request]];
 
     if (cached != nil && [CPHTTPCache cachedResponseIsFresh:cached forRequest:[self request]]) {
+        if (CPDebugSnapshotPath() != nil)
+            NSLog(@"Captain Polliwog: cache-hit %@", [[self request] URL]);
         // Still fresh: no connection, no handshake, no transfer. Delivered on
         // the next pass of the run loop rather than inside -startLoading.
         [self performSelector:@selector(serveCachedResponse:) withObject:cached afterDelay:0.0];
@@ -45,6 +48,13 @@
 
 - (void)serveCachedResponse:(NSCachedURLResponse *)cached
 {
+    if (![[cached response] respondsToSelector:@selector(allHeaderFields)]) {
+        // WebKit would send -allHeaderFields to this and bring the app down.
+        NSLog(@"Captain Polliwog: unusable cache entry for %@", [[self request] URL]);
+        [[self client] URLProtocol:self didFailWithError:
+         [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorResourceUnavailable userInfo:nil]];
+        return;
+    }
     [[self client] URLProtocol:self
             didReceiveResponse:[cached response]
             cacheStoragePolicy:NSURLCacheStorageNotAllowed];

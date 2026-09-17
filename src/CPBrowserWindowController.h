@@ -15,6 +15,7 @@
     NSTextField         *addressField;
     NSTextField         *statusField;
     NSProgressIndicator *progressBar;
+    NSDate              *loadStarted;
     BOOL                 loading;
 }
 

@@ -4,6 +4,7 @@
 
 #import "CPPreferencesController.h"
 #import "CPSettings.h"
+#import "CPDebugSnapshot.h"
 
 #define CPWindowWidth   520.0f
 #define CPWindowHeight  260.0f
@@ -171,6 +172,11 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
 {
     [self refresh];
     [super showWindow:sender];
+}
+
+- (void)writeDebugSnapshot
+{
+    CPWriteWindowSnapshot([self window]);
 }
 
 - (IBAction)memoryProfileChanged:(id)sender

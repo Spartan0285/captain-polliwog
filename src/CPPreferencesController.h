@@ -16,6 +16,8 @@
 
 + (CPPreferencesController *)sharedController;
 
+- (void)writeDebugSnapshot;
+
 - (IBAction)memoryProfileChanged:(id)sender;
 - (IBAction)diskSizeChanged:(id)sender;
 - (IBAction)chooseCacheLocation:(id)sender;

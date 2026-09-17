@@ -4,6 +4,8 @@
 
 #import "CPSettings.h"
 #import <WebKit/WebKit.h>
+#import "CPHTTPCache.h"
+#include <string.h>
 #include <sys/types.h>
 #include <sys/sysctl.h>
 
@@ -24,19 +26,32 @@ static unsigned long long CPPhysicalMemory(void)
 }
 
 // Calls a WebPreferences method that the 10.4 SDK does not declare but the
-// installed WebKit may still implement.
-static void CPCallWithUnsignedArgument(id target, NSString *selectorName, unsigned value)
+// installed WebKit may still implement. The argument has to be passed in the
+// type the method actually takes: a BOOL is a char, and handing it four bytes
+// stores the wrong value.
+static void CPCallWithArgument(id target, NSString *selectorName, unsigned value)
 {
     SEL selector = NSSelectorFromString(selectorName);
+    NSMethodSignature *signature;
     NSInvocation *invocation;
+    const char *argumentType;
 
-    if (![target respondsToSelector:selector])
+    if (![target respondsToSelector:selector]) {
+        NSLog(@"Captain Polliwog: %@ unavailable in this WebKit", selectorName);
         return;
-    invocation = [NSInvocation invocationWithMethodSignature:
-                  [target methodSignatureForSelector:selector]];
+    }
+    signature = [target methodSignatureForSelector:selector];
+    invocation = [NSInvocation invocationWithMethodSignature:signature];
     [invocation setTarget:target];
     [invocation setSelector:selector];
-    [invocation setArgument:&value atIndex:2];
+
+    argumentType = [signature getArgumentTypeAtIndex:2];
+    if (strcmp(argumentType, @encode(BOOL)) == 0 || strcmp(argumentType, @encode(char)) == 0) {
+        BOOL flag = (value != 0);
+        [invocation setArgument:&flag atIndex:2];
+    } else {
+        [invocation setArgument:&value atIndex:2];
+    }
     [invocation invoke];
 }
 
@@ -134,8 +149,11 @@ static void CPCallWithUnsignedArgument(id target, NSString *selectorName, unsign
 
     if ([location length] > 0)
         return [location stringByAppendingPathComponent:@"Captain Polliwog Cache"];
-    return [[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Caches"]
-            stringByAppendingPathComponent:@"org.captainpolliwog.browser"];
+    // A folder of our own inside the app's cache directory, kept away from the
+    // one CFNetwork manages for plain http loads.
+    return [[[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Caches"]
+             stringByAppendingPathComponent:@"org.captainpolliwog.browser"]
+            stringByAppendingPathComponent:@"Captain Polliwog HTTP"];
 }
 
 - (BOOL)loadsImages
@@ -174,7 +192,6 @@ static void CPCallWithUnsignedArgument(id target, NSString *selectorName, unsign
     CPMemoryProfile profile = [self effectiveMemoryProfile];
     WebPreferences *preferences = [WebPreferences standardPreferences];
     NSString *path = [self resolvedDiskCachePath];
-    NSURLCache *cache;
 
     [preferences setAutosaves:YES];
     [preferences setJavaScriptCanOpenWindowsAutomatically:NO];
@@ -185,19 +202,14 @@ static void CPCallWithUnsignedArgument(id target, NSString *selectorName, unsign
     // Neither selector is in the 10.4 SDK, but WebKit 3 and later have both.
     // WebCacheModelDocumentBrowser keeps the page cache small; the primary
     // browser model is Safari's own, and only makes sense with RAM to spare.
-    CPCallWithUnsignedArgument(preferences, @"setCacheModel:",
-                               (profile == CPMemoryProfileSmall) ? 1 : 2);
-    CPCallWithUnsignedArgument(preferences, @"setUsesPageCache:",
-                               (profile == CPMemoryProfileSmall) ? 0 : 1);
+    CPCallWithArgument(preferences, @"setCacheModel:",
+                       (profile == CPMemoryProfileSmall) ? 1 : 2);
+    CPCallWithArgument(preferences, @"setUsesPageCache:",
+                       (profile == CPMemoryProfileSmall) ? 0 : 1);
 
-    [[NSFileManager defaultManager] createDirectoryAtPath:path attributes:nil];
-    cache = [[NSURLCache alloc] initWithMemoryCapacity:[self memoryCacheBytes]
-                                          diskCapacity:([self effectiveDiskCacheMegabytes] * 1024 * 1024)
-                                              diskPath:path];
-    if (cache != nil) {
-        [NSURLCache setSharedURLCache:cache];
-        [cache release];
-    }
+    [CPHTTPCache configureWithMemoryCapacity:[self memoryCacheBytes]
+                                diskCapacity:([self effectiveDiskCacheMegabytes] * 1024 * 1024)
+                                        path:path];
 
     [[NSNotificationCenter defaultCenter] postNotificationName:CPSettingsDidChangeNotification
                                                         object:self];
@@ -205,7 +217,7 @@ static void CPCallWithUnsignedArgument(id target, NSString *selectorName, unsign
 
 - (void)clearCaches
 {
-    [[NSURLCache sharedURLCache] removeAllCachedResponses];
+    [CPHTTPCache removeAllCachedResponses];
 }
 
 - (unsigned long long)diskCacheBytesInUse

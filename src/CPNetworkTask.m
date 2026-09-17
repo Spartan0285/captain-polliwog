@@ -7,6 +7,7 @@
 #import "CPNetworkEngine.h"
 #import "CPHTTPCache.h"
 #import "CPSettings.h"
+#import "CPDebugSnapshot.h"
 #include <curl/curl.h>
 #include <stdlib.h>
 
@@ -63,6 +64,8 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
         // Not modified: the stored copy stands, and only headers came over
         // the wire. This is the cheap path we want as often as possible.
         servedFromCache = YES;
+        if (CPDebugSnapshotPath() != nil)
+            NSLog(@"Captain Polliwog: revalidated %@", [request URL]);
         [self callOnMainThread:@selector(deliverCachedResponse:) withObject:cachedResponse];
         return;
     }
@@ -92,6 +95,8 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     }
 
     responseDelivered = YES;
+    if (CPDebugSnapshotPath() != nil)
+        NSLog(@"Captain Polliwog: from-network(%d) %@", statusCode, [request URL]);
     [lastResponse release];
     lastResponse = [[self buildResponse] retain];
     if ([CPHTTPCache mayStoreResponse:lastResponse forRequest:request]) {
