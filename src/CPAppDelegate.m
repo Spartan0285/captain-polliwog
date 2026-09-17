@@ -5,18 +5,9 @@
 #import "CPAppDelegate.h"
 #import "CPBrowserWindowController.h"
 #import "CPCurlProtocol.h"
+#import "CPSettings.h"
+#import "CPPreferencesController.h"
 #import <WebKit/WebKit.h>
-#include <sys/types.h>
-#include <sys/sysctl.h>
-
-static unsigned long long CPPhysicalMemory(void)
-{
-    unsigned long long memsize = 0;
-    size_t len = sizeof(memsize);
-    if (sysctlbyname("hw.memsize", &memsize, &len, NULL, 0) != 0)
-        return 0;
-    return memsize;
-}
 
 static NSMenuItem *CPAddItem(NSMenu *menu, NSString *title, SEL action, NSString *key)
 {
@@ -31,44 +22,6 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     [menu release];
     return menu;
 }
-
-@interface CPAppDelegate (Private)
-- (void)configureWebKitForThisMachine;
-@end
-
-@implementation CPAppDelegate (Private)
-
-// Size caches to the machine. A 256MB Pismo cannot afford Safari's defaults.
-- (void)configureWebKitForThisMachine
-{
-    unsigned long long ram = CPPhysicalMemory();
-    BOOL lowMemory = (ram == 0 || ram <= 512ULL * 1024 * 1024);
-
-    WebPreferences *prefs = [WebPreferences standardPreferences];
-    [prefs setAutosaves:YES];
-    [prefs setJavaScriptCanOpenWindowsAutomatically:NO];
-    [prefs setJavaEnabled:NO];
-    [prefs setPlugInsEnabled:NO];
-
-    // -setCacheModel: is public from WebKit 3 on, but is not in the 10.4u SDK.
-    SEL setCacheModel = NSSelectorFromString(@"setCacheModel:");
-    if ([prefs respondsToSelector:setCacheModel]) {
-        unsigned int model = lowMemory ? 1 /* WebCacheModelDocumentBrowser */
-                                       : 2 /* WebCacheModelPrimaryWebBrowser */;
-        NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:
-                                    [prefs methodSignatureForSelector:setCacheModel]];
-        [invocation setTarget:prefs];
-        [invocation setSelector:setCacheModel];
-        [invocation setArgument:&model atIndex:2];
-        [invocation invoke];
-    }
-
-    NSURLCache *cache = [NSURLCache sharedURLCache];
-    [cache setMemoryCapacity:(lowMemory ? 2 : 8) * 1024 * 1024];
-    [cache setDiskCapacity:(lowMemory ? 40 : 100) * 1024 * 1024];
-}
-
-@end
 
 @implementation CPAppDelegate
 
@@ -131,6 +84,8 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     item = CPAddItem(menu, @"Hide Others", @selector(hideOtherApplications:), @"h");
     [item setKeyEquivalentModifierMask:(NSCommandKeyMask | NSAlternateKeyMask)];
     CPAddItem(menu, @"Show All", @selector(unhideAllApplications:), nil);
+    [menu addItem:[NSMenuItem separatorItem]];
+    CPAddItem(menu, @"Preferences...", @selector(showPreferences:), @",");
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Quit Captain Polliwog", @selector(terminate:), @"q");
     // Without a nib, Tiger only treats this as the application menu once told.
@@ -195,6 +150,11 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     [browserWindows removeObject:controller];
 }
 
+- (IBAction)showPreferences:(id)sender
+{
+    [[CPPreferencesController sharedController] showWindow:sender];
+}
+
 - (IBAction)newWindow:(id)sender
 {
     CPBrowserWindowController *controller = [self openBrowserWindow];
@@ -207,7 +167,7 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
 {
     NSString *debugURL = [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugURL"];
 
-    [self configureWebKitForThisMachine];
+    [[CPSettings sharedSettings] apply];
     if ([browserWindows count] == 0)
         [self newWindow:self];
     if (debugURL != nil)

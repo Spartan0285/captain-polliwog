@@ -19,6 +19,10 @@
     NSData              *uploadBody;    // kept alive while libcurl reads it
     NSMutableDictionary *responseHeaders;
     NSMutableArray      *responseHeaderOrder;
+    NSCachedURLResponse *cachedResponse;    // a stored copy to revalidate
+    NSHTTPURLResponse   *lastResponse;      // what this transfer returned
+    NSMutableData       *cacheData;         // nil once too big to keep
+    BOOL                 servedFromCache;
     int                  statusCode;
     NSString            *httpVersion;
     NSString            *redirectLocation;
@@ -26,7 +30,9 @@
     BOOL                 cancelled;
 }
 
-- (id)initWithRequest:(NSURLRequest *)aRequest protocol:(CPCurlProtocol *)aProtocol;
+- (id)initWithRequest:(NSURLRequest *)aRequest
+             protocol:(CPCurlProtocol *)aProtocol
+       cachedResponse:(NSCachedURLResponse *)aCachedResponse;
 
 - (NSURLRequest *)request;
 - (CPCurlProtocol *)protocol;

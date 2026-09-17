@@ -5,6 +5,8 @@
 #import "CPNetworkTask.h"
 #import "CPCurlProtocol.h"
 #import "CPNetworkEngine.h"
+#import "CPHTTPCache.h"
+#import "CPSettings.h"
 #include <curl/curl.h>
 #include <stdlib.h>
 
@@ -34,6 +36,8 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
 - (void)deliverFinish;
 - (void)deliverError:(NSError *)error;
 - (void)storeCookiesFromHeaders:(NSArray *)setCookieValues;
+- (void)deliverCachedResponse:(NSCachedURLResponse *)cached;
+- (void)storeInCache:(NSArray *)dataAndResponse;
 - (void)callOnMainThread:(SEL)selector withObject:(id)object;
 @end
 
@@ -54,6 +58,14 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     }
     if ([setCookieValues count] > 0)
         [self callOnMainThread:@selector(storeCookiesFromHeaders:) withObject:setCookieValues];
+
+    if (statusCode == 304 && cachedResponse != nil) {
+        // Not modified: the stored copy stands, and only headers came over
+        // the wire. This is the cheap path we want as often as possible.
+        servedFromCache = YES;
+        [self callOnMainThread:@selector(deliverCachedResponse:) withObject:cachedResponse];
+        return;
+    }
 
     if (statusCode >= 301 && statusCode <= 308 && statusCode != 304 && statusCode != 305 &&
         [responseHeaders objectForKey:@"location"] != nil) {
@@ -80,7 +92,13 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     }
 
     responseDelivered = YES;
-    [self callOnMainThread:@selector(deliverResponse:) withObject:[self buildResponse]];
+    [lastResponse release];
+    lastResponse = [[self buildResponse] retain];
+    if ([CPHTTPCache mayStoreResponse:lastResponse forRequest:request]) {
+        [cacheData release];
+        cacheData = [[NSMutableData alloc] init];
+    }
+    [self callOnMainThread:@selector(deliverResponse:) withObject:lastResponse];
 }
 
 - (NSDictionary *)combinedHeaderFields
@@ -240,6 +258,29 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     [failing release];
 }
 
+- (void)deliverCachedResponse:(NSCachedURLResponse *)cached
+{
+    CPCurlProtocol *finishing = protocol;
+
+    if (cancelled || finishing == nil)
+        return;
+    protocol = nil;
+    [[finishing client] URLProtocol:finishing
+                didReceiveResponse:[cached response]
+                cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+    if ([[cached data] length] > 0)
+        [[finishing client] URLProtocol:finishing didLoadData:[cached data]];
+    [[finishing client] URLProtocolDidFinishLoading:finishing];
+    [finishing release];
+}
+
+- (void)storeInCache:(NSArray *)dataAndResponse
+{
+    [CPHTTPCache storeData:[dataAndResponse objectAtIndex:0]
+                  response:[dataAndResponse objectAtIndex:1]
+                forRequest:request];
+}
+
 - (void)storeCookiesFromHeaders:(NSArray *)setCookieValues
 {
     NSDictionary *fields = [NSDictionary dictionaryWithObject:
@@ -257,7 +298,9 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
 
 @implementation CPNetworkTask
 
-- (id)initWithRequest:(NSURLRequest *)aRequest protocol:(CPCurlProtocol *)aProtocol
+- (id)initWithRequest:(NSURLRequest *)aRequest
+             protocol:(CPCurlProtocol *)aProtocol
+       cachedResponse:(NSCachedURLResponse *)aCachedResponse
 {
     self = [super init];
     if (self == nil)
@@ -265,6 +308,7 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
 
     request = [aRequest retain];
     protocol = [aProtocol retain];
+    cachedResponse = [aCachedResponse retain];
     responseHeaders = [[NSMutableDictionary alloc] init];
     responseHeaderOrder = [[NSMutableArray alloc] init];
     statusCode = 0;
@@ -277,6 +321,9 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     [request release];
     [protocol release];
     [uploadBody release];
+    [cachedResponse release];
+    [lastResponse release];
+    [cacheData release];
     [responseHeaders release];
     [responseHeaderOrder release];
     [httpVersion release];
@@ -365,6 +412,16 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
         if ([cookieHeader length] > 0)
             headers = curl_slist_append(headers,
                                         [[NSString stringWithFormat:@"Cookie: %@", cookieHeader] UTF8String]);
+    }
+    // Revalidate rather than re-download when a stale copy has validators.
+    if (cachedResponse != nil) {
+        NSDictionary *validators = [CPHTTPCache validatorHeadersForCachedResponse:cachedResponse];
+        NSEnumerator *validatorNames = [validators keyEnumerator];
+        NSString *validatorName;
+        while ((validatorName = [validatorNames nextObject]) != nil)
+            headers = curl_slist_append(headers,
+                                        [[NSString stringWithFormat:@"%@: %@", validatorName,
+                                          [validators objectForKey:validatorName]] UTF8String]);
     }
     headers = curl_slist_append(headers, "Expect:");
     headerList = headers;
@@ -455,8 +512,17 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
 {
     if (cancelled)
         return 0;
-    if (redirectLocation != nil)
-        return length;      // discard a redirect's body
+    if (redirectLocation != nil || servedFromCache)
+        return length;      // nothing here belongs to the page
+    if (cacheData != nil && length > 0) {
+        if ([cacheData length] + length > [[CPSettings sharedSettings] maximumCachedResponseBytes]) {
+            // Too big to hold: stream it and give up on caching this one.
+            [cacheData release];
+            cacheData = nil;
+        } else {
+            [cacheData appendBytes:bytes length:length];
+        }
+    }
     if (length > 0)
         [self callOnMainThread:@selector(deliverData:)
                     withObject:[NSData dataWithBytes:bytes length:length]];
@@ -465,7 +531,7 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
 
 - (void)completeWithCurlCode:(int)code
 {
-    if (cancelled)
+    if (cancelled || servedFromCache)
         return;
     if (code != CURLE_OK) {
         [self callOnMainThread:@selector(deliverError:) withObject:[self errorForCurlCode:code]];
@@ -473,6 +539,9 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     }
     if (redirectLocation != nil)
         return;             // WebKit is already starting the new request
+    if (cacheData != nil && lastResponse != nil)
+        [self callOnMainThread:@selector(storeInCache:)
+                    withObject:[NSArray arrayWithObjects:cacheData, lastResponse, nil]];
     if (!responseDelivered) {
         responseDelivered = YES;
         [self callOnMainThread:@selector(deliverResponse:) withObject:[self buildResponse]];

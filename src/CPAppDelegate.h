@@ -19,5 +19,6 @@
 - (void)browserWindowWillClose:(CPBrowserWindowController *)controller;
 
 - (IBAction)newWindow:(id)sender;
+- (IBAction)showPreferences:(id)sender;
 
 @end

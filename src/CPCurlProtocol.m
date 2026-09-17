@@ -5,6 +5,7 @@
 #import "CPCurlProtocol.h"
 #import "CPNetworkEngine.h"
 #import "CPNetworkTask.h"
+#import "CPHTTPCache.h"
 
 @implementation CPCurlProtocol
 
@@ -27,12 +28,34 @@
 
 - (void)startLoading
 {
-    task = [[CPNetworkTask alloc] initWithRequest:[self request] protocol:self];
+    NSCachedURLResponse *cached = [CPHTTPCache cachedResponseForRequest:[self request]];
+
+    if (cached != nil && [CPHTTPCache cachedResponseIsFresh:cached forRequest:[self request]]) {
+        // Still fresh: no connection, no handshake, no transfer. Delivered on
+        // the next pass of the run loop rather than inside -startLoading.
+        [self performSelector:@selector(serveCachedResponse:) withObject:cached afterDelay:0.0];
+        return;
+    }
+
+    task = [[CPNetworkTask alloc] initWithRequest:[self request]
+                                         protocol:self
+                                   cachedResponse:cached];
     [[CPNetworkEngine sharedEngine] startTask:task];
+}
+
+- (void)serveCachedResponse:(NSCachedURLResponse *)cached
+{
+    [[self client] URLProtocol:self
+            didReceiveResponse:[cached response]
+            cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+    if ([[cached data] length] > 0)
+        [[self client] URLProtocol:self didLoadData:[cached data]];
+    [[self client] URLProtocolDidFinishLoading:self];
 }
 
 - (void)stopLoading
 {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
     if (task != nil) {
         [task markCancelled];
         [[CPNetworkEngine sharedEngine] cancelTask:task];
@@ -43,6 +66,7 @@
 
 - (void)dealloc
 {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [task release];
     [super dealloc];
 }
@@ -77,6 +101,41 @@
     [responseHeaderFields release];
     [responseSuggestedFilename release];
     [super dealloc];
+}
+
+// NSURLCache archives responses when it writes them to disk, and the extra
+// fields here would be lost without this.
+- (id)initWithCoder:(NSCoder *)coder
+{
+    self = [super initWithCoder:coder];
+    if (self == nil)
+        return nil;
+
+    if ([coder allowsKeyedCoding]) {
+        responseStatusCode = [coder decodeIntForKey:@"CPStatusCode"];
+        responseHeaderFields = [[coder decodeObjectForKey:@"CPHeaderFields"] retain];
+        responseSuggestedFilename = [[coder decodeObjectForKey:@"CPSuggestedFilename"] retain];
+    } else {
+        responseStatusCode = 0;
+        [coder decodeValueOfObjCType:@encode(int) at:&responseStatusCode];
+        responseHeaderFields = [[coder decodeObject] retain];
+        responseSuggestedFilename = [[coder decodeObject] retain];
+    }
+    return self;
+}
+
+- (void)encodeWithCoder:(NSCoder *)coder
+{
+    [super encodeWithCoder:coder];
+    if ([coder allowsKeyedCoding]) {
+        [coder encodeInt:responseStatusCode forKey:@"CPStatusCode"];
+        [coder encodeObject:responseHeaderFields forKey:@"CPHeaderFields"];
+        [coder encodeObject:responseSuggestedFilename forKey:@"CPSuggestedFilename"];
+    } else {
+        [coder encodeValueOfObjCType:@encode(int) at:&responseStatusCode];
+        [coder encodeObject:responseHeaderFields];
+        [coder encodeObject:responseSuggestedFilename];
+    }
 }
 
 - (int)statusCode
