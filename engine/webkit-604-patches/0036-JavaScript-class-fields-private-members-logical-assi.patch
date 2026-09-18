@@ -1,0 +1,1332 @@
+From 1113423c150505d24cb1a292adea00b1bab6ead1 Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Fri, 18 Sep 2026 17:08:30 -0400
+Subject: [PATCH 36/36] JavaScript: class fields, private members, logical
+ assignment, import.meta
+
+- Public class fields, instance and static (ES2022). Each class gets a
+  generated initializer function whose source is the class body; when it
+  is compiled the parser reads only the recorded field positions.
+  Constructors run it on entry (base classes) or after super() returns.
+- Private members (#name): fields, methods, accessors, static ones, and
+  '#name in obj'. Each private name is a constant in the class scope
+  holding a new symbol per class evaluation, and obj.#name compiles to
+  obj[that symbol]. No brand check: a missing private name reads as
+  undefined rather than throwing.
+- Logical assignment &&=, ||= and ??= (ES2021).
+- import.meta, with the module's url (ES2020).
+- await directly after a unary operator (void await x, !await x), which
+  the 604 parser read as an identifier.
+---
+ Source/JavaScriptCore/builtins/BuiltinNames.h |   4 +
+ .../bytecode/UnlinkedFunctionExecutable.cpp   |   7 +-
+ .../bytecode/UnlinkedFunctionExecutable.h     |   8 +
+ .../bytecompiler/BytecodeGenerator.cpp        |  18 +-
+ .../bytecompiler/BytecodeGenerator.h          |  15 +-
+ .../bytecompiler/NodesCodegen.cpp             | 184 +++++++++++++++++-
+ Source/JavaScriptCore/parser/ASTBuilder.h     |  46 ++++-
+ Source/JavaScriptCore/parser/Lexer.cpp        |  41 +++-
+ .../JavaScriptCore/parser/NodeConstructors.h  |  18 +-
+ Source/JavaScriptCore/parser/Nodes.h          |  53 ++++-
+ Source/JavaScriptCore/parser/Parser.cpp       | 179 +++++++++++++++--
+ Source/JavaScriptCore/parser/Parser.h         |  12 +-
+ .../parser/ParserFunctionInfo.h               |   9 +
+ Source/JavaScriptCore/parser/ParserTokens.h   |   4 +
+ Source/JavaScriptCore/parser/SyntaxChecker.h  |   1 +
+ .../JavaScriptCore/runtime/JSGlobalObject.cpp |   4 +
+ .../runtime/JSGlobalObjectFunctions.cpp       |  41 ++++
+ .../runtime/JSGlobalObjectFunctions.h         |   2 +
+ 18 files changed, 612 insertions(+), 34 deletions(-)
+
+diff --git a/Source/JavaScriptCore/builtins/BuiltinNames.h b/Source/JavaScriptCore/builtins/BuiltinNames.h
+index b5b7e562..e84d1f56 100644
+--- a/Source/JavaScriptCore/builtins/BuiltinNames.h
++++ b/Source/JavaScriptCore/builtins/BuiltinNames.h
+@@ -81,6 +81,10 @@ namespace JSC {
+     macro(typedArraySubarrayCreate) \
+     macro(BuiltinLog) \
+     macro(homeObject) \
++    macro(instanceFieldInitializer) \
++    macro(createPrivateSymbol) \
++    macro(importMeta) \
++    macro(importMetaCache) \
+     macro(templateRegistryKey) \
+     macro(enqueueJob) \
+     macro(hostPromiseRejectionTracker) \
+diff --git a/Source/JavaScriptCore/bytecode/UnlinkedFunctionExecutable.cpp b/Source/JavaScriptCore/bytecode/UnlinkedFunctionExecutable.cpp
+index 58171956..fa3b5474 100644
+--- a/Source/JavaScriptCore/bytecode/UnlinkedFunctionExecutable.cpp
++++ b/Source/JavaScriptCore/bytecode/UnlinkedFunctionExecutable.cpp
+@@ -54,7 +54,8 @@ static UnlinkedFunctionCodeBlock* generateUnlinkedFunctionCodeBlock(
+     JSParserScriptMode scriptMode = executable->scriptMode();
+     ASSERT(isFunctionParseMode(executable->parseMode()));
+     std::unique_ptr<FunctionNode> function = parse<FunctionNode>(
+-        &vm, source, executable->name(), builtinMode, strictMode, scriptMode, executable->parseMode(), executable->superBinding(), error, nullptr);
++        &vm, source, executable->name(), builtinMode, strictMode, scriptMode, executable->parseMode(), executable->superBinding(), error, nullptr,
++        ConstructorKind::None, DerivedContextType::None, EvalContextType::None, nullptr, executable->classFieldLocations());
+ 
+     if (!function) {
+         ASSERT(error.isValid());
+@@ -62,6 +63,7 @@ static UnlinkedFunctionCodeBlock* generateUnlinkedFunctionCodeBlock(
+     }
+ 
+     function->finishParsing(executable->name(), executable->functionMode());
++    function->setNeedsClassFieldInitializer(executable->needsClassFieldInitializer());
+     executable->recordParse(function->features(), function->hasCapturedVariables());
+ 
+     bool isClassContext = executable->superBinding() == SuperBinding::Needed;
+@@ -99,6 +101,7 @@ UnlinkedFunctionExecutable::UnlinkedFunctionExecutable(VM* vm, Structure* struct
+     , m_scriptMode(static_cast<unsigned>(scriptMode))
+     , m_superBinding(static_cast<unsigned>(node->superBinding()))
+     , m_derivedContextType(static_cast<unsigned>(derivedContextType))
++    , m_needsClassFieldInitializer(node->needsClassFieldInitializer())
+     , m_name(node->ident())
+     , m_ecmaName(node->ecmaName())
+     , m_inferredName(node->inferredName())
+@@ -114,6 +117,8 @@ UnlinkedFunctionExecutable::UnlinkedFunctionExecutable(VM* vm, Structure* struct
+     ASSERT(m_derivedContextType == static_cast<unsigned>(derivedContextType));
+ 
+     m_parentScopeTDZVariables.swap(parentScopeTDZVariables);
++    if (!node->classFieldLocations().isEmpty())
++        m_classFieldLocations = std::make_unique<Vector<JSTextPosition>>(node->classFieldLocations());
+ }
+ 
+ void UnlinkedFunctionExecutable::destroy(JSCell* cell)
+diff --git a/Source/JavaScriptCore/bytecode/UnlinkedFunctionExecutable.h b/Source/JavaScriptCore/bytecode/UnlinkedFunctionExecutable.h
+index ed5e9c6c..30f9ad76 100644
+--- a/Source/JavaScriptCore/bytecode/UnlinkedFunctionExecutable.h
++++ b/Source/JavaScriptCore/bytecode/UnlinkedFunctionExecutable.h
+@@ -33,6 +33,7 @@
+ #include "Intrinsic.h"
+ #include "JSCell.h"
+ #include "ParserModes.h"
++#include "ParserTokens.h"
+ #include "RegExp.h"
+ #include "SourceCode.h"
+ #include "VariableEnvironment.h"
+@@ -74,6 +75,10 @@ public:
+     SourceParseMode parseMode() const { return static_cast<SourceParseMode>(m_sourceParseMode); };
+ 
+     const SourceCode& classSource() const { return m_classSource; };
++
++    bool needsClassFieldInitializer() const { return m_needsClassFieldInitializer; }
++    void setNeedsClassFieldInitializer(bool value) { m_needsClassFieldInitializer = value; }
++    const Vector<JSTextPosition>* classFieldLocations() const { return m_classFieldLocations.get(); }
+     void setClassSource(const SourceCode& source) { m_classSource = source; };
+ 
+     bool isInStrictContext() const { return m_isInStrictContext; }
+@@ -163,6 +168,7 @@ private:
+     unsigned m_scriptMode: 1; // JSParserScriptMode
+     unsigned m_superBinding : 1;
+     unsigned m_derivedContextType: 2;
++    unsigned m_needsClassFieldInitializer : 1;
+ 
+     WriteBarrier<UnlinkedFunctionCodeBlock> m_unlinkedCodeBlockForCall;
+     WriteBarrier<UnlinkedFunctionCodeBlock> m_unlinkedCodeBlockForConstruct;
+@@ -178,6 +184,8 @@ private:
+ 
+     VariableEnvironment m_parentScopeTDZVariables;
+ 
++    std::unique_ptr<Vector<JSTextPosition>> m_classFieldLocations;
++
+ protected:
+     static void visitChildren(JSCell*, SlotVisitor&);
+ 
+diff --git a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp
+index 58ef5378..e729bc67 100644
+--- a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp
++++ b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp
+@@ -264,6 +264,7 @@ BytecodeGenerator::BytecodeGenerator(VM& vm, FunctionNode* functionNode, Unlinke
+     // https://bugs.webkit.org/show_bug.cgi?id=148819
+     , m_inTailPosition(Options::useTailCalls() && !isConstructor() && constructorKind() == ConstructorKind::None && isStrictMode())
+     , m_needsToUpdateArrowFunctionContext(functionNode->usesArrowFunction() || functionNode->usesEval())
++    , m_needsClassFieldInitializer(functionNode->needsClassFieldInitializer())
+     , m_derivedContextType(codeBlock->derivedContextType())
+ {
+     for (auto& constantRegister : m_linkTimeConstantRegisters)
+@@ -3293,10 +3294,11 @@ RegisterID* BytecodeGenerator::emitNewMethodDefinition(RegisterID* dst, MethodDe
+ }
+ 
+ RegisterID* BytecodeGenerator::emitNewDefaultConstructor(RegisterID* dst, ConstructorKind constructorKind, const Identifier& name,
+-    const Identifier& ecmaName, const SourceCode& classSource)
++    const Identifier& ecmaName, const SourceCode& classSource, bool needsClassFieldInitializer)
+ {
+     UnlinkedFunctionExecutable* executable = m_vm->builtinExecutables()->createDefaultConstructor(constructorKind, name);
+     executable->setInvalidTypeProfilingOffsets();
++    executable->setNeedsClassFieldInitializer(needsClassFieldInitializer);
+     executable->setEcmaName(ecmaName);
+     executable->setClassSource(classSource);
+ 
+@@ -4627,6 +4629,20 @@ RegisterID* BytecodeGenerator::emitLoadNewTargetFromArrowFunctionLexicalEnvironm
+     
+ }
+ 
++void BytecodeGenerator::emitInstanceFieldInitializationIfNeeded(const JSTextPosition& divot, const JSTextPosition& divotStart, const JSTextPosition& divotEnd)
++{
++    if (!m_needsClassFieldInitializer)
++        return;
++
++    // The class's own constructor: the callee, or for an arrow function in
++    // it that calls super(), the one it saved for such arrow functions.
++    RefPtr<RegisterID> constructor = isDerivedConstructorContext() ? emitLoadDerivedConstructorFromArrowFunctionLexicalEnvironment() : &m_calleeRegister;
++    RefPtr<RegisterID> initializer = emitGetById(newTemporary(), constructor.get(), propertyNames().builtinNames().instanceFieldInitializerPrivateName());
++    CallArguments args(*this, nullptr);
++    emitMove(args.thisRegister(), thisRegister());
++    emitCall(newTemporary(), initializer.get(), NoExpectedFunction, args, divot, divotStart, divotEnd, DebuggableCall::No);
++}
++
+ RegisterID* BytecodeGenerator::emitLoadDerivedConstructorFromArrowFunctionLexicalEnvironment()
+ {
+     Variable protoScopeVar = variable(propertyNames().builtinNames().derivedConstructorPrivateName());
+diff --git a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h
+index 35a267ee..fc86c598 100644
+--- a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h
++++ b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h
+@@ -648,7 +648,12 @@ namespace JSC {
+ 
+         RegisterID* emitNewFunction(RegisterID* dst, FunctionMetadataNode*);
+         RegisterID* emitNewFunctionExpression(RegisterID* dst, FuncExprNode*);
+-        RegisterID* emitNewDefaultConstructor(RegisterID* dst, ConstructorKind, const Identifier& name, const Identifier& ecmaName, const SourceCode& classSource);
++        RegisterID* emitNewDefaultConstructor(RegisterID* dst, ConstructorKind, const Identifier& name, const Identifier& ecmaName, const SourceCode& classSource, bool needsClassFieldInitializer = false);
++
++        // Class fields: runs the class's field initializer on |this|, if the
++        // class being constructed has instance fields.
++        bool needsClassFieldInitializer() const { return m_needsClassFieldInitializer; }
++        void emitInstanceFieldInitializationIfNeeded(const JSTextPosition& divot, const JSTextPosition& divotStart, const JSTextPosition& divotEnd);
+         RegisterID* emitNewArrowFunctionExpression(RegisterID*, ArrowFuncExprNode*);
+         RegisterID* emitNewMethodDefinition(RegisterID* dst, MethodDefinitionNode*);
+         RegisterID* emitNewRegExp(RegisterID* dst, RegExp*);
+@@ -1059,7 +1064,12 @@ namespace JSC {
+             if (parseMode == SourceParseMode::MethodMode && metadata->constructorKind() != ConstructorKind::None)
+                 constructAbility = ConstructAbility::CanConstruct;
+ 
+-            return UnlinkedFunctionExecutable::create(m_vm, m_scopeNode->source(), metadata, isBuiltinFunction() ? UnlinkedBuiltinFunction : UnlinkedNormalFunction, constructAbility, scriptMode(), variablesUnderTDZ, newDerivedContextType);
++            UnlinkedFunctionExecutable* executable = UnlinkedFunctionExecutable::create(m_vm, m_scopeNode->source(), metadata, isBuiltinFunction() ? UnlinkedBuiltinFunction : UnlinkedNormalFunction, constructAbility, scriptMode(), variablesUnderTDZ, newDerivedContextType);
++            // An arrow function in a derived constructor may be the one that
++            // calls super(), and then it runs the field initializer.
++            if (m_needsClassFieldInitializer && newDerivedContextType == DerivedContextType::DerivedConstructorContext)
++                executable->setNeedsClassFieldInitializer(true);
++            return executable;
+         }
+ 
+         void getVariablesUnderTDZ(VariableEnvironment&);
+@@ -1195,6 +1205,7 @@ namespace JSC {
+         bool m_inTailPosition { false };
+         Vector<Ref<Label>> m_optionalChainTargetStack;
+         bool m_needsToUpdateArrowFunctionContext;
++        bool m_needsClassFieldInitializer { false };
+         DerivedContextType m_derivedContextType { DerivedContextType::None };
+     };
+ 
+diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+index 11518e6a..42a9f275 100644
+--- a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
++++ b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+@@ -836,7 +836,8 @@ RegisterID* FunctionCallValueNode::emitBytecode(BytecodeGenerator& generator, Re
+         
+         if (generator.isDerivedConstructorContext() || doWeUseArrowFunctionInConstructor)
+             generator.emitPutThisToArrowFunctionContextScope();
+-        
++
++        generator.emitInstanceFieldInitializationIfNeeded(divot(), divotStart(), divotEnd());
+         return ret;
+     }
+     RefPtr<RegisterID> func = generator.emitNode(m_expr);
+@@ -2265,10 +2266,61 @@ static ALWAYS_INLINE RegisterID* emitReadModifyAssignment(BytecodeGenerator& gen
+     return result;
+ }
+ 
++// Logical assignment: jumps to done when the current value means no
++// assignment happens.
++static void emitLogicalAssignmentShortCircuit(BytecodeGenerator& generator, Operator oper, RegisterID* value, Label& done)
++{
++    switch (oper) {
++    case OpLogicalAndEq:
++        generator.emitJumpIfFalse(value, done);
++        break;
++    case OpLogicalOrEq:
++        generator.emitJumpIfTrue(value, done);
++        break;
++    default: {
++        ASSERT(oper == OpCoalesceEq);
++        RefPtr<RegisterID> isNullish = generator.emitUnaryOp(op_eq_null, generator.newTemporary(), value);
++        generator.emitJumpIfFalse(isNullish.get(), done);
++        break;
++    }
++    }
++}
++
+ RegisterID* ReadModifyResolveNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
+ {
+     JSTextPosition newDivot = divotStart() + m_ident.length();
+     Variable var = generator.variable(m_ident);
++    if (isLogicalAssignmentOperator(m_operator)) {
++        Ref<Label> done = generator.newLabel();
++        RefPtr<RegisterID> result = generator.newTemporary();
++        if (RegisterID* local = var.local()) {
++            generator.emitTDZCheckIfNecessary(var, local, nullptr);
++            generator.emitMove(result.get(), local);
++            emitLogicalAssignmentShortCircuit(generator, m_operator, result.get(), done.get());
++            if (var.isReadOnly())
++                generator.emitReadOnlyExceptionIfNeeded(var);
++            else {
++                generator.emitNode(result.get(), m_right);
++                generator.emitMove(local, result.get());
++                generator.invalidateForInContextForLocal(local);
++            }
++            generator.emitLabel(done.get());
++            return generator.moveToDestinationIfNeeded(dst, result.get());
++        }
++        generator.emitExpressionInfo(newDivot, divotStart(), newDivot);
++        RefPtr<RegisterID> scope = generator.emitResolveScope(nullptr, var);
++        generator.emitGetFromScope(result.get(), scope.get(), var, ThrowIfNotFound);
++        generator.emitTDZCheckIfNecessary(var, result.get(), nullptr);
++        emitLogicalAssignmentShortCircuit(generator, m_operator, result.get(), done.get());
++        if (var.isReadOnly())
++            generator.emitReadOnlyExceptionIfNeeded(var);
++        else {
++            generator.emitNode(result.get(), m_right);
++            generator.emitPutToScope(scope.get(), var, result.get(), ThrowIfNotFound, InitializationMode::NotInitialization);
++        }
++        generator.emitLabel(done.get());
++        return generator.moveToDestinationIfNeeded(dst, result.get());
++    }
+     if (RegisterID* local = var.local()) {
+         generator.emitTDZCheckIfNecessary(var, local, nullptr);
+         if (var.isReadOnly()) {
+@@ -2411,6 +2463,27 @@ RegisterID* ReadModifyDotNode::emitBytecode(BytecodeGenerator& generator, Regist
+ {
+     RefPtr<RegisterID> base = generator.emitNodeForLeftHandSide(m_base, m_rightHasAssignments, m_right->isPure(generator));
+ 
++    if (isLogicalAssignmentOperator(static_cast<JSC::Operator>(m_operator))) {
++        Ref<Label> done = generator.newLabel();
++        RefPtr<RegisterID> result = generator.newTemporary();
++        RefPtr<RegisterID> thisValue;
++        generator.emitExpressionInfo(subexpressionDivot(), subexpressionStart(), subexpressionEnd());
++        if (m_base->isSuperNode()) {
++            thisValue = generator.ensureThis();
++            generator.emitGetById(result.get(), base.get(), thisValue.get(), m_ident);
++        } else
++            generator.emitGetById(result.get(), base.get(), m_ident);
++        emitLogicalAssignmentShortCircuit(generator, static_cast<JSC::Operator>(m_operator), result.get(), done.get());
++        generator.emitNode(result.get(), m_right);
++        generator.emitExpressionInfo(divot(), divotStart(), divotEnd());
++        if (m_base->isSuperNode())
++            generator.emitPutById(base.get(), thisValue.get(), m_ident, result.get());
++        else
++            generator.emitPutById(base.get(), m_ident, result.get());
++        generator.emitLabel(done.get());
++        return generator.moveToDestinationIfNeeded(dst, result.get());
++    }
++
+     generator.emitExpressionInfo(subexpressionDivot(), subexpressionStart(), subexpressionEnd());
+     RefPtr<RegisterID> value;
+     RefPtr<RegisterID> thisValue;
+@@ -2475,6 +2548,27 @@ RegisterID* ReadModifyBracketNode::emitBytecode(BytecodeGenerator& generator, Re
+     RefPtr<RegisterID> base = generator.emitNodeForLeftHandSide(m_base, m_subscriptHasAssignments || m_rightHasAssignments, m_subscript->isPure(generator) && m_right->isPure(generator));
+     RefPtr<RegisterID> property = generator.emitNodeForLeftHandSideForProperty(m_subscript, m_rightHasAssignments, m_right->isPure(generator));
+ 
++    if (isLogicalAssignmentOperator(static_cast<JSC::Operator>(m_operator))) {
++        Ref<Label> done = generator.newLabel();
++        RefPtr<RegisterID> result = generator.newTemporary();
++        RefPtr<RegisterID> thisValue;
++        generator.emitExpressionInfo(subexpressionDivot(), subexpressionStart(), subexpressionEnd());
++        if (m_base->isSuperNode()) {
++            thisValue = generator.ensureThis();
++            generator.emitGetByVal(result.get(), base.get(), thisValue.get(), property.get());
++        } else
++            generator.emitGetByVal(result.get(), base.get(), property.get());
++        emitLogicalAssignmentShortCircuit(generator, static_cast<JSC::Operator>(m_operator), result.get(), done.get());
++        generator.emitNode(result.get(), m_right);
++        generator.emitExpressionInfo(divot(), divotStart(), divotEnd());
++        if (m_base->isSuperNode())
++            generator.emitPutByVal(base.get(), thisValue.get(), property.get(), result.get());
++        else
++            generator.emitPutByVal(base.get(), property.get(), result.get());
++        generator.emitLabel(done.get());
++        return generator.moveToDestinationIfNeeded(dst, result.get());
++    }
++
+     generator.emitExpressionInfo(subexpressionDivot(), subexpressionStart(), subexpressionEnd());
+     RefPtr<RegisterID> value;
+     RefPtr<RegisterID> thisValue;
+@@ -3570,6 +3664,11 @@ void FunctionNode::emitBytecode(BytecodeGenerator& generator, RegisterID*)
+     generator.emitProfileControlFlow(startStartOffset());
+     generator.emitDebugHook(DidEnterCallFrame, startLine(), startStartOffset(), startLineStartOffset());
+ 
++    if (generator.isConstructor() && generator.constructorKind() == ConstructorKind::Base) {
++        JSTextPosition position(startLine(), startStartOffset(), startLineStartOffset());
++        generator.emitInstanceFieldInitializationIfNeeded(position, position, position);
++    }
++
+     switch (generator.parseMode()) {
+     case SourceParseMode::GeneratorWrapperFunctionMode:
+     case SourceParseMode::GeneratorWrapperMethodMode: {
+@@ -3778,9 +3877,30 @@ void ClassDeclNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
+ 
+ RegisterID* ClassExprNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
+ {
+-    if (!m_name.isNull())
++    // The class scope holds the class's own name and its private names.
++    bool hasClassScope = !m_name.isNull() || lexicalVariables().size();
++    if (hasClassScope)
+         generator.pushLexicalScope(this, BytecodeGenerator::TDZCheckOptimization::Optimize, BytecodeGenerator::NestedScopeType::IsNested);
+ 
++    // Each private name (#name) gets a new symbol every time the class is
++    // evaluated, before anything in the class can use it.
++    for (auto& entry : lexicalVariables()) {
++        if (!entry.key->length() || (*entry.key)[0] != '#')
++            continue;
++        Identifier privateName = Identifier::fromUid(generator.vm(), entry.key.get());
++        Variable createVariable = generator.variable(generator.propertyNames().builtinNames().createPrivateSymbolPrivateName());
++        RefPtr<RegisterID> createScope = generator.emitResolveScope(nullptr, createVariable);
++        RefPtr<RegisterID> create = generator.emitGetFromScope(generator.newTemporary(), createScope.get(), createVariable, ThrowIfNotFound);
++        CallArguments args(generator, nullptr, 1);
++        generator.emitLoad(args.thisRegister(), jsUndefined());
++        generator.emitLoad(args.argumentRegister(0), privateName);
++        RefPtr<RegisterID> symbol = generator.emitCall(generator.newTemporary(), create.get(), NoExpectedFunction, args, position(), position(), position(), DebuggableCall::No);
++
++        Variable privateVariable = generator.variable(privateName);
++        RefPtr<RegisterID> scope = generator.emitResolveScope(nullptr, privateVariable);
++        generator.emitPutToScope(scope.get(), privateVariable, symbol.get(), ThrowIfNotFound, InitializationMode::ConstInitialization);
++    }
++
+     RefPtr<RegisterID> superclass;
+     if (m_classHeritage) {
+         superclass = generator.newTemporary();
+@@ -3796,10 +3916,11 @@ RegisterID* ClassExprNode::emitBytecode(BytecodeGenerator& generator, RegisterID
+         FunctionMetadataNode* metadata = static_cast<FuncExprNode*>(m_constructorExpression)->metadata();
+         metadata->setEcmaName(ecmaName());
+         metadata->setClassSource(m_classSource);
++        metadata->setNeedsClassFieldInitializer(!!m_instanceFieldInitializer);
+         constructor = generator.emitNode(dst, m_constructorExpression);
+         needsHomeObject = m_classHeritage || metadata->superBinding() == SuperBinding::Needed;
+     } else
+-        constructor = generator.emitNewDefaultConstructor(generator.finalDestination(dst), m_classHeritage ? ConstructorKind::Extends : ConstructorKind::Base, m_name, ecmaName(), m_classSource);
++        constructor = generator.emitNewDefaultConstructor(generator.finalDestination(dst), m_classHeritage ? ConstructorKind::Extends : ConstructorKind::Base, m_name, ecmaName(), m_classSource, !!m_instanceFieldInitializer);
+ 
+     const auto& propertyNames = generator.propertyNames();
+     RefPtr<RegisterID> prototype = generator.emitNewObject(generator.newTemporary());
+@@ -3851,17 +3972,72 @@ RegisterID* ClassExprNode::emitBytecode(BytecodeGenerator& generator, RegisterID
+     if (m_instanceMethods)
+         generator.emitNode(prototype.get(), m_instanceMethods);
+ 
++    if (m_instanceFieldInitializer) {
++        // Kept on the constructor, which runs it on each new instance.
++        RefPtr<RegisterID> initializer = generator.emitNode(generator.newTemporary(), m_instanceFieldInitializer);
++        emitPutHomeObject(generator, initializer.get(), prototype.get());
++        generator.emitDirectPutById(constructor.get(), propertyNames.builtinNames().instanceFieldInitializerPrivateName(), initializer.get(), PropertyNode::Unknown);
++    }
++
+     if (!m_name.isNull()) {
+         Variable classNameVar = generator.variable(m_name);
+         RELEASE_ASSERT(classNameVar.isResolved());
+         RefPtr<RegisterID> scope = generator.emitResolveScope(nullptr, classNameVar);
+         generator.emitPutToScope(scope.get(), classNameVar, constructor.get(), ThrowIfNotFound, InitializationMode::Initialization);
+-        generator.popLexicalScope(this);
+     }
+ 
++    if (m_staticFieldInitializer) {
++        // Static fields are defined once, on the class, after its name is bound.
++        RefPtr<RegisterID> initializer = generator.emitNode(generator.newTemporary(), m_staticFieldInitializer);
++        emitPutHomeObject(generator, initializer.get(), constructor.get());
++        CallArguments args(generator, nullptr);
++        generator.emitMove(args.thisRegister(), constructor.get());
++        generator.emitCall(generator.newTemporary(), initializer.get(), NoExpectedFunction, args, position(), position(), position(), DebuggableCall::No);
++    }
++
++    if (hasClassScope)
++        generator.popLexicalScope(this);
++
+     return generator.moveToDestinationIfNeeded(dst, constructor.get());
+ }
+ 
++// ------------------------------ ImportMetaNode ---------------------------------
++
++RegisterID* ImportMetaNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
++{
++    Variable importMeta = generator.variable(generator.propertyNames().builtinNames().importMetaPrivateName());
++    RefPtr<RegisterID> scope = generator.emitResolveScope(nullptr, importMeta);
++    RefPtr<RegisterID> function = generator.emitGetFromScope(generator.newTemporary(), scope.get(), importMeta, ThrowIfNotFound);
++    CallArguments args(generator, nullptr, 1);
++    generator.emitLoad(args.thisRegister(), jsUndefined());
++    generator.emitLoad(args.argumentRegister(0), m_moduleURL);
++    return generator.emitCall(generator.finalDestination(dst), function.get(), NoExpectedFunction, args, position(), position(), position(), DebuggableCall::No);
++}
++
++// ------------------------------ DefineFieldNode ---------------------------------
++
++RegisterID* DefineFieldNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
++{
++    RefPtr<RegisterID> value = generator.newTemporary();
++    if (m_assign)
++        generator.emitNode(value.get(), m_assign);
++    else
++        generator.emitLoad(value.get(), jsUndefined());
++
++    generator.emitExpressionInfo(divot(), divotStart(), divotEnd());
++    if (m_privateKey) {
++        // Not enumerable, so that spreading or copying the object leaves it.
++        RefPtr<RegisterID> key = generator.emitNode(m_privateKey);
++        generator.emitCallDefineProperty(generator.thisRegister(), key.get(), value.get(), nullptr, nullptr,
++            BytecodeGenerator::PropertyConfigurable | BytecodeGenerator::PropertyWritable, position());
++    } else if (std::optional<uint32_t> index = parseIndex(m_ident)) {
++        RefPtr<RegisterID> propertyIndex = generator.emitLoad(nullptr, jsNumber(index.value()));
++        generator.emitDirectPutByVal(generator.thisRegister(), propertyIndex.get(), value.get());
++    } else
++        generator.emitDirectPutById(generator.thisRegister(), m_ident, value.get(), PropertyNode::Unknown);
++    return generator.moveToDestinationIfNeeded(dst, value.get());
++}
++
+ // ------------------------------ ImportDeclarationNode -----------------------
+ 
+ void ImportDeclarationNode::emitBytecode(BytecodeGenerator&, RegisterID*)
+diff --git a/Source/JavaScriptCore/parser/ASTBuilder.h b/Source/JavaScriptCore/parser/ASTBuilder.h
+index fe41544c..7a0d51fa 100644
+--- a/Source/JavaScriptCore/parser/ASTBuilder.h
++++ b/Source/JavaScriptCore/parser/ASTBuilder.h
+@@ -187,6 +187,13 @@ public:
+         setExceptionLocation(node, start, divot, end);
+         return node;
+     }
++    ExpressionNode* createImportMetaExpr(const JSTokenLocation& location)
++    {
++        String url = m_sourceCode->provider()->url();
++        IdentifierArena& arena = m_parserArena.identifierArena();
++        const Identifier& moduleURL = url.is8Bit() ? arena.makeIdentifier(m_vm, url.characters8(), url.length()) : arena.makeIdentifier(m_vm, url.characters16(), url.length());
++        return new (m_parserArena) ImportMetaNode(location, moduleURL);
++    }
+     ExpressionNode* createNewTargetExpr(const JSTokenLocation location)
+     {
+         usesNewTarget();
+@@ -394,7 +401,39 @@ public:
+         ExpressionNode* parentClass, PropertyListNode* instanceMethods, PropertyListNode* staticMethods)
+     {
+         SourceCode source = m_sourceCode->subExpression(classInfo.startOffset, classInfo.endOffset, classInfo.startLine, classInfo.startColumn);
+-        return new (m_parserArena) ClassExprNode(location, *classInfo.className, source, classEnvironment, constructor, parentClass, instanceMethods, staticMethods);
++        ExpressionNode* instanceFieldInitializer = classInfo.instanceFieldLocations.isEmpty() ? nullptr : createClassFieldInitializer(location, classInfo, source, classInfo.instanceFieldLocations);
++        ExpressionNode* staticFieldInitializer = classInfo.staticFieldLocations.isEmpty() ? nullptr : createClassFieldInitializer(location, classInfo, source, classInfo.staticFieldLocations);
++        return new (m_parserArena) ClassExprNode(location, *classInfo.className, source, classEnvironment, constructor, parentClass, instanceMethods, staticMethods, instanceFieldInitializer, staticFieldInitializer);
++    }
++
++    // A method-like function whose source is the whole class and whose body,
++    // when it is compiled, is the list of fields at these positions.
++    ExpressionNode* createClassFieldInitializer(const JSTokenLocation& location, const ParserClassInfo<ASTBuilder>& classInfo, const SourceCode& source, const Vector<JSTextPosition>& fieldLocations)
++    {
++        JSTokenLocation startLocation(location);
++        startLocation.line = classInfo.startLine;
++        startLocation.startOffset = classInfo.startOffset;
++        FunctionMetadataNode* metadata = new (m_parserArena) FunctionMetadataNode(
++            m_parserArena, startLocation, classInfo.endLocation, classInfo.startColumn, classInfo.endColumn,
++            classInfo.startOffset, classInfo.startOffset, classInfo.startOffset, true,
++            ConstructorKind::None, SuperBinding::Needed, 0, SourceParseMode::MethodMode, false);
++        metadata->finishParsing(source, m_vm->propertyNames->nullIdentifier, FunctionMode::FunctionExpression);
++        metadata->setLoc(classInfo.startLine, classInfo.endLocation.line, classInfo.startOffset, location.lineStartOffset);
++        metadata->setClassFieldLocations(fieldLocations);
++        return new (m_parserArena) FuncExprNode(location, m_vm->propertyNames->nullIdentifier, metadata, source);
++    }
++
++    ExpressionNode* createDefineField(const JSTokenLocation& location, const Identifier& ident, ExpressionNode* initializer, const JSTextPosition& start, const JSTextPosition& end, ExpressionNode* privateKey)
++    {
++        if (initializer && initializer->isBaseFuncExprNode()) {
++            auto metadata = static_cast<BaseFuncExprNode*>(initializer)->metadata();
++            metadata->setEcmaName(ident);
++            metadata->setInferredName(ident);
++        } else if (initializer && initializer->isClassExprNode())
++            static_cast<ClassExprNode*>(initializer)->setEcmaName(ident);
++        DefineFieldNode* node = new (m_parserArena) DefineFieldNode(location, ident, initializer, privateKey);
++        setExceptionLocation(node, start, start, end);
++        return node;
+     }
+ 
+     ExpressionNode* createFunctionExpr(const JSTokenLocation& location, const ParserFunctionInfo<ASTBuilder>& functionInfo)
+@@ -1484,6 +1523,11 @@ ExpressionNode* ASTBuilder::makeAssignNode(const JSTokenLocation& location, Expr
+ 
+     if (loc->isResolveNode()) {
+         ResolveNode* resolve = static_cast<ResolveNode*>(loc);
++        if (isLogicalAssignmentOperator(op) && expr->isBaseFuncExprNode()) {
++            auto metadata = static_cast<BaseFuncExprNode*>(expr)->metadata();
++            metadata->setEcmaName(resolve->identifier());
++            metadata->setInferredName(resolve->identifier());
++        }
+         if (op == OpEqual) {
+             if (expr->isBaseFuncExprNode()) {
+                 auto metadata = static_cast<BaseFuncExprNode*>(expr)->metadata();
+diff --git a/Source/JavaScriptCore/parser/Lexer.cpp b/Source/JavaScriptCore/parser/Lexer.cpp
+index 5d324c0d..6d2afc70 100644
+--- a/Source/JavaScriptCore/parser/Lexer.cpp
++++ b/Source/JavaScriptCore/parser/Lexer.cpp
+@@ -89,7 +89,8 @@ enum CharacterType {
+ 
+     // Other types (only one so far)
+     CharacterWhiteSpace,
+-    CharacterPrivateIdentifierStart
++    CharacterPrivateIdentifierStart,
++    CharacterHash
+ };
+ 
+ // 256 Latin-1 codes
+@@ -129,7 +130,7 @@ static const unsigned short typesOfLatin1Characters[256] = {
+ /*  32 - Space              */ CharacterWhiteSpace,
+ /*  33 - !                  */ CharacterExclamationMark,
+ /*  34 - "                  */ CharacterQuote,
+-/*  35 - #                  */ CharacterInvalid,
++/*  35 - #                  */ CharacterHash,
+ /*  36 - $                  */ CharacterIdentifierStart,
+ /*  37 - %                  */ CharacterModulo,
+ /*  38 - &                  */ CharacterAnd,
+@@ -1984,6 +1985,11 @@ start:
+         shift();
+         if (m_current == '&') {
+             shift();
++            if (m_current == '=') {
++                shift();
++                token = ANDANDEQUAL;
++                break;
++            }
+             token = AND;
+             break;
+         }
+@@ -2021,6 +2027,11 @@ start:
+         }
+         if (m_current == '|') {
+             shift();
++            if (m_current == '=') {
++                shift();
++                token = OROREQUAL;
++                break;
++            }
+             token = OR;
+             break;
+         }
+@@ -2057,6 +2068,11 @@ start:
+         shift();
+         if (m_current == '?') {
+             shift();
++            if (m_current == '=') {
++                shift();
++                token = COALESCEEQUAL;
++                break;
++            }
+             token = COALESCE;
+             break;
+         }
+@@ -2249,6 +2265,27 @@ inNumberAfterDecimalPoint:
+         m_terminator = true;
+         m_lineStart = m_code;
+         goto start;
++    case CharacterHash: {
++        // A private class member's name (ES2022): '#' and an identifier,
++        // kept whole so it can never meet an ordinary name.
++        if (!isIdentStart(peek(1))) {
++            m_lexErrorMessage = invalidCharacterMessage();
++            token = ERRORTOK;
++            goto returnError;
++        }
++        const T* privateNameStart = currentSourcePtr();
++        shift();
++        while (isIdentPart(m_current))
++            shift();
++        if (UNLIKELY(m_current == '\\')) {
++            m_lexErrorMessage = ASCIILiteral("Escape sequences in private names are not supported");
++            token = ERRORTOK;
++            goto returnError;
++        }
++        tokenData->ident = makeIdentifier(privateNameStart, currentSourcePtr() - privateNameStart);
++        token = PRIVATENAME;
++        break;
++    }
+     case CharacterPrivateIdentifierStart:
+         if (m_parsingBuiltinFunction)
+             goto parseIdent;
+diff --git a/Source/JavaScriptCore/parser/NodeConstructors.h b/Source/JavaScriptCore/parser/NodeConstructors.h
+index e1b5b714..2368804b 100644
+--- a/Source/JavaScriptCore/parser/NodeConstructors.h
++++ b/Source/JavaScriptCore/parser/NodeConstructors.h
+@@ -990,7 +990,7 @@ namespace JSC {
+     {
+     }
+ 
+-    inline ClassExprNode::ClassExprNode(const JSTokenLocation& location, const Identifier& name, const SourceCode& classSource, VariableEnvironment& classEnvironment, ExpressionNode* constructorExpression, ExpressionNode* classHeritage, PropertyListNode* instanceMethods, PropertyListNode* staticMethods)
++    inline ClassExprNode::ClassExprNode(const JSTokenLocation& location, const Identifier& name, const SourceCode& classSource, VariableEnvironment& classEnvironment, ExpressionNode* constructorExpression, ExpressionNode* classHeritage, PropertyListNode* instanceMethods, PropertyListNode* staticMethods, ExpressionNode* instanceFieldInitializer, ExpressionNode* staticFieldInitializer)
+         : ExpressionNode(location)
+         , VariableEnvironmentNode(classEnvironment)
+         , m_classSource(classSource)
+@@ -1000,6 +1000,22 @@ namespace JSC {
+         , m_classHeritage(classHeritage)
+         , m_instanceMethods(instanceMethods)
+         , m_staticMethods(staticMethods)
++        , m_instanceFieldInitializer(instanceFieldInitializer)
++        , m_staticFieldInitializer(staticFieldInitializer)
++    {
++    }
++
++    inline ImportMetaNode::ImportMetaNode(const JSTokenLocation& location, const Identifier& moduleURL)
++        : ExpressionNode(location)
++        , m_moduleURL(moduleURL)
++    {
++    }
++
++    inline DefineFieldNode::DefineFieldNode(const JSTokenLocation& location, const Identifier& ident, ExpressionNode* assign, ExpressionNode* privateKey)
++        : ExpressionNode(location)
++        , m_ident(ident)
++        , m_assign(assign)
++        , m_privateKey(privateKey)
+     {
+     }
+ 
+diff --git a/Source/JavaScriptCore/parser/Nodes.h b/Source/JavaScriptCore/parser/Nodes.h
+index 9d9a704a..a6cb08a4 100644
+--- a/Source/JavaScriptCore/parser/Nodes.h
++++ b/Source/JavaScriptCore/parser/Nodes.h
+@@ -70,8 +70,15 @@ namespace JSC {
+         OpPowEq,
+         OpLShift,
+         OpRShift,
+-        OpURShift
++        OpURShift,
++        // Logical assignment (ES2021): assigns only when the left side is
++        // truthy, falsy, or null/undefined, and otherwise leaves it alone.
++        OpLogicalAndEq,
++        OpLogicalOrEq,
++        OpCoalesceEq
+     };
++
++    inline bool isLogicalAssignmentOperator(Operator op) { return op == OpLogicalAndEq || op == OpLogicalOrEq || op == OpCoalesceEq; }
+     
+     enum LogicalOperator {
+         OpLogicalAnd,
+@@ -582,6 +589,17 @@ namespace JSC {
+         ExpressionNode* m_expr;
+     };
+ 
++    // import.meta (ES2020): the module's { url } object.
++    class ImportMetaNode final : public ExpressionNode {
++    public:
++        ImportMetaNode(const JSTokenLocation&, const Identifier& moduleURL);
++
++    private:
++        RegisterID* emitBytecode(BytecodeGenerator&, RegisterID* = 0) override;
++
++        const Identifier& m_moduleURL;
++    };
++
+     class NewTargetNode final : public ExpressionNode {
+     public:
+         NewTargetNode(const JSTokenLocation&);
+@@ -1966,6 +1984,14 @@ namespace JSC {
+         const SourceCode& classSource() const { return m_classSource; }
+         void setClassSource(const SourceCode& source) { m_classSource = source; }
+ 
++        // A class constructor whose class has instance fields runs the
++        // class's field initializer; the initializer function itself is
++        // parsed from these field positions.
++        bool needsClassFieldInitializer() const { return m_needsClassFieldInitializer; }
++        void setNeedsClassFieldInitializer(bool value) { m_needsClassFieldInitializer = value; }
++        const Vector<JSTextPosition>& classFieldLocations() const { return m_classFieldLocations; }
++        void setClassFieldLocations(const Vector<JSTextPosition>& locations) { m_classFieldLocations = locations; }
++
+         int startStartOffset() const { return m_startStartOffset; }
+         bool isInStrictContext() const { return m_isInStrictContext; }
+         SuperBinding superBinding() { return static_cast<SuperBinding>(m_superBinding); }
+@@ -2000,6 +2026,8 @@ namespace JSC {
+         unsigned m_superBinding : 1;
+         unsigned m_constructorKind : 2;
+         unsigned m_isArrowFunctionBodyExpression : 1;
++        bool m_needsClassFieldInitializer { false };
++        Vector<JSTextPosition> m_classFieldLocations;
+     };
+ 
+     class FunctionNode final : public ScopeNode {
+@@ -2023,7 +2051,11 @@ namespace JSC {
+ 
+         static const bool scopeIsFunction = true;
+ 
++        bool needsClassFieldInitializer() const { return m_needsClassFieldInitializer; }
++        void setNeedsClassFieldInitializer(bool value) { m_needsClassFieldInitializer = value; }
++
+     private:
++        bool m_needsClassFieldInitializer { false };
+         Identifier m_ident;
+         FunctionMode m_functionMode;
+         FunctionParameters* m_parameters;
+@@ -2107,7 +2139,8 @@ namespace JSC {
+ 
+         ClassExprNode(const JSTokenLocation&, const Identifier&, const SourceCode& classSource,
+             VariableEnvironment& classEnvironment, ExpressionNode* constructorExpresssion,
+-            ExpressionNode* parentClass, PropertyListNode* instanceMethods, PropertyListNode* staticMethods);
++            ExpressionNode* parentClass, PropertyListNode* instanceMethods, PropertyListNode* staticMethods,
++            ExpressionNode* instanceFieldInitializer = nullptr, ExpressionNode* staticFieldInitializer = nullptr);
+ 
+         const Identifier& name() { return m_name; }
+         const Identifier& ecmaName() { return m_ecmaName ? *m_ecmaName : m_name; }
+@@ -2127,6 +2160,22 @@ namespace JSC {
+         ExpressionNode* m_classHeritage;
+         PropertyListNode* m_instanceMethods;
+         PropertyListNode* m_staticMethods;
++        ExpressionNode* m_instanceFieldInitializer;
++        ExpressionNode* m_staticFieldInitializer;
++    };
++
++    // One class field inside a generated field initializer: defines the
++    // property on |this|, as CreateDataPropertyOrThrow does.
++    class DefineFieldNode final : public ExpressionNode, public ThrowableExpressionData {
++    public:
++        DefineFieldNode(const JSTokenLocation&, const Identifier&, ExpressionNode* assign, ExpressionNode* privateKey);
++
++    private:
++        RegisterID* emitBytecode(BytecodeGenerator&, RegisterID* = 0) override;
++
++        const Identifier& m_ident;
++        ExpressionNode* m_assign;
++        ExpressionNode* m_privateKey;
+     };
+ 
+     class DestructuringPatternNode : public ParserArenaFreeable {
+diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/parser/Parser.cpp
+index 6d3b044a..ac853925 100644
+--- a/Source/JavaScriptCore/parser/Parser.cpp
++++ b/Source/JavaScriptCore/parser/Parser.cpp
+@@ -115,7 +115,7 @@ void Parser<LexerType>::logError(bool shouldPrintToken, Args&&... args)
+ }
+ 
+ template <typename LexerType>
+-Parser<LexerType>::Parser(VM* vm, const SourceCode& source, JSParserBuiltinMode builtinMode, JSParserStrictMode strictMode, JSParserScriptMode scriptMode, SourceParseMode parseMode, SuperBinding superBinding, ConstructorKind defaultConstructorKind, DerivedContextType derivedContextType, bool isEvalContext, EvalContextType evalContextType, DebuggerParseData* debuggerParseData)
++Parser<LexerType>::Parser(VM* vm, const SourceCode& source, JSParserBuiltinMode builtinMode, JSParserStrictMode strictMode, JSParserScriptMode scriptMode, SourceParseMode parseMode, SuperBinding superBinding, ConstructorKind defaultConstructorKind, DerivedContextType derivedContextType, bool isEvalContext, EvalContextType evalContextType, DebuggerParseData* debuggerParseData, const Vector<JSTextPosition>* classFieldLocations)
+     : m_vm(vm)
+     , m_source(&source)
+     , m_hasStackOverflow(false)
+@@ -129,6 +129,7 @@ Parser<LexerType>::Parser(VM* vm, const SourceCode& source, JSParserBuiltinMode
+     , m_defaultConstructorKind(defaultConstructorKind)
+     , m_immediateParentAllowsFunctionDeclarationInStatement(false)
+     , m_debuggerParseData(debuggerParseData)
++    , m_classFieldLocations(classFieldLocations)
+ {
+     m_lexer = std::make_unique<LexerType>(vm, builtinMode, scriptMode);
+     m_lexer->setCode(source, &m_parserArena);
+@@ -198,7 +199,9 @@ String Parser<LexerType>::parseInner(const Identifier& calleeName, SourceParseMo
+     bool isArrowFunctionBodyExpression = parseMode == SourceParseMode::AsyncArrowFunctionBodyMode && !match(OPENBRACE);
+     if (m_lexer->isReparsingFunction()) {
+         ParserFunctionInfo<ASTBuilder> functionInfo;
+-        if (isGeneratorOrAsyncFunctionBodyParseMode(parseMode))
++        if (m_classFieldLocations)
++            m_parameters = context.createFormalParameterList();
++        else if (isGeneratorOrAsyncFunctionBodyParseMode(parseMode))
+             m_parameters = createGeneratorParameters(context, functionInfo.parameterCount);
+         else
+             m_parameters = parseFunctionParameters(context, parseMode, functionInfo);
+@@ -220,7 +223,9 @@ String Parser<LexerType>::parseInner(const Identifier& calleeName, SourceParseMo
+     SourceElements* sourceElements = nullptr;
+     // The only way we can error this early is if we reparse a function and we run out of stack space.
+     if (!hasError()) {
+-        if (isAsyncFunctionWrapperParseMode(parseMode))
++        if (m_classFieldLocations)
++            sourceElements = parseClassFieldInitializerSourceElements(context, *m_classFieldLocations);
++        else if (isAsyncFunctionWrapperParseMode(parseMode))
+             sourceElements = parseAsyncFunctionSourceElements(context, parseMode, isArrowFunctionBodyExpression, CheckForStrictMode);
+         else if (isArrowFunctionBodyExpression)
+             sourceElements = parseArrowFunctionSingleExpressionBodySourceElements(context);
+@@ -232,7 +237,8 @@ String Parser<LexerType>::parseInner(const Identifier& calleeName, SourceParseMo
+             sourceElements = parseSourceElements(context, CheckForStrictMode);
+     }
+ 
+-    bool validEnding = consume(EOFTOK);
++    // A class field initializer reads only its fields, not to the end.
++    bool validEnding = m_classFieldLocations ? !hasError() : consume(EOFTOK);
+     if (!sourceElements || !validEnding) {
+         if (hasError())
+             parseError = m_errorMessage;
+@@ -406,7 +412,7 @@ template <class TreeBuilder> TreeSourceElements Parser<LexerType>::parseModuleSo
+         case IMPORT: {
+             SavePoint savePoint = createSavePoint();
+             next();
+-            bool isImportDeclaration = !match(OPENPAREN);
++            bool isImportDeclaration = !match(OPENPAREN) && !match(DOT);
+             restoreSavePoint(savePoint);
+             if (isImportDeclaration) {
+                 statement = parseImportDeclaration(context);
+@@ -2680,6 +2686,14 @@ template <class TreeBuilder> TreeClassExpression Parser<LexerType>::parseClass(T
+     TreeExpression constructor = 0;
+     TreePropertyList staticMethods = 0;
+     TreePropertyList instanceMethods = 0;
++    HashSet<UniquedStringImpl*> privateNames;
++    auto declarePrivateName = [&] (const Identifier* name) {
++        if (privateNames.add(name->impl()).isNewEntry) {
++            classScope->declareLexicalVariable(name, true);
++            // Methods reach it from their own scopes: keep it in the heap.
++            classScope->lexicalVariables().markVariableAsCaptured(name->impl());
++        }
++    };
+     TreePropertyList instanceMethodsTail = 0;
+     TreePropertyList staticMethodsTail = 0;
+     while (!match(CLOSEBRACE)) {
+@@ -2696,8 +2710,9 @@ template <class TreeBuilder> TreeClassExpression Parser<LexerType>::parseClass(T
+         if (match(RESERVED_IF_STRICT) && *m_token.m_data.ident == m_vm->propertyNames->staticKeyword) {
+             SavePoint savePoint = createSavePoint();
+             next();
+-            if (match(OPENPAREN)) {
+-                // Reparse "static()" as a method named "static".
++            if (match(OPENPAREN) || match(EQUAL) || match(SEMICOLON) || match(CLOSEBRACE)) {
++                // Reparse "static()" as a method named "static", and
++                // "static = ..." as a field named "static".
+                 restoreSavePoint(savePoint);
+             } else
+                 isStaticMethod = true;
+@@ -2712,8 +2727,10 @@ template <class TreeBuilder> TreeClassExpression Parser<LexerType>::parseClass(T
+         bool isGenerator = false;
+         bool isAsync = false;
+         bool isAsyncMethod = false;
++        bool isPrivate = false;
+         if (consume(TIMES))
+             isGenerator = true;
++        JSTextPosition fieldLocation(tokenLine(), tokenStart(), tokenLineStart());
+ 
+ parseMethod:
+         switch (m_token.m_type) {
+@@ -2731,7 +2748,7 @@ parseMethod:
+             ident = m_token.m_data.ident;
+             ASSERT(ident);
+             next();
+-            if (!isGenerator && !isAsyncMethod && (matchIdentifierOrKeyword() || match(STRING) || match(DOUBLE) || match(INTEGER) || match(OPENBRACKET))) {
++            if (!isGenerator && !isAsyncMethod && (matchIdentifierOrKeyword() || match(STRING) || match(DOUBLE) || match(INTEGER) || match(OPENBRACKET) || match(PRIVATENAME))) {
+                 isGetter = *ident == propertyNames.get;
+                 isSetter = *ident == propertyNames.set;
+ 
+@@ -2753,16 +2770,54 @@ parseMethod:
+             failIfFalse(computedPropertyName, "Cannot parse computed property name");
+             handleProductionOrFail(CLOSEBRACKET, "]", "end", "computed property name");
+             break;
++        case PRIVATENAME:
++            ident = m_token.m_data.ident;
++            isPrivate = true;
++            declarePrivateName(ident);
++            next();
++            break;
+         default:
+             if (m_token.m_type & KeywordTokenFlag)
+                 goto namedKeyword;
+             failDueToUnexpectedToken();
+         }
+ 
++        // A class field (ES2022): a name, maybe "= initializer", and the end
++        // of the statement. The initializer is parsed here as if inside a
++        // method, so that what it uses from outside is captured; it is
++        // compiled later as part of the class's field initializer function.
++        if (!isGetter && !isSetter && !isGenerator && !isAsyncMethod && !computedPropertyName && !match(OPENPAREN)) {
++            semanticFailIfTrue(*ident == propertyNames.constructor, "Cannot declare a class field named 'constructor'");
++            semanticFailIfTrue(isStaticMethod && *ident == propertyNames.prototype, "Cannot declare a static class field named 'prototype'");
++            if (consume(EQUAL)) {
++                AutoPopScopeRef fieldScope(this, pushScope());
++                fieldScope->setSourceParseMode(SourceParseMode::MethodMode);
++                fieldScope->setExpectedSuperBinding(SuperBinding::Needed);
++                TreeExpression initializer = parseAssignmentExpression(context);
++                failIfFalse(initializer, "Cannot parse the initializer of a class field");
++                popScope(fieldScope, TreeBuilder::NeedsFreeVariableInfo);
++            }
++            failIfFalse(autoSemiColon(), "Expected a ';' after a class field");
++            if (isStaticMethod)
++                info.staticFieldLocations.append(fieldLocation);
++            else
++                info.instanceFieldLocations.append(fieldLocation);
++            continue;
++        }
++
++        // A private method is defined like one with a computed name, keyed by
++        // the private name's symbol.
++        if (isPrivate) {
++            currentScope()->useVariable(ident, false);
++            computedPropertyName = context.createResolve(methodLocation, *ident, fieldLocation, lastTokenEndPosition());
++        }
++
+         TreeProperty property;
+         const bool alwaysStrictInsideClass = true;
+         if (isGetter || isSetter) {
+             bool isClassProperty = true;
++            if (match(PRIVATENAME))
++                declarePrivateName(m_token.m_data.ident);
+             property = parseGetterSetter(context, alwaysStrictInsideClass, isGetter ? PropertyNode::Getter : PropertyNode::Setter,
+                 methodStart, ConstructorKind::None, isClassProperty, isStaticMethod);
+             failIfFalse(property, "Cannot parse this method");
+@@ -2782,6 +2837,8 @@ parseMethod:
+                 semanticFailIfTrue(*ident == m_vm->propertyNames->constructor, "Cannot declare a generator named 'constructor'");
+             }
+             methodInfo.name = isConstructor ? info.className : ident;
++            if (isPrivate)
++                isConstructor = false;
+             failIfFalse((parseFunctionInfo(context, FunctionNameRequirements::Unnamed, parseMode, false, isConstructor ? constructorKind : ConstructorKind::None, SuperBinding::Needed, methodStart, methodInfo, FunctionDefinitionType::Method)), "Cannot parse this method");
+ 
+             TreeExpression method = context.createMethodDefinition(methodLocation, methodInfo);
+@@ -2818,6 +2875,8 @@ parseMethod:
+     }
+ 
+     info.endOffset = tokenLocation().endOffset - 1;
++    info.endLocation = tokenLocation();
++    info.endColumn = tokenColumn();
+     consumeOrFail(CLOSEBRACE, "Expected a closing '}' after a class body");
+ 
+     auto classExpression = context.createClassExpr(location, info, classScope->finalizeLexicalEnvironment(), constructor, parentClass, instanceMethods, staticMethods);
+@@ -2825,6 +2884,62 @@ parseMethod:
+     return classExpression;
+ }
+ 
++// Private class members (ES2022). Each "#name" a class declares is a constant
++// in the class's scope, holding a symbol made when the class is evaluated;
++// "obj.#name" is then obj[that symbol]. What that leaves out is the brand
++// check: reading a private name an object doesn't have gives undefined
++// rather than a TypeError.
++template <typename LexerType>
++template <class TreeBuilder> TreeExpression Parser<LexerType>::parsePrivateNameReference(TreeBuilder& context)
++{
++    ASSERT(match(PRIVATENAME));
++    JSTokenLocation location(tokenLocation());
++    JSTextPosition start = tokenStartPosition();
++    const Identifier* ident = m_token.m_data.ident;
++    currentScope()->useVariable(ident, false);
++    // As for any identifier: strict-mode checks read it after a bare name.
++    m_parserState.lastIdentifier = ident;
++    next();
++    return context.createResolve(location, *ident, start, lastTokenEndPosition());
++}
++
++template <typename LexerType>
++template <class TreeBuilder> TreeSourceElements Parser<LexerType>::parseClassFieldInitializerSourceElements(TreeBuilder& context, const Vector<JSTextPosition>& fieldLocations)
++{
++    TreeSourceElements sourceElements = context.createSourceElements();
++    for (auto& fieldLocation : fieldLocations) {
++        // setOffset clears lexer errors.
++        m_lexer->setOffset(fieldLocation.offset, fieldLocation.lineStartOffset);
++        m_lexer->setLineNumber(fieldLocation.line);
++        next();
++
++        JSTokenLocation location(tokenLocation());
++        JSTextPosition start = tokenStartPosition();
++        const Identifier* ident = nullptr;
++        TreeExpression privateKey = 0;
++        if (match(PRIVATENAME)) {
++            ident = m_token.m_data.ident;
++            privateKey = parsePrivateNameReference(context);
++        } else if (match(DOUBLE) || match(INTEGER))
++            ident = &m_parserArena.identifierArena().makeNumericIdentifier(const_cast<VM*>(m_vm), m_token.m_data.doubleValue);
++        else if (match(STRING) || match(IDENT) || match(ASYNC) || match(AWAIT) || match(RESERVED_IF_STRICT) || (m_token.m_type & KeywordTokenFlag))
++            ident = m_token.m_data.ident;
++        failIfFalse(ident, "Cannot parse the name of a class field");
++        if (!privateKey)
++            next();
++
++        TreeExpression initializer = 0;
++        if (consume(EQUAL)) {
++            initializer = parseAssignmentExpression(context);
++            failIfFalse(initializer, "Cannot parse the initializer of a class field");
++        }
++        JSTextPosition end = lastTokenEndPosition();
++        TreeExpression field = context.createDefineField(location, *ident, initializer, start, end, privateKey);
++        context.appendStatement(sourceElements, context.createExprStatement(location, field, start, end.line));
++    }
++    return sourceElements;
++}
++
+ struct LabelInfo {
+     LabelInfo(const Identifier* ident, const JSTextPosition& start, const JSTextPosition& end)
+     : m_ident(ident)
+@@ -3571,6 +3686,9 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
+         case OREQUAL: op = OpOrEq; break;
+         case MODEQUAL: op = OpModEq; break;
+         case POWEQUAL: op = OpPowEq; break;
++        case ANDANDEQUAL: op = OpLogicalAndEq; break;
++        case OROREQUAL: op = OpLogicalOrEq; break;
++        case COALESCEEQUAL: op = OpCoalesceEq; break;
+         default:
+             goto end;
+         }
+@@ -3937,7 +4055,9 @@ template <class TreeBuilder> TreeProperty Parser<LexerType>::parseGetterSetter(T
+         computedPropertyName = parseAssignmentExpression(context);
+         failIfFalse(computedPropertyName, "Cannot parse computed property name");
+         handleProductionOrFail(CLOSEBRACKET, "]", "end", "computed property name");
+-    } else
++    } else if (isClassProperty && match(PRIVATENAME))
++        computedPropertyName = parsePrivateNameReference(context);
++    else
+         failDueToUnexpectedToken();
+ 
+     ParserFunctionInfo<TreeBuilder> info;
+@@ -4294,6 +4414,12 @@ template <class TreeBuilder> TreeExpression Parser<LexerType>::parsePrimaryExpre
+         return parseFunctionExpression(context);
+     case CLASSTOKEN:
+         return parseClassExpression(context);
++    case PRIVATENAME: {
++        // "#name in obj" (ES2022), the only place a private name stands alone.
++        TreeExpression privateName = parsePrivateNameReference(context);
++        failIfFalse(match(INTOKEN), "A private name can only be used before 'in' or after '.'");
++        return privateName;
++    }
+     case OPENBRACE:
+         if (strictMode())
+             return parseStrictObjectLiteral(context);
+@@ -4560,12 +4686,20 @@ template <class TreeBuilder> TreeExpression Parser<LexerType>::parseMemberExpres
+         }
+     } else if (baseIsImport) {
+         next();
+-        JSTextPosition expressionEnd = lastTokenEndPosition();
+-        consumeOrFail(OPENPAREN, "import call expects exactly one argument");
+-        TreeExpression expr = parseAssignmentExpression(context);
+-        failIfFalse(expr, "Cannot parse expression");
+-        consumeOrFail(CLOSEPAREN, "import call expects exactly one argument");
+-        base = context.createImportExpr(location, expr, expressionStart, expressionEnd, lastTokenEndPosition());
++        if (match(DOT)) {
++            next();
++            failIfFalse(match(IDENT) && *m_token.m_data.ident == "meta", "Expected 'meta' after 'import.'");
++            semanticFailIfFalse(m_scriptMode == JSParserScriptMode::Module, "import.meta is only valid inside modules");
++            base = context.createImportMetaExpr(startLocation);
++            next();
++        } else {
++            JSTextPosition expressionEnd = lastTokenEndPosition();
++            consumeOrFail(OPENPAREN, "import call expects exactly one argument");
++            TreeExpression expr = parseAssignmentExpression(context);
++            failIfFalse(expr, "Cannot parse expression");
++            consumeOrFail(CLOSEPAREN, "import call expects exactly one argument");
++            base = context.createImportExpr(location, expr, expressionStart, expressionEnd, lastTokenEndPosition());
++        }
+     } else if (!baseIsNewTarget) {
+         const bool isAsync = match(ASYNC);
+ 
+@@ -4615,6 +4749,11 @@ template <class TreeBuilder> TreeExpression Parser<LexerType>::parseMemberExpres
+                 m_parserState.nonLHSCount = nonLHSCount;
+                 break;
+             }
++            if (match(PRIVATENAME)) {
++                TreeExpression key = parsePrivateNameReference(context);
++                base = context.createBracketAccess(startLocation, base, key, false, expressionStart, expressionEnd, lastTokenEndPosition());
++                break;
++            }
+             matchOrFail(IDENT, "Expected a property name after '?.'");
+             base = context.createDotAccess(startLocation, base, m_token.m_data.ident, expressionStart, expressionEnd, tokenEndPosition());
+             next();
+@@ -4689,6 +4828,12 @@ template <class TreeBuilder> TreeExpression Parser<LexerType>::parseMemberExpres
+             m_parserState.nonTrivialExpressionCount++;
+             JSTextPosition expressionEnd = lastTokenEndPosition();
+             nextExpectIdentifier(LexerFlagsIgnoreReservedWords | TreeBuilder::DontBuildKeywords);
++            if (match(PRIVATENAME)) {
++                semanticFailIfTrue(baseIsSuper, "Cannot access a private name through super");
++                TreeExpression key = parsePrivateNameReference(context);
++                base = context.createBracketAccess(startLocation, base, key, false, expressionStart, expressionEnd, lastTokenEndPosition());
++                break;
++            }
+             matchOrFail(IDENT, "Expected a property name after '.'");
+             base = context.createDotAccess(startLocation, base, m_token.m_data.ident, expressionStart, expressionEnd, tokenEndPosition());
+             if (UNLIKELY(baseIsSuper && currentScope()->isArrowFunction()))
+@@ -4810,7 +4955,9 @@ template <class TreeBuilder> TreeExpression Parser<LexerType>::parseUnaryExpress
+     }
+     JSTextPosition subExprStart = tokenStartPosition();
+     ASSERT(subExprStart.offset >= subExprStart.lineStartOffset);
+-    TreeExpression expr = parseMemberExpression(context);
++    // "void await x", "!await x": await after a unary operator.
++    TreeExpression expr = UNLIKELY(lastOperator && match(AWAIT) && currentFunctionScope()->isAsyncFunctionBoundary())
++        ? parseAwaitExpression(context) : parseMemberExpression(context);
+     if (!expr) {
+         if (lastOperator)
+             failWithMessage("Cannot parse subexpression of ", operatorString(true, lastOperator), "operator");
+diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parser/Parser.h
+index 07feb39c..f890360e 100644
+--- a/Source/JavaScriptCore/parser/Parser.h
++++ b/Source/JavaScriptCore/parser/Parser.h
+@@ -842,7 +842,7 @@ class Parser {
+     WTF_MAKE_FAST_ALLOCATED;
+ 
+ public:
+-    Parser(VM*, const SourceCode&, JSParserBuiltinMode, JSParserStrictMode, JSParserScriptMode, SourceParseMode, SuperBinding, ConstructorKind defaultConstructorKind = ConstructorKind::None, DerivedContextType = DerivedContextType::None, bool isEvalContext = false, EvalContextType = EvalContextType::None, DebuggerParseData* = nullptr);
++    Parser(VM*, const SourceCode&, JSParserBuiltinMode, JSParserStrictMode, JSParserScriptMode, SourceParseMode, SuperBinding, ConstructorKind defaultConstructorKind = ConstructorKind::None, DerivedContextType = DerivedContextType::None, bool isEvalContext = false, EvalContextType = EvalContextType::None, DebuggerParseData* = nullptr, const Vector<JSTextPosition>* classFieldLocations = nullptr);
+     ~Parser();
+ 
+     template <class ParsedNode>
+@@ -1578,6 +1578,8 @@ private:
+     template <class TreeBuilder> NEVER_INLINE typename TreeBuilder::FormalParameterList createGeneratorParameters(TreeBuilder&, unsigned& parameterCount);
+ 
+     template <class TreeBuilder> NEVER_INLINE TreeClassExpression parseClass(TreeBuilder&, FunctionNameRequirements, ParserClassInfo<TreeBuilder>&);
++    template <class TreeBuilder> TreeSourceElements parseClassFieldInitializerSourceElements(TreeBuilder&, const Vector<JSTextPosition>&);
++    template <class TreeBuilder> TreeExpression parsePrivateNameReference(TreeBuilder&);
+ 
+     template <class TreeBuilder> NEVER_INLINE typename TreeBuilder::TemplateString parseTemplateString(TreeBuilder& context, bool isTemplateHead, typename LexerType::RawStringsBuildMode, bool& elementIsTail);
+     template <class TreeBuilder> NEVER_INLINE typename TreeBuilder::TemplateLiteral parseTemplateLiteral(TreeBuilder&, typename LexerType::RawStringsBuildMode);
+@@ -1810,6 +1812,7 @@ private:
+     bool m_immediateParentAllowsFunctionDeclarationInStatement;
+     RefPtr<ModuleScopeData> m_moduleScopeData;
+     DebuggerParseData* m_debuggerParseData;
++    const Vector<JSTextPosition>* m_classFieldLocations;
+     CallOrApplyDepthScope* m_callOrApplyDepthScope { nullptr };
+ };
+ 
+@@ -1917,11 +1920,12 @@ std::unique_ptr<ParsedNode> parse(
+     ConstructorKind defaultConstructorKind = ConstructorKind::None,
+     DerivedContextType derivedContextType = DerivedContextType::None,
+     EvalContextType evalContextType = EvalContextType::None,
+-    DebuggerParseData* debuggerParseData = nullptr)
++    DebuggerParseData* debuggerParseData = nullptr,
++    const Vector<JSTextPosition>* classFieldLocations = nullptr)
+ {
+     ASSERT(!source.provider()->source().isNull());
+     if (source.provider()->source().is8Bit()) {
+-        Parser<Lexer<LChar>> parser(vm, source, builtinMode, strictMode, scriptMode, parseMode, superBinding, defaultConstructorKind, derivedContextType, isEvalNode<ParsedNode>(), evalContextType, debuggerParseData);
++        Parser<Lexer<LChar>> parser(vm, source, builtinMode, strictMode, scriptMode, parseMode, superBinding, defaultConstructorKind, derivedContextType, isEvalNode<ParsedNode>(), evalContextType, debuggerParseData, classFieldLocations);
+         std::unique_ptr<ParsedNode> result = parser.parse<ParsedNode>(error, name, parseMode);
+         if (positionBeforeLastNewline)
+             *positionBeforeLastNewline = parser.positionBeforeLastNewline();
+@@ -1932,7 +1936,7 @@ std::unique_ptr<ParsedNode> parse(
+         return result;
+     }
+     ASSERT_WITH_MESSAGE(defaultConstructorKind == ConstructorKind::None, "BuiltinExecutables::createDefaultConstructor should always use a 8-bit string");
+-    Parser<Lexer<UChar>> parser(vm, source, builtinMode, strictMode, scriptMode, parseMode, superBinding, defaultConstructorKind, derivedContextType, isEvalNode<ParsedNode>(), evalContextType, debuggerParseData);
++    Parser<Lexer<UChar>> parser(vm, source, builtinMode, strictMode, scriptMode, parseMode, superBinding, defaultConstructorKind, derivedContextType, isEvalNode<ParsedNode>(), evalContextType, debuggerParseData, classFieldLocations);
+     std::unique_ptr<ParsedNode> result = parser.parse<ParsedNode>(error, name, parseMode);
+     if (positionBeforeLastNewline)
+         *positionBeforeLastNewline = parser.positionBeforeLastNewline();
+diff --git a/Source/JavaScriptCore/parser/ParserFunctionInfo.h b/Source/JavaScriptCore/parser/ParserFunctionInfo.h
+index b9fd6795..20e8099a 100644
+--- a/Source/JavaScriptCore/parser/ParserFunctionInfo.h
++++ b/Source/JavaScriptCore/parser/ParserFunctionInfo.h
+@@ -25,6 +25,9 @@
+ 
+ #pragma once
+ 
++#include "ParserTokens.h"
++#include <wtf/Vector.h>
++
+ namespace JSC {
+ 
+ template <class TreeBuilder>
+@@ -47,6 +50,12 @@ struct ParserClassInfo {
+     unsigned endOffset { 0 };
+     int startLine { 0 };
+     unsigned startColumn { 0 };
++    // Class fields (ES2022): where each field's name starts in the source,
++    // parsed again as the body of a generated initializer function.
++    Vector<JSTextPosition> instanceFieldLocations;
++    Vector<JSTextPosition> staticFieldLocations;
++    JSTokenLocation endLocation;
++    unsigned endColumn { 0 };
+ };
+ 
+ }
+diff --git a/Source/JavaScriptCore/parser/ParserTokens.h b/Source/JavaScriptCore/parser/ParserTokens.h
+index 265b8010..4bc974b9 100644
+--- a/Source/JavaScriptCore/parser/ParserTokens.h
++++ b/Source/JavaScriptCore/parser/ParserTokens.h
+@@ -135,6 +135,10 @@ enum JSTokenType {
+     DOTDOTDOT,
+     ARROWFUNCTION,
+     QUESTIONDOT, // "?.", optional chaining (ES2020)
++    PRIVATENAME, // "#name", a private class member (ES2022)
++    ANDANDEQUAL, // "&&=", logical assignment (ES2021)
++    OROREQUAL, // "||="
++    COALESCEEQUAL, // "??="
+     LastUntaggedToken,
+ 
+     // Begin tagged tokens
+diff --git a/Source/JavaScriptCore/parser/SyntaxChecker.h b/Source/JavaScriptCore/parser/SyntaxChecker.h
+index 49a6c588..e694a885 100644
+--- a/Source/JavaScriptCore/parser/SyntaxChecker.h
++++ b/Source/JavaScriptCore/parser/SyntaxChecker.h
+@@ -163,6 +163,7 @@ public:
+     ExpressionType createThisExpr(const JSTokenLocation&) { return ThisExpr; }
+     ExpressionType createSuperExpr(const JSTokenLocation&) { return SuperExpr; }
+     ExpressionType createNewTargetExpr(const JSTokenLocation&) { return NewTargetExpr; }
++    ExpressionType createImportMetaExpr(const JSTokenLocation&) { return CallExpr; }
+     ALWAYS_INLINE bool isNewTarget(ExpressionType type) { return type == NewTargetExpr; }
+     ExpressionType createResolve(const JSTokenLocation&, const Identifier&, int, int) { return ResolveExpr; }
+     ExpressionType createObjectLiteral(const JSTokenLocation&) { return ObjectLiteralExpr; }
+diff --git a/Source/JavaScriptCore/runtime/JSGlobalObject.cpp b/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
+index 7c908994..a6f998ac 100644
+--- a/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
++++ b/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
+@@ -723,6 +723,8 @@ putDirectWithoutTransition(vm, vm.propertyNames-> jsName, lowerName ## Construct
+ 
+     JSFunction* privateFuncGetOwnPropertyNames = JSFunction::create(vm, this, 0, String(), objectConstructorGetOwnPropertyNames);
+     JSFunction* privateFuncPropertyIsEnumerable = JSFunction::create(vm, this, 0, String(), globalFuncPropertyIsEnumerable);
++    JSFunction* privateFuncCreatePrivateSymbol = JSFunction::create(vm, this, 1, String(), globalFuncCreatePrivateSymbol);
++    JSFunction* privateFuncImportMeta = JSFunction::create(vm, this, 1, String(), globalFuncImportMeta);
+     JSFunction* privateFuncImportModule = JSFunction::create(vm, this, 0, String(), globalFuncImportModule);
+     JSFunction* privateFuncTypedArrayLength = JSFunction::create(vm, this, 0, String(), typedArrayViewPrivateFuncLength);
+     JSFunction* privateFuncTypedArrayGetOriginalConstructor = JSFunction::create(vm, this, 0, String(), typedArrayViewPrivateFuncGetOriginalConstructor);
+@@ -794,6 +796,8 @@ putDirectWithoutTransition(vm, vm.propertyNames-> jsName, lowerName ## Construct
+         GlobalPropertyInfo(vm.propertyNames->builtinNames().RegExpPrivateName(), m_regExpConstructor.get(), DontEnum | DontDelete | ReadOnly),
+         GlobalPropertyInfo(vm.propertyNames->builtinNames().StringPrivateName(), stringConstructor, DontEnum | DontDelete | ReadOnly),
+         GlobalPropertyInfo(vm.propertyNames->builtinNames().absPrivateName(), privateFuncAbs, DontEnum | DontDelete | ReadOnly),
++        GlobalPropertyInfo(vm.propertyNames->builtinNames().createPrivateSymbolPrivateName(), privateFuncCreatePrivateSymbol, DontEnum | DontDelete | ReadOnly),
++        GlobalPropertyInfo(vm.propertyNames->builtinNames().importMetaPrivateName(), privateFuncImportMeta, DontEnum | DontDelete | ReadOnly),
+         GlobalPropertyInfo(vm.propertyNames->builtinNames().floorPrivateName(), privateFuncFloor, DontEnum | DontDelete | ReadOnly),
+         GlobalPropertyInfo(vm.propertyNames->builtinNames().truncPrivateName(), privateFuncTrunc, DontEnum | DontDelete | ReadOnly),
+         GlobalPropertyInfo(vm.propertyNames->builtinNames().PromisePrivateName(), promiseConstructor, DontEnum | DontDelete | ReadOnly),
+diff --git a/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.cpp b/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.cpp
+index d80b9a0e..618475c0 100644
+--- a/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.cpp
++++ b/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.cpp
+@@ -39,6 +39,10 @@
+ #include "JSPromise.h"
+ #include "JSPromiseDeferred.h"
+ #include "JSString.h"
++#include "BuiltinNames.h"
++#include "ObjectConstructor.h"
++#include "PrivateName.h"
++#include "Symbol.h"
+ #include "JSStringBuilder.h"
+ #include "Lexer.h"
+ #include "LiteralParser.h"
+@@ -798,6 +802,43 @@ EncodedJSValue JSC_HOST_CALL globalFuncImportModule(ExecState* exec)
+     return JSValue::encode(promise->promise());
+ }
+ 
++// The key behind a private class member (#name), made each time a class is
++// evaluated. Not reachable from page scripts.
++EncodedJSValue JSC_HOST_CALL globalFuncCreatePrivateSymbol(ExecState* exec)
++{
++    VM& vm = exec->vm();
++    String description = asString(exec->uncheckedArgument(0))->value(exec);
++    PrivateName privateName(PrivateName::Description, description);
++    return JSValue::encode(Symbol::create(vm, privateName.uid()));
++}
++
++// import.meta for the module at the given URL: one object per module, made
++// when first asked for, with the module's url.
++EncodedJSValue JSC_HOST_CALL globalFuncImportMeta(ExecState* exec)
++{
++    VM& vm = exec->vm();
++    JSGlobalObject* globalObject = exec->lexicalGlobalObject();
++    String url = asString(exec->uncheckedArgument(0))->value(exec);
++    const Identifier& cacheName = vm.propertyNames->builtinNames().importMetaCachePrivateName();
++
++    JSValue cacheValue = globalObject->getDirect(vm, cacheName);
++    JSObject* cache;
++    if (cacheValue)
++        cache = asObject(cacheValue);
++    else {
++        cache = constructEmptyObject(exec, globalObject->nullPrototypeObjectStructure());
++        globalObject->putDirect(vm, cacheName, cache, DontEnum);
++    }
++
++    Identifier key = Identifier::fromString(&vm, url);
++    if (JSValue meta = cache->getDirect(vm, key))
++        return JSValue::encode(meta);
++    JSObject* meta = constructEmptyObject(exec, globalObject->nullPrototypeObjectStructure());
++    meta->putDirect(vm, Identifier::fromString(&vm, "url"), jsString(&vm, url));
++    cache->putDirect(vm, key, meta);
++    return JSValue::encode(meta);
++}
++
+ EncodedJSValue JSC_HOST_CALL globalFuncPropertyIsEnumerable(ExecState* exec)
+ {
+     VM& vm = exec->vm();
+diff --git a/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.h b/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.h
+index 4e85edae..50a8d3f5 100644
+--- a/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.h
++++ b/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.h
+@@ -52,6 +52,8 @@ EncodedJSValue JSC_HOST_CALL globalFuncHostPromiseRejectionTracker(ExecState*);
+ EncodedJSValue JSC_HOST_CALL globalFuncBuiltinLog(ExecState*);
+ EncodedJSValue JSC_HOST_CALL globalFuncImportModule(ExecState*);
+ EncodedJSValue JSC_HOST_CALL globalFuncPropertyIsEnumerable(ExecState*);
++EncodedJSValue JSC_HOST_CALL globalFuncCreatePrivateSymbol(ExecState*);
++EncodedJSValue JSC_HOST_CALL globalFuncImportMeta(ExecState*);
+ 
+ double jsToNumber(StringView);
+ 
+-- 
+2.50.1 (Apple Git-155)
+
