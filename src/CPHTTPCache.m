@@ -410,8 +410,11 @@ static void CPEnforceDiskCapacity(void)
     // to the wrong request, and matching on Vary is not worth the code here.
     // "Vary: *" means the response cannot be matched to a later request at all.
     // Anything else is handled by remembering the request headers it varies on.
+    // The nil check matters: -rangeOfString: sent to nil yields location 0,
+    // which is not NSNotFound, so every response without a Vary header was
+    // being refused.
     vary = CPHeader(response, @"Vary");
-    if ([vary rangeOfString:@"*"].location != NSNotFound)
+    if (vary != nil && [vary rangeOfString:@"*"].location != NSNotFound)
         return NO;
 
     return YES;
