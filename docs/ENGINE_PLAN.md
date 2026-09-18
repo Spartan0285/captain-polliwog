@@ -156,7 +156,10 @@ What Leopard WebKit's own sources show (SourceForge, `604/Sources/Patches_604.5.
 ## Progress: cross-building 604 on the Mac
 
 All compiling happens on the Apple Silicon Mac, in a Linux VM with a PowerPC
-cross toolchain (`scripts/toolchain/`); the old Macs only run the results. The
+cross toolchain (`scripts/toolchain/`); the old Macs only run the results.
+`scripts/toolchain/webkit.sh` configures and builds; it copies the checkout
+onto the VM's own disk first, since compiling WebCore through the shared
+folder is 13x slower. The
 WebKit tree is `Safari-604.5.6` plus Leopard WebKit's patch, built with
 WebKit's CMake "Mac" port instead of Xcode, one commit per change on a
 `polliwog` branch. Order: reproduce Leopard's G4 build first, then the G3 CPU,
