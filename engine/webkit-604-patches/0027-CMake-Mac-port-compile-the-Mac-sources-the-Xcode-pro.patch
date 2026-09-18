@@ -1,0 +1,65 @@
+From 1703681384ef1878bb3a1dfeaee05c093d13cfe9 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 10:14:30 -0400
+Subject: [PATCH 27/29] CMake Mac port: compile the Mac sources the Xcode
+ projects build
+
+WebCoreView.m (a category on NSView that WebCore messages), and in
+WebKitLegacy the DOM operations categories, an NSNotificationCenter
+category, and the DOMEntity, WebRenderLayer, WebRenderNode and
+WebSerializedJSValue classes. Objective-C categories leave no undefined
+symbols, so the link never complained.
+---
+ Source/WebCore/PlatformMac.cmake      | 1 +
+ Source/WebKitLegacy/PlatformMac.cmake | 6 ++++++
+ 2 files changed, 7 insertions(+)
+
+diff --git a/Source/WebCore/PlatformMac.cmake b/Source/WebCore/PlatformMac.cmake
+index 1c93e29d..b8061204 100644
+--- a/Source/WebCore/PlatformMac.cmake
++++ b/Source/WebCore/PlatformMac.cmake
+@@ -549,6 +549,7 @@ list(APPEND WebCore_SOURCES
+     platform/mac/DragDataMac.mm
+     platform/mac/DragImageMac.mm
+     platform/mac/EventLoopMac.mm
++    platform/mac/WebCoreView.m
+     platform/mac/FileSystemMac.mm
+     platform/mac/KeyEventMac.mm
+     platform/mac/LocalCurrentGraphicsContext.mm
+diff --git a/Source/WebKitLegacy/PlatformMac.cmake b/Source/WebKitLegacy/PlatformMac.cmake
+index 8949a346..2240f830 100644
+--- a/Source/WebKitLegacy/PlatformMac.cmake
++++ b/Source/WebKitLegacy/PlatformMac.cmake
+@@ -71,7 +71,9 @@ list(APPEND WebKit_SOURCES
+     mac/DOM/DOMElement.mm
+     mac/DOM/DOMEntityReference.mm
+     mac/DOM/DOMEvent.mm
++    mac/DOM/DOMEntity.mm
+     mac/DOM/DOMEvents.mm
++    mac/DOM/WebDOMOperations.mm
+     mac/DOM/DOMFile.mm
+     mac/DOM/DOMFileList.mm
+     mac/DOM/DOMHTML.mm
+@@ -202,6 +204,7 @@ list(APPEND WebKit_SOURCES
+     mac/Misc/WebNSEventExtras.m
+     mac/Misc/WebNSFileManagerExtras.mm
+     mac/Misc/WebNSImageExtras.m
++    mac/Misc/WebNSNotificationCenterExtras.m
+     mac/Misc/WebNSObjectExtras.mm
+     mac/Misc/WebNSPasteboardExtras.mm
+     mac/Misc/WebNSPrintOperationExtras.m
+@@ -315,8 +318,11 @@ list(APPEND WebKit_SOURCES
+     mac/WebView/WebPDFView.mm
+     mac/WebView/WebPolicyDelegate.mm
+     mac/WebView/WebPreferences.mm
++    mac/WebView/WebRenderLayer.mm
++    mac/WebView/WebRenderNode.mm
+     mac/WebView/WebResource.mm
+     mac/WebView/WebScriptDebugDelegate.mm
++    mac/WebView/WebSerializedJSValue.mm
+     mac/WebView/WebScriptDebugger.mm
+     mac/WebView/WebScriptWorld.mm
+     mac/WebView/WebTextCompletionController.mm
+-- 
+2.50.1 (Apple Git-155)
+

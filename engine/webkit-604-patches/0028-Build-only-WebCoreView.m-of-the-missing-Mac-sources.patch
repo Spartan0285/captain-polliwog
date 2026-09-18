@@ -1,0 +1,50 @@
+From 0b83773b169fc5d8fa3ecd49b27515acbb2b62e2 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 11:28:22 -0400
+Subject: [PATCH 28/29] Build only WebCoreView.m of the missing Mac sources
+
+The other six (WebKitLegacy's DOM operations and NSNotificationCenter
+categories, DOMEntity, WebRenderLayer, WebRenderNode and
+WebSerializedJSValue) made pages never finish loading; nothing in
+Captain Polliwog uses them.
+---
+ Source/WebKitLegacy/PlatformMac.cmake | 6 ------
+ 1 file changed, 6 deletions(-)
+
+diff --git a/Source/WebKitLegacy/PlatformMac.cmake b/Source/WebKitLegacy/PlatformMac.cmake
+index 2240f830..8949a346 100644
+--- a/Source/WebKitLegacy/PlatformMac.cmake
++++ b/Source/WebKitLegacy/PlatformMac.cmake
+@@ -71,9 +71,7 @@ list(APPEND WebKit_SOURCES
+     mac/DOM/DOMElement.mm
+     mac/DOM/DOMEntityReference.mm
+     mac/DOM/DOMEvent.mm
+-    mac/DOM/DOMEntity.mm
+     mac/DOM/DOMEvents.mm
+-    mac/DOM/WebDOMOperations.mm
+     mac/DOM/DOMFile.mm
+     mac/DOM/DOMFileList.mm
+     mac/DOM/DOMHTML.mm
+@@ -204,7 +202,6 @@ list(APPEND WebKit_SOURCES
+     mac/Misc/WebNSEventExtras.m
+     mac/Misc/WebNSFileManagerExtras.mm
+     mac/Misc/WebNSImageExtras.m
+-    mac/Misc/WebNSNotificationCenterExtras.m
+     mac/Misc/WebNSObjectExtras.mm
+     mac/Misc/WebNSPasteboardExtras.mm
+     mac/Misc/WebNSPrintOperationExtras.m
+@@ -318,11 +315,8 @@ list(APPEND WebKit_SOURCES
+     mac/WebView/WebPDFView.mm
+     mac/WebView/WebPolicyDelegate.mm
+     mac/WebView/WebPreferences.mm
+-    mac/WebView/WebRenderLayer.mm
+-    mac/WebView/WebRenderNode.mm
+     mac/WebView/WebResource.mm
+     mac/WebView/WebScriptDebugDelegate.mm
+-    mac/WebView/WebSerializedJSValue.mm
+     mac/WebView/WebScriptDebugger.mm
+     mac/WebView/WebScriptWorld.mm
+     mac/WebView/WebTextCompletionController.mm
+-- 
+2.50.1 (Apple Git-155)
+

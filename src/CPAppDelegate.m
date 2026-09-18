@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #import "CPAppDelegate.h"
+#import "CPSiteModes.h"
 #import "CPBrowserWindowController.h"
 #import "CPCurlProtocol.h"
 #import "CPSettings.h"
@@ -125,6 +126,18 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Make Text Bigger", @selector(makeTextLarger:), @"+");
     CPAddItem(menu, @"Make Text Smaller", @selector(makeTextSmaller:), @"-");
+    [menu addItem:[NSMenuItem separatorItem]];
+    {
+        // Which version of the current site to ask for; see CPSiteModes.
+        NSMenuItem *siteItem = [menu addItemWithTitle:@"Site Version" action:NULL keyEquivalent:@""];
+        NSMenu *siteMenu = [[[NSMenu alloc] initWithTitle:@"Site Version"] autorelease];
+        [CPAddItem(siteMenu, @"Desktop", @selector(setSiteMode:), nil) setTag:CPSiteModeDesktop];
+        [CPAddItem(siteMenu, @"Mobile", @selector(setSiteMode:), nil) setTag:CPSiteModeMobile];
+        [CPAddItem(siteMenu, @"Basic", @selector(setSiteMode:), nil) setTag:CPSiteModeBasic];
+        [siteMenu addItem:[NSMenuItem separatorItem]];
+        [CPAddItem(siteMenu, @"Use Default", @selector(setSiteMode:), nil) setTag:-1];
+        [menu setSubmenu:siteMenu forItem:siteItem];
+    }
 
     menu = CPAddSubmenu(mainMenu, @"History");
     CPAddItem(menu, @"Back", @selector(goBack:), @"[");

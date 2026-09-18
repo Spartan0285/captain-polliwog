@@ -1,0 +1,27 @@
+From 936ee774a9872c2a52a69d34e74bd334ca422a14 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 11:43:32 -0400
+Subject: [PATCH 29/29] Leave WebCoreView.m out again
+
+With it, mobile Wikipedia never finished loading. Without it, WebKit
+logs and discards an unrecognized-selector exception on some focus
+changes, as Leopard WebKit builds from this CMake setup did before.
+---
+ Source/WebCore/PlatformMac.cmake | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/Source/WebCore/PlatformMac.cmake b/Source/WebCore/PlatformMac.cmake
+index b8061204..1c93e29d 100644
+--- a/Source/WebCore/PlatformMac.cmake
++++ b/Source/WebCore/PlatformMac.cmake
+@@ -549,7 +549,6 @@ list(APPEND WebCore_SOURCES
+     platform/mac/DragDataMac.mm
+     platform/mac/DragImageMac.mm
+     platform/mac/EventLoopMac.mm
+-    platform/mac/WebCoreView.m
+     platform/mac/FileSystemMac.mm
+     platform/mac/KeyEventMac.mm
+     platform/mac/LocalCurrentGraphicsContext.mm
+-- 
+2.50.1 (Apple Git-155)
+

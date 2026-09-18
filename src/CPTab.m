@@ -6,6 +6,7 @@
 #import "CPAppDelegate.h"
 #import "CPDebugSnapshot.h"
 #import "CPDownloadsController.h"
+#import "CPSiteModes.h"
 #import <WebKit/WebKit.h>
 
 static NSString *CPEscapeHTML(NSString *text)
@@ -26,6 +27,7 @@ static NSString *CPEscapeHTML(NSString *text)
 - (void)setLoading:(BOOL)flag;
 - (void)changed;
 - (void)showErrorPage:(NSError *)error forFrame:(WebFrame *)frame;
+- (BOOL)applySiteModeForURL:(NSURL *)aURL;
 @end
 
 @implementation CPTab (Private)
@@ -126,6 +128,25 @@ static NSString *CPEscapeHTML(NSString *text)
     [frame loadAlternateHTMLString:html baseURL:nil forUnreachableURL:failingURL];
 }
 
+// Gives the WebView the identity the page's site version calls for: the
+// browser's own, or a phone's. Returns YES if it changed.
+- (BOOL)applySiteModeForURL:(NSURL *)aURL
+{
+    NSString *wanted;
+    NSString *current;
+
+    if (webView == nil || ![CPSiteModes appliesToURL:aURL])
+        return NO;
+    wanted = [CPSiteModes userAgentForMode:[CPSiteModes modeForURL:aURL]];
+    current = [webView customUserAgent];
+    if ([current length] == 0)
+        current = nil;
+    if (wanted == current || [wanted isEqualToString:current])
+        return NO;
+    [webView setCustomUserAgent:wanted];
+    return YES;
+}
+
 @end
 
 @implementation CPTab
@@ -155,8 +176,10 @@ static NSString *CPEscapeHTML(NSString *text)
     if (webView == nil) {
         [self createWebView];
         // Coming back from being discarded: reload what was showing.
-        if (URL != nil)
+        if (URL != nil) {
+            [self applySiteModeForURL:URL];
             [[webView mainFrame] loadRequest:[NSURLRequest requestWithURL:URL]];
+        }
     }
     return webView;
 }
@@ -197,6 +220,7 @@ static NSString *CPEscapeHTML(NSString *text)
     [self setURL:[request URL]];
     if (webView == nil)
         [self createWebView];
+    [self applySiteModeForURL:[request URL]];
     [[webView mainFrame] loadRequest:request];
     [self changed];
 }
@@ -275,6 +299,20 @@ static NSString *CPEscapeHTML(NSString *text)
 - (void)stopLoading
 {
     [webView stopLoading:nil];
+}
+
+- (void)reloadForSiteMode
+{
+    NSURL *current = URL;
+
+    if (current == nil || ![CPSiteModes appliesToURL:current])
+        return;
+    if (webView == nil)
+        [self createWebView];
+    // A fresh load rather than -reload:, which would resend the request
+    // with the identity it was first made with.
+    [self applySiteModeForURL:current];
+    [[webView mainFrame] loadRequest:[NSURLRequest requestWithURL:current]];
 }
 
 #pragma mark Progress
@@ -381,6 +419,22 @@ decisionListener:(id<WebPolicyDecisionListener>)listener
         [owner tab:self openTabWithRequest:request inBackground:YES];
         [listener ignore];
         return;
+    }
+
+    // Moving to a site with a different site version: switch identity. If
+    // WebKit has already written the old one into this request, load it
+    // again so the site sees the new one (except when going back or forward,
+    // where a fresh load would disturb the history).
+    if (frame == [sender mainFrame] && [self applySiteModeForURL:[request URL]] &&
+        type != WebNavigationTypeBackForward) {
+        NSString *sent = [request valueForHTTPHeaderField:@"User-Agent"];
+        if (sent != nil && ![sent isEqualToString:[sender userAgentForURL:[request URL]]]) {
+            NSMutableURLRequest *again = [[request mutableCopy] autorelease];
+            [again setValue:nil forHTTPHeaderField:@"User-Agent"];
+            [listener ignore];
+            [frame loadRequest:again];
+            return;
+        }
     }
     [listener use];
 }

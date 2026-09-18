@@ -4,10 +4,11 @@
 
 #import "CPPreferencesController.h"
 #import "CPSettings.h"
+#import "CPSiteModes.h"
 #import "CPDebugSnapshot.h"
 
 #define CPWindowWidth   520.0f
-#define CPWindowHeight  348.0f
+#define CPWindowHeight  402.0f
 
 static NSTextField *CPLabel(NSView *parent, NSRect frame, NSString *text, BOOL small, BOOL rightAligned)
 {
@@ -63,6 +64,19 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
              self, @selector(chooseDownloadsFolder:));
 
     top -= 42.0f;
+    CPLabel(content, NSMakeRect(20.0f, top, 110.0f, 17.0f), @"Show websites as:", NO, YES);
+    siteModePopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(138.0f, top - 4.0f, 200.0f, 26.0f)];
+    [siteModePopUp addItemWithTitle:@"Desktop"];
+    [siteModePopUp addItemWithTitle:@"Mobile (lighter)"];
+    [siteModePopUp addItemWithTitle:@"Basic (lightest)"];
+    [siteModePopUp setTarget:self];
+    [siteModePopUp setAction:@selector(siteModeChanged:)];
+    [content addSubview:siteModePopUp];
+    [siteModePopUp release];
+    CPLabel(content, NSMakeRect(138.0f, top - 26.0f, 360.0f, 14.0f),
+            @"Choose for a single site in View > Site Version.", YES, NO);
+
+    top -= 54.0f;
     CPLabel(content, NSMakeRect(20.0f, top, 110.0f, 17.0f), @"Memory use:", NO, YES);
     memoryPopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(138.0f, top - 4.0f, 200.0f, 26.0f)];
     [memoryPopUp addItemWithTitle:@"Automatic"];
@@ -131,6 +145,7 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
     NSString *detected;
 
     [memoryPopUp selectItemAtIndex:(int)[settings memoryProfile]];
+    [siteModePopUp selectItemAtIndex:(int)[CPSiteModes defaultMode]];
 
     switch ([settings effectiveMemoryProfile]) {
     case CPMemoryProfileSmall:
@@ -258,6 +273,12 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
 - (IBAction)memoryReliefChanged:(id)sender
 {
     [[CPSettings sharedSettings] setReleasesMemoryUnderPressure:([memoryReliefCheckbox state] == NSOnState)];
+    [self refresh];
+}
+
+- (IBAction)siteModeChanged:(id)sender
+{
+    [CPSiteModes setDefaultMode:(CPSiteMode)[siteModePopUp indexOfSelectedItem]];
     [self refresh];
 }
 

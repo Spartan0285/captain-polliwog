@@ -14,7 +14,11 @@ zip=$HOME/polliwog-build/stage/$variant/Frameworks.zip
 out=build/screens/$host-$variant.png
 mkdir -p build/screens
 
-scp -q "$zip" "$host:/tmp/Frameworks.zip"
+# The classic scp protocol (-O): Leopard's sshd sometimes stalls modern
+# scp's SFTP transfers at the very end. Skip the copy if it is already there.
+local_sum=$(md5 -q "$zip")
+remote_sum=$(ssh -o ConnectTimeout=90 "$host" "md5 -q /tmp/Frameworks.zip 2>/dev/null" || true)
+[ "$local_sum" = "$remote_sum" ] || scp -O -q "$zip" "$host:/tmp/Frameworks.zip"
 ssh -o ConnectTimeout=90 "$host" "
     A=\$HOME/polliwog-engine-test/'Captain Polliwog.app'
     killall CaptainPolliwog 2>/dev/null; sleep 2
@@ -46,4 +50,4 @@ ssh -o ConnectTimeout=90 "$host" "
         echo \"==> crashed: \$crash\"; grep -A12 'Crashed:' \"\$crash\" | head -14
     fi
     true"
-scp -q -o ConnectTimeout=90 "$host:/tmp/polliwog-snapshot.png" "$out" 2>/dev/null && echo "==> saved $out"
+scp -O -q -o ConnectTimeout=90 "$host:/tmp/polliwog-snapshot.png" "$out" 2>/dev/null && echo "==> saved $out"

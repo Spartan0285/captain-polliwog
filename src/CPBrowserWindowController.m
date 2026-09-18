@@ -5,6 +5,7 @@
 #import "CPBrowserWindowController.h"
 #import "CPAppDelegate.h"
 #import "CPTab.h"
+#import "CPSiteModes.h"
 #import "CPTabBarView.h"
 #import "CPIcons.h"
 #import "CPDebugSnapshot.h"
@@ -483,6 +484,21 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [self loadAddressString:address];
 }
 
+// View > Site Version: tags are CPSiteMode values; -1 is "use the default".
+- (IBAction)setSiteMode:(id)sender
+{
+    NSURL *page = [selectedTab URL];
+    int mode = [sender tag];
+
+    if (![CPSiteModes appliesToURL:page])
+        return;
+    if (mode < 0)
+        [CPSiteModes removeModeForURL:page];
+    else
+        [CPSiteModes setMode:(CPSiteMode)mode forURL:page];
+    [selectedTab reloadForSiteMode];
+}
+
 - (IBAction)makeTextLarger:(id)sender
 {
     [[selectedTab webView] makeTextLarger:sender];
@@ -536,6 +552,19 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         return (page != nil && [page canMakeTextSmaller]);
     if (action == @selector(selectNextTab:) || action == @selector(selectPreviousTab:))
         return ([tabs count] > 1);
+    if (action == @selector(setSiteMode:)) {
+        NSURL *site = [selectedTab URL];
+        BOOL applies = [CPSiteModes appliesToURL:site];
+        BOOL own = applies && [CPSiteModes hasModeForURL:site];
+        if ([item tag] < 0) {
+            [item setTitle:[NSString stringWithFormat:@"Use Default (%@)",
+                            [CPSiteModes nameForMode:[CPSiteModes defaultMode]]]];
+            [item setState:(applies && !own) ? NSOnState : NSOffState];
+        } else {
+            [item setState:(own && (int)[CPSiteModes modeForURL:site] == [item tag]) ? NSOnState : NSOffState];
+        }
+        return applies;
+    }
     return YES;
 }
 

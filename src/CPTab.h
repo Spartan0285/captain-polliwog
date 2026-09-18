@@ -58,6 +58,9 @@
 - (void)goBack;
 - (void)goForward;
 - (void)reload;
+// Loads the page again as its site version (desktop, mobile or basic) now
+// says; used after the choice for this site changes.
+- (void)reloadForSiteMode;
 - (void)stopLoading;
 
 @end

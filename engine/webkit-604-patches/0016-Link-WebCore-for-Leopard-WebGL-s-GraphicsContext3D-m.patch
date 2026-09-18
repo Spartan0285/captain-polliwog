@@ -1,7 +1,7 @@
 From ce93e4f06da7a2a10f8bd1f0e25268a306663156 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 02:19:08 -0400
-Subject: [PATCH 16/25] Link WebCore for Leopard: WebGL's GraphicsContext3D,
+Subject: [PATCH 16/29] Link WebCore for Leopard: WebGL's GraphicsContext3D,
  missing sources, IOPMAssertionCreate
 
 GraphicsContext3D and ANGLE follow ENABLE_WEBGL, as in Leopard WebKit.

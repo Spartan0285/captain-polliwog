@@ -14,6 +14,7 @@
     NSButton      *imagesCheckbox;
     NSButton      *memoryReliefCheckbox;
     NSTextField   *downloadsField;
+    NSPopUpButton *siteModePopUp;
 }
 
 + (CPPreferencesController *)sharedController;
@@ -28,5 +29,6 @@
 - (IBAction)imagesChanged:(id)sender;
 - (IBAction)memoryReliefChanged:(id)sender;
 - (IBAction)chooseDownloadsFolder:(id)sender;
+- (IBAction)siteModeChanged:(id)sender;
 
 @end
