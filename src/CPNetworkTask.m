@@ -335,6 +335,40 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
 
 @end
 
+// The Accept-Language header the system's networking would add, which this
+// networking replaces: the user's preferred languages, most preferred first
+// ("en-us, fr;q=0.9"). Sites treat a request without one as a script, not a
+// browser: eBay answers a search with an error page.
+static NSString *CPAcceptLanguageHeader(void)
+{
+    static NSString *header = nil;
+    NSArray *languages;
+    NSMutableArray *parts;
+    unsigned index;
+
+    if (header != nil)
+        return header;
+    languages = [[NSUserDefaults standardUserDefaults] arrayForKey:@"AppleLanguages"];
+    parts = [NSMutableArray array];
+    for (index = 0; index < [languages count] && [parts count] < 4; index++) {
+        NSMutableString *language = [NSMutableString stringWithString:[[languages objectAtIndex:index] lowercaseString]];
+        [language replaceOccurrencesOfString:@"_" withString:@"-" options:0 range:NSMakeRange(0, [language length])];
+        // Mac OS X lists English as "en"; Safari sent "en-us".
+        if ([language isEqualToString:@"en"])
+            [language setString:@"en-us"];
+        if ([language length] == 0 || [parts containsObject:language])
+            continue;
+        if ([parts count] == 0)
+            [parts addObject:language];
+        else
+            [parts addObject:[NSString stringWithFormat:@"%@;q=0.%u", language, 10 - (unsigned)[parts count]]];
+    }
+    if ([parts count] == 0)
+        [parts addObject:@"en-us"];
+    header = [[parts componentsJoinedByString:@", "] retain];
+    return header;
+}
+
 @implementation CPNetworkTask
 
 - (id)initWithRequest:(NSURLRequest *)aRequest
@@ -469,6 +503,9 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
                           [headerFields objectForKey:name]];
         headers = curl_slist_append(headers, [line UTF8String]);
     }
+    if ([request valueForHTTPHeaderField:@"Accept-Language"] == nil)
+        headers = curl_slist_append(headers, [[NSString stringWithFormat:@"Accept-Language: %@",
+                                               CPAcceptLanguageHeader()] UTF8String]);
 
     // WebKit leaves cookies to the URL loading system, which we have replaced,
     // so they have to be attached and stored here or logins never stick.
