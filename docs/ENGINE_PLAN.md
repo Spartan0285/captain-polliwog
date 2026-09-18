@@ -252,6 +252,32 @@ What WebCore and WebKitLegacy took, beyond the JavaScriptCore work above:
   restored registers a function had never saved. Fixed in the linker
   (`scripts/toolchain/ld64-branch-island-addend.patch`).
 
+**Making modern sites work** (18 September 2026). A survey of 19 sites
+(`scripts/site-survey.sh`, which records load time, memory, JavaScript
+errors, stalls and crashes per site) found four problems common to many:
+
+- **WebCore saw none of our response headers.** It reads them from the
+  CFNetwork message behind a response, and responses made by an
+  NSURLProtocol have none, so every cross-origin check failed (GitHub
+  loaded no styles) and no security or caching header applied. WebCore now
+  falls back to `-allHeaderFields`.
+- **No `Accept-Language` header.** The system's networking adds it and ours
+  replaces that networking; without it eBay answered a search with an error
+  page and bot checks singled the browser out.
+- **No `window.performance`.** Leopard WebKit leaves Web Timing off for
+  10.5; Google Search stops at the missing variable. Now on.
+- **Modern JavaScript syntax.** One unsupported construct makes a whole
+  script fail to parse. JavaScriptCore now has optional chaining (`?.`),
+  nullish coalescing (`??`), object rest/spread (already in 604 behind a
+  flag, which Safari 11.1 turned on), optional catch binding and
+  `globalThis`: `engine/tests/es2020.js` passes all 43 checks, and the
+  interpreter's speed is unchanged.
+
+Two crashes came from Captain Polliwog bundling upstream ICU rather than
+Apple's: WebKit's caret rules use an Apple-only option (`!!RINoChain`), and
+the failed rule set left a null iterator that typing into a password field
+or clicking into some text fields dereferenced.
+
 Next: move the engine from a test copy into the app proper (loaded only on
 Leopard with a G4, with the system engine as a fallback), re-verify every
 shell feature on it and measure it against the system engine; then the G3

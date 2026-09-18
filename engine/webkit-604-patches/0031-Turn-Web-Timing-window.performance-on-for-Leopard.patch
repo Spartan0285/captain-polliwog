@@ -1,0 +1,36 @@
+From 9d6e3c1cf43c8b0289ae79a45914dd2c72109547 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 14:13:11 -0400
+Subject: [PATCH 31/34] Turn Web Timing (window.performance) on for Leopard
+
+Google Search and other sites fail with 'Can't find variable:
+performance' without it.
+---
+ Source/cmake/OptionsMac.cmake | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/Source/cmake/OptionsMac.cmake b/Source/cmake/OptionsMac.cmake
+index 038551e8..dedfd367 100644
+--- a/Source/cmake/OptionsMac.cmake
++++ b/Source/cmake/OptionsMac.cmake
+@@ -145,7 +145,6 @@ if (POLLIWOG_LEGACY_MAC)
+         ENABLE_WEBGL2
+         ENABLE_WEBGPU
+         ENABLE_WEBVTT_REGIONS
+-        ENABLE_WEB_TIMING
+     )
+         WEBKIT_OPTION_DEFAULT_PORT_VALUE(${_feature} PRIVATE OFF)
+     endforeach ()
+@@ -160,6 +159,9 @@ if (POLLIWOG_LEGACY_MAC)
+     )
+         WEBKIT_OPTION_DEFAULT_PORT_VALUE(${_feature} PRIVATE ON)
+     endforeach ()
++    # Leopard WebKit leaves Web Timing (window.performance) off for 10.5, but
++    # sites need it: Google Search stops at "performance is not defined".
++    # Without Leopard's network timing data the timings are just less exact.
+     # On in the Leopard build but not CMake options upstream. Made options so
+     # the code generators (CSS keywords, IDL) see them too.
+     WEBKIT_OPTION_DEFINE(ENABLE_CSS_TRAILING_WORD "Toggle -apple-trailing-word" PRIVATE ON)
+-- 
+2.50.1 (Apple Git-155)
+

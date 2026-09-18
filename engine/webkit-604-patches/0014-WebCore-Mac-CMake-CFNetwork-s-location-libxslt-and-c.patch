@@ -1,7 +1,7 @@
 From f1d953ba9b0d88d5592064508dbe711e5a097458 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 01:35:55 -0400
-Subject: [PATCH 14/30] WebCore Mac CMake: CFNetwork's location, libxslt, and
+Subject: [PATCH 14/34] WebCore Mac CMake: CFNetwork's location, libxslt, and
  configurable SQLite, libxml2, libxslt and OTS
 
 Leopard's SQLite and libxml2 are too old for WebCore 604, so a legacy

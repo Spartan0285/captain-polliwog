@@ -1,0 +1,497 @@
+From f53b157f0ab42611adf79a30700daa58f06bc678 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 14:33:41 -0400
+Subject: [PATCH 34/34] JavaScript: optional chaining (?.) and nullish
+ coalescing (??)
+
+Both ES2020, and in nearly every modern site's scripts: a single use
+makes the whole script fail to parse in JavaScriptCore 604. A chain's
+checks jump to one exit that yields undefined (true for delete); a
+method call through ?.() keeps its this.
+---
+ .../bytecompiler/BytecodeGenerator.cpp        | 23 +++++++++
+ .../bytecompiler/BytecodeGenerator.h          |  8 +++
+ .../bytecompiler/NodesCodegen.cpp             | 42 ++++++++++++++++
+ Source/JavaScriptCore/parser/ASTBuilder.h     | 36 ++++++++++++++
+ Source/JavaScriptCore/parser/Lexer.cpp        | 13 ++++-
+ .../JavaScriptCore/parser/NodeConstructors.h  | 19 +++++++
+ Source/JavaScriptCore/parser/Nodes.h          | 49 +++++++++++++++++++
+ Source/JavaScriptCore/parser/Parser.cpp       | 38 ++++++++++++++
+ Source/JavaScriptCore/parser/ParserTokens.h   |  2 +
+ Source/JavaScriptCore/parser/SyntaxChecker.h  |  5 +-
+ 10 files changed, 233 insertions(+), 2 deletions(-)
+
+diff --git a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp
+index e462948d..58ef5378 100644
+--- a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp
++++ b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp
+@@ -4501,6 +4501,29 @@ RegisterID* BytecodeGenerator::emitIsNumber(RegisterID* dst, RegisterID* src)
+     return dst;
+ }
+ 
++void BytecodeGenerator::pushOptionalChainTarget()
++{
++    m_optionalChainTargetStack.append(newLabel());
++}
++
++void BytecodeGenerator::popOptionalChainTarget(RegisterID* dst, bool isDelete)
++{
++    ASSERT(m_optionalChainTargetStack.size());
++    Ref<Label> endLabel = newLabel();
++    emitJump(endLabel.get());
++    emitLabel(m_optionalChainTargetStack.last().get());
++    m_optionalChainTargetStack.removeLast();
++    emitLoad(dst, isDelete ? jsBoolean(true) : jsUndefined());
++    emitLabel(endLabel.get());
++}
++
++void BytecodeGenerator::emitOptionalCheck(RegisterID* src)
++{
++    ASSERT(m_optionalChainTargetStack.size());
++    // emitJumpIfTrue folds this into a single op_jeq_null.
++    emitJumpIfTrue(emitUnaryOp(op_eq_null, newTemporary(), src), m_optionalChainTargetStack.last().get());
++}
++
+ RegisterID* BytecodeGenerator::emitIsUndefined(RegisterID* dst, RegisterID* src)
+ {
+     emitOpcode(op_is_undefined);
+diff --git a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h
+index 1a4b2791..35a267ee 100644
+--- a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h
++++ b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h
+@@ -769,6 +769,13 @@ namespace JSC {
+         RegisterID* emitIsObject(RegisterID* dst, RegisterID* src);
+         RegisterID* emitIsNumber(RegisterID* dst, RegisterID* src);
+         RegisterID* emitIsUndefined(RegisterID* dst, RegisterID* src);
++
++        // Optional chaining: a chain pushes the label its "?." checks jump to
++        // when a value is null or undefined; popping emits that exit, which
++        // leaves undefined (for "delete", true) in dst.
++        void pushOptionalChainTarget();
++        void popOptionalChainTarget(RegisterID* dst, bool isDelete);
++        void emitOptionalCheck(RegisterID* src);
+         RegisterID* emitIsEmpty(RegisterID* dst, RegisterID* src);
+         RegisterID* emitIsDerivedArray(RegisterID* dst, RegisterID* src) { return emitIsCellWithType(dst, src, DerivedArrayType); }
+         void emitRequireObjectCoercible(RegisterID* value, const String& error);
+@@ -1186,6 +1193,7 @@ namespace JSC {
+         bool m_isBuiltinFunction { false };
+         bool m_usesNonStrictEval { false };
+         bool m_inTailPosition { false };
++        Vector<Ref<Label>> m_optionalChainTargetStack;
+         bool m_needsToUpdateArrowFunctionContext;
+         DerivedContextType m_derivedContextType { DerivedContextType::None };
+     };
+diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+index 29d25b8d..11518e6a 100644
+--- a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
++++ b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+@@ -840,6 +840,8 @@ RegisterID* FunctionCallValueNode::emitBytecode(BytecodeGenerator& generator, Re
+         return ret;
+     }
+     RefPtr<RegisterID> func = generator.emitNode(m_expr);
++    if (m_isOptionalCall)
++        generator.emitOptionalCheck(func.get());
+     RefPtr<RegisterID> returnValue = generator.finalDestination(dst, func.get());
+     CallArguments callArguments(generator, m_args);
+     generator.emitLoad(callArguments.thisRegister(), jsUndefined());
+@@ -1162,6 +1164,8 @@ RegisterID* FunctionCallBracketNode::emitBytecode(BytecodeGenerator& generator,
+             function = generator.emitGetByVal(generator.tempDestination(dst), base.get(), property.get());
+     }
+ 
++    if (m_isOptionalCall)
++        generator.emitOptionalCheck(function.get());
+     RefPtr<RegisterID> returnValue = generator.finalDestination(dst, function.get());
+     CallArguments callArguments(generator, m_args);
+     if (baseIsSuper) {
+@@ -1192,6 +1196,8 @@ RegisterID* FunctionCallDotNode::emitBytecode(BytecodeGenerator& generator, Regi
+         generator.emitGetById(function.get(), superBase.get(), callArguments.thisRegister(), m_ident);
+     } else
+         generator.emitGetById(function.get(), callArguments.thisRegister(), m_ident);
++    if (m_isOptionalCall)
++        generator.emitOptionalCheck(function.get());
+     RegisterID* ret = generator.emitCallInTailPosition(returnValue.get(), function.get(), NoExpectedFunction, callArguments, divot(), divotStart(), divotEnd(), DebuggableCall::Yes);
+     generator.emitProfileType(returnValue.get(), divotStart(), divotEnd());
+     return ret;
+@@ -2103,6 +2109,42 @@ RegisterID* InNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
+ 
+ // ------------------------------ LogicalOpNode ----------------------------
+ 
++// ------------------------------ CoalesceNode ----------------------------------
++
++RegisterID* CoalesceNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
++{
++    RefPtr<RegisterID> temp = generator.tempDestination(dst);
++    Ref<Label> endLabel = generator.newLabel();
++
++    generator.emitNode(temp.get(), m_expr1);
++    // emitJumpIfFalse folds this into a single op_jneq_null.
++    generator.emitJumpIfFalse(generator.emitUnaryOp(op_eq_null, generator.newTemporary(), temp.get()), endLabel.get());
++    generator.emitNodeInTailPosition(temp.get(), m_expr2);
++    generator.emitLabel(endLabel.get());
++
++    return generator.moveToDestinationIfNeeded(dst, temp.get());
++}
++
++// ------------------------------ OptionalChainBaseNode, OptionalChainNode ----------------------------------
++
++RegisterID* OptionalChainBaseNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
++{
++    RegisterID* value = generator.emitNode(dst, m_expr);
++    generator.emitOptionalCheck(value);
++    return value;
++}
++
++RegisterID* OptionalChainNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
++{
++    RefPtr<RegisterID> finalDest = generator.finalDestination(dst);
++    generator.pushOptionalChainTarget();
++    generator.emitNode(finalDest.get(), m_expr);
++    generator.popOptionalChainTarget(finalDest.get(), m_isDelete);
++    return finalDest.get();
++}
++
++// ------------------------------ LogicalOpNode ----------------------------------
++
+ RegisterID* LogicalOpNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
+ {
+     RefPtr<RegisterID> temp = generator.tempDestination(dst);
+diff --git a/Source/JavaScriptCore/parser/ASTBuilder.h b/Source/JavaScriptCore/parser/ASTBuilder.h
+index 2aba1eb2..fe41544c 100644
+--- a/Source/JavaScriptCore/parser/ASTBuilder.h
++++ b/Source/JavaScriptCore/parser/ASTBuilder.h
+@@ -130,6 +130,9 @@ public:
+ 
+     ExpressionNode* makeBinaryNode(const JSTokenLocation&, int token, std::pair<ExpressionNode*, BinaryOpInfo>, std::pair<ExpressionNode*, BinaryOpInfo>);
+     ExpressionNode* makeFunctionCallNode(const JSTokenLocation&, ExpressionNode* func, ArgumentsNode* args, const JSTextPosition& divotStart, const JSTextPosition& divot, const JSTextPosition& divotEnd, size_t callOrApplyChildDepth);
++    ExpressionNode* makeOptionalCallNode(const JSTokenLocation&, ExpressionNode* func, ArgumentsNode* args, const JSTextPosition& divotStart, const JSTextPosition& divot, const JSTextPosition& divotEnd);
++    ExpressionNode* createOptionalChain(const JSTokenLocation& location, ExpressionNode* expr) { return new (m_parserArena) OptionalChainNode(location, expr); }
++    ExpressionNode* createOptionalChainBase(const JSTokenLocation& location, ExpressionNode* base) { return new (m_parserArena) OptionalChainBaseNode(location, base); }
+ 
+     JSC::SourceElements* createSourceElements() { return new (m_parserArena) JSC::SourceElements(); }
+ 
+@@ -1123,6 +1126,13 @@ ExpressionNode* ASTBuilder::makeTypeOfNode(const JSTokenLocation& location, Expr
+ 
+ ExpressionNode* ASTBuilder::makeDeleteNode(const JSTokenLocation& location, ExpressionNode* expr, const JSTextPosition& start, const JSTextPosition& divot, const JSTextPosition& end)
+ {
++    // "delete a?.b" deletes a.b, or is true when a is null or undefined.
++    if (expr->isOptionalChain()) {
++        OptionalChainNode* chain = static_cast<OptionalChainNode*>(expr);
++        chain->setExpr(makeDeleteNode(location, chain->expr(), start, divot, end));
++        chain->setIsDelete();
++        return chain;
++    }
+     if (!expr->isLocation())
+         return new (m_parserArena) DeleteValueNode(location, expr);
+     if (expr->isResolveNode()) {
+@@ -1356,12 +1366,38 @@ ExpressionNode* ASTBuilder::makeFunctionCallNode(const JSTokenLocation& location
+     return node;
+ }
+ 
++// "f?.()", "a.b?.()", "a[b]?.()": the function is checked for null or
++// undefined before the call; a method call keeps its "this".
++ExpressionNode* ASTBuilder::makeOptionalCallNode(const JSTokenLocation& location, ExpressionNode* func, ArgumentsNode* args, const JSTextPosition& divotStart, const JSTextPosition& divot, const JSTextPosition& divotEnd)
++{
++    if (func->isBracketAccessorNode()) {
++        BracketAccessorNode* bracket = static_cast<BracketAccessorNode*>(func);
++        FunctionCallBracketNode* node = new (m_parserArena) FunctionCallBracketNode(location, bracket->base(), bracket->subscript(), bracket->subscriptHasAssignments(), args, divot, divotStart, divotEnd);
++        node->setSubexpressionInfo(bracket->divot(), bracket->divotEnd().offset);
++        node->setIsOptionalCall();
++        return node;
++    }
++    if (func->isDotAccessorNode()) {
++        DotAccessorNode* dot = static_cast<DotAccessorNode*>(func);
++        FunctionCallDotNode* node = new (m_parserArena) FunctionCallDotNode(location, dot->base(), dot->identifier(), args, divot, divotStart, divotEnd);
++        node->setSubexpressionInfo(dot->divot(), dot->divotEnd().offset);
++        node->setIsOptionalCall();
++        return node;
++    }
++    FunctionCallValueNode* node = new (m_parserArena) FunctionCallValueNode(location, func, args, divot, divotStart, divotEnd);
++    node->setIsOptionalCall();
++    return node;
++}
++
+ ExpressionNode* ASTBuilder::makeBinaryNode(const JSTokenLocation& location, int token, std::pair<ExpressionNode*, BinaryOpInfo> lhs, std::pair<ExpressionNode*, BinaryOpInfo> rhs)
+ {
+     switch (token) {
+     case OR:
+         return new (m_parserArena) LogicalOpNode(location, lhs.first, rhs.first, OpLogicalOr);
+ 
++    case COALESCE:
++        return new (m_parserArena) CoalesceNode(location, lhs.first, rhs.first);
++
+     case AND:
+         return new (m_parserArena) LogicalOpNode(location, lhs.first, rhs.first, OpLogicalAnd);
+ 
+diff --git a/Source/JavaScriptCore/parser/Lexer.cpp b/Source/JavaScriptCore/parser/Lexer.cpp
+index 622090ff..5d324c0d 100644
+--- a/Source/JavaScriptCore/parser/Lexer.cpp
++++ b/Source/JavaScriptCore/parser/Lexer.cpp
+@@ -2054,8 +2054,19 @@ start:
+         shift();
+         break;
+     case CharacterQuestion:
+-        token = QUESTION;
+         shift();
++        if (m_current == '?') {
++            shift();
++            token = COALESCE;
++            break;
++        }
++        // "?." is optional chaining, but "a ?.5 : b" is a conditional.
++        if (m_current == '.' && !isASCIIDigit(peek(1))) {
++            shift();
++            token = QUESTIONDOT;
++            break;
++        }
++        token = QUESTION;
+         break;
+     case CharacterTilde:
+         token = TILDE;
+diff --git a/Source/JavaScriptCore/parser/NodeConstructors.h b/Source/JavaScriptCore/parser/NodeConstructors.h
+index b0badfc9..e1b5b714 100644
+--- a/Source/JavaScriptCore/parser/NodeConstructors.h
++++ b/Source/JavaScriptCore/parser/NodeConstructors.h
+@@ -648,6 +648,25 @@ namespace JSC {
+     {
+     }
+ 
++    inline CoalesceNode::CoalesceNode(const JSTokenLocation& location, ExpressionNode* expr1, ExpressionNode* expr2)
++        : ExpressionNode(location)
++        , m_expr1(expr1)
++        , m_expr2(expr2)
++    {
++    }
++
++    inline OptionalChainBaseNode::OptionalChainBaseNode(const JSTokenLocation& location, ExpressionNode* expr)
++        : ExpressionNode(location)
++        , m_expr(expr)
++    {
++    }
++
++    inline OptionalChainNode::OptionalChainNode(const JSTokenLocation& location, ExpressionNode* expr)
++        : ExpressionNode(location)
++        , m_expr(expr)
++    {
++    }
++
+     inline ConditionalNode::ConditionalNode(const JSTokenLocation& location, ExpressionNode* logical, ExpressionNode* expr1, ExpressionNode* expr2)
+         : ExpressionNode(location)
+         , m_logical(logical)
+diff --git a/Source/JavaScriptCore/parser/Nodes.h b/Source/JavaScriptCore/parser/Nodes.h
+index 6f173828..9d9a704a 100644
+--- a/Source/JavaScriptCore/parser/Nodes.h
++++ b/Source/JavaScriptCore/parser/Nodes.h
+@@ -173,6 +173,7 @@ namespace JSC {
+         virtual bool isAssignResolveNode() const { return false; }
+         virtual bool isBracketAccessorNode() const { return false; }
+         virtual bool isDotAccessorNode() const { return false; }
++        virtual bool isOptionalChain() const { return false; }
+         virtual bool isDestructuringNode() const { return false; }
+         virtual bool isBaseFuncExprNode() const { return false; }
+         virtual bool isFuncExprNode() const { return false; }
+@@ -805,12 +806,14 @@ namespace JSC {
+     class FunctionCallValueNode : public ExpressionNode, public ThrowableExpressionData {
+     public:
+         FunctionCallValueNode(const JSTokenLocation&, ExpressionNode*, ArgumentsNode*, const JSTextPosition& divot, const JSTextPosition& divotStart, const JSTextPosition& divotEnd);
++        void setIsOptionalCall() { m_isOptionalCall = true; } // "f?.()"
+ 
+     private:
+         RegisterID* emitBytecode(BytecodeGenerator&, RegisterID* = 0) override;
+ 
+         ExpressionNode* m_expr;
+         ArgumentsNode* m_args;
++        bool m_isOptionalCall { false };
+     };
+ 
+     class FunctionCallResolveNode : public ExpressionNode, public ThrowableExpressionData {
+@@ -827,6 +830,7 @@ namespace JSC {
+     class FunctionCallBracketNode : public ExpressionNode, public ThrowableSubExpressionData {
+     public:
+         FunctionCallBracketNode(const JSTokenLocation&, ExpressionNode* base, ExpressionNode* subscript, bool subscriptHasAssignments, ArgumentsNode*, const JSTextPosition& divot, const JSTextPosition& divotStart, const JSTextPosition& divotEnd);
++        void setIsOptionalCall() { m_isOptionalCall = true; } // "a[b]?.()"
+ 
+     private:
+         RegisterID* emitBytecode(BytecodeGenerator&, RegisterID* = 0) override;
+@@ -835,11 +839,13 @@ namespace JSC {
+         ExpressionNode* m_subscript;
+         ArgumentsNode* m_args;
+         bool m_subscriptHasAssignments;
++        bool m_isOptionalCall { false };
+     };
+ 
+     class FunctionCallDotNode : public ExpressionNode, public ThrowableSubExpressionData {
+     public:
+         FunctionCallDotNode(const JSTokenLocation&, ExpressionNode* base, const Identifier&, ArgumentsNode*, const JSTextPosition& divot, const JSTextPosition& divotStart, const JSTextPosition& divotEnd);
++        void setIsOptionalCall() { m_isOptionalCall = true; } // "a.b?.()"
+ 
+     private:
+         RegisterID* emitBytecode(BytecodeGenerator&, RegisterID* = 0) override;
+@@ -848,6 +854,7 @@ namespace JSC {
+         ExpressionNode* m_base;
+         const Identifier& m_ident;
+         ArgumentsNode* m_args;
++        bool m_isOptionalCall { false };
+     };
+ 
+     class BytecodeIntrinsicNode : public ExpressionNode, public ThrowableExpressionData {
+@@ -1226,6 +1233,48 @@ namespace JSC {
+         LogicalOperator m_operator;
+     };
+ 
++    // "a ?? b" (ES2020): b only when a is null or undefined.
++    class CoalesceNode : public ExpressionNode {
++    public:
++        CoalesceNode(const JSTokenLocation&, ExpressionNode* expr1, ExpressionNode* expr2);
++
++    private:
++        RegisterID* emitBytecode(BytecodeGenerator&, RegisterID* = 0) override;
++
++        ExpressionNode* m_expr1;
++        ExpressionNode* m_expr2;
++    };
++
++    // Optional chaining (ES2020). In "a?.b.c", the value before each "?."
++    // is wrapped in an OptionalChainBaseNode, which jumps to the end of the
++    // chain when it is null or undefined; the whole chain is wrapped in an
++    // OptionalChainNode, whose value is then undefined ("delete a?.b": true).
++    class OptionalChainBaseNode : public ExpressionNode {
++    public:
++        OptionalChainBaseNode(const JSTokenLocation&, ExpressionNode*);
++
++    private:
++        RegisterID* emitBytecode(BytecodeGenerator&, RegisterID* = 0) override;
++
++        ExpressionNode* m_expr;
++    };
++
++    class OptionalChainNode : public ExpressionNode {
++    public:
++        OptionalChainNode(const JSTokenLocation&, ExpressionNode*);
++
++        ExpressionNode* expr() const { return m_expr; }
++        void setExpr(ExpressionNode* expr) { m_expr = expr; }
++        void setIsDelete() { m_isDelete = true; }
++
++    private:
++        bool isOptionalChain() const override { return true; }
++        RegisterID* emitBytecode(BytecodeGenerator&, RegisterID* = 0) override;
++
++        ExpressionNode* m_expr;
++        bool m_isDelete { false };
++    };
++
+     // The ternary operator, "m_logical ? m_expr1 : m_expr2"
+     class ConditionalNode : public ExpressionNode {
+     public:
+diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/parser/Parser.cpp
+index 12840926..6d3b044a 100644
+--- a/Source/JavaScriptCore/parser/Parser.cpp
++++ b/Source/JavaScriptCore/parser/Parser.cpp
+@@ -4582,9 +4582,44 @@ template <class TreeBuilder> TreeExpression Parser<LexerType>::parseMemberExpres
+     }
+ 
+     failIfFalse(base, "Cannot parse base expression");
++    bool hasOptionalChain = false;
+     while (true) {
+         location = tokenLocation();
+         switch (m_token.m_type) {
++        case QUESTIONDOT: {
++            // Optional chaining (ES2020): "a?.b", "a?.[b]", "a?.(b)". A null or
++            // undefined value before "?." ends the whole chain with undefined.
++            semanticFailIfTrue(newCount, "Cannot call a constructor in an optional chain");
++            semanticFailIfTrue(baseIsSuper, "Cannot use super as the base of an optional chain");
++            m_parserState.nonTrivialExpressionCount++;
++            hasOptionalChain = true;
++            JSTextPosition expressionEnd = lastTokenEndPosition();
++            nextExpectIdentifier(LexerFlagsIgnoreReservedWords | TreeBuilder::DontBuildKeywords);
++            if (match(OPENPAREN)) {
++                int nonLHSCount = m_parserState.nonLHSCount;
++                TreeArguments arguments = parseArguments(context);
++                failIfFalse(arguments, "Cannot parse call arguments");
++                base = context.makeOptionalCallNode(startLocation, base, arguments, expressionStart, expressionEnd, lastTokenEndPosition());
++                m_parserState.nonLHSCount = nonLHSCount;
++                break;
++            }
++            base = context.createOptionalChainBase(location, base);
++            if (match(OPENBRACKET)) {
++                next();
++                int nonLHSCount = m_parserState.nonLHSCount;
++                int initialAssignments = m_parserState.assignmentCount;
++                TreeExpression property = parseExpression(context);
++                failIfFalse(property, "Cannot parse subscript expression");
++                base = context.createBracketAccess(startLocation, base, property, initialAssignments != m_parserState.assignmentCount, expressionStart, expressionEnd, tokenEndPosition());
++                handleProductionOrFail(CLOSEBRACKET, "]", "end", "subscript expression");
++                m_parserState.nonLHSCount = nonLHSCount;
++                break;
++            }
++            matchOrFail(IDENT, "Expected a property name after '?.'");
++            base = context.createDotAccess(startLocation, base, m_token.m_data.ident, expressionStart, expressionEnd, tokenEndPosition());
++            next();
++            break;
++        }
+         case OPENBRACKET: {
+             m_parserState.nonTrivialExpressionCount++;
+             JSTextPosition expressionEnd = lastTokenEndPosition();
+@@ -4663,6 +4698,7 @@ template <class TreeBuilder> TreeExpression Parser<LexerType>::parseMemberExpres
+         }
+         case BACKQUOTE: {
+             semanticFailIfTrue(baseIsSuper, "Cannot use super as tag for tagged templates");
++            semanticFailIfTrue(hasOptionalChain, "Cannot use a tagged template in an optional chain");
+             JSTextPosition expressionEnd = lastTokenEndPosition();
+             int nonLHSCount = m_parserState.nonLHSCount;
+             typename TreeBuilder::TemplateLiteral templateLiteral = parseTemplateLiteral(context, LexerType::RawStringsBuildMode::BuildRawStrings);
+@@ -4678,6 +4714,8 @@ template <class TreeBuilder> TreeExpression Parser<LexerType>::parseMemberExpres
+     }
+ endMemberExpression:
+     semanticFailIfTrue(baseIsSuper, "super is not valid in this context");
++    if (hasOptionalChain)
++        base = context.createOptionalChain(location, base);
+     while (newCount--)
+         base = context.createNewExpr(location, base, expressionStart, lastTokenEndPosition());
+     return base;
+diff --git a/Source/JavaScriptCore/parser/ParserTokens.h b/Source/JavaScriptCore/parser/ParserTokens.h
+index 0817fa21..265b8010 100644
+--- a/Source/JavaScriptCore/parser/ParserTokens.h
++++ b/Source/JavaScriptCore/parser/ParserTokens.h
+@@ -134,6 +134,7 @@ enum JSTokenType {
+     OREQUAL,
+     DOTDOTDOT,
+     ARROWFUNCTION,
++    QUESTIONDOT, // "?.", optional chaining (ES2020)
+     LastUntaggedToken,
+ 
+     // Begin tagged tokens
+@@ -170,6 +171,7 @@ enum JSTokenType {
+     DIVIDE = 21 | BINARY_OP_PRECEDENCE(10),
+     MOD = 22 | BINARY_OP_PRECEDENCE(10),
+     POW = 23 | BINARY_OP_PRECEDENCE(11) | RightAssociativeBinaryOpTokenFlag, // Make sure that POW has the highest operator precedence.
++    COALESCE = 24 | BINARY_OP_PRECEDENCE(1), // "??", nullish coalescing (ES2020): the same level as "||"
+     ERRORTOK = 0 | ErrorTokenFlag,
+     UNTERMINATED_IDENTIFIER_ESCAPE_ERRORTOK = 0 | ErrorTokenFlag | UnterminatedErrorTokenFlag,
+     INVALID_IDENTIFIER_ESCAPE_ERRORTOK = 1 | ErrorTokenFlag,
+diff --git a/Source/JavaScriptCore/parser/SyntaxChecker.h b/Source/JavaScriptCore/parser/SyntaxChecker.h
+index 941dfde6..49a6c588 100644
+--- a/Source/JavaScriptCore/parser/SyntaxChecker.h
++++ b/Source/JavaScriptCore/parser/SyntaxChecker.h
+@@ -71,7 +71,7 @@ public:
+     enum { NoneExpr = 0,
+         ResolveEvalExpr, ResolveExpr, IntegerExpr, DoubleExpr, StringExpr,
+         ThisExpr, NullExpr, BoolExpr, RegExpExpr, ObjectLiteralExpr,
+-        FunctionExpr, ClassExpr, SuperExpr, ImportExpr, BracketExpr, DotExpr, CallExpr,
++        FunctionExpr, ClassExpr, SuperExpr, ImportExpr, BracketExpr, DotExpr, CallExpr, OptionalChainExpr,
+         NewExpr, PreExpr, PostExpr, UnaryExpr, BinaryExpr,
+         ConditionalExpr, AssignmentExpr, TypeofExpr, NewTargetExpr,
+         DeleteExpr, ArrayLiteralExpr, BindingDestructuring, RestParameter,
+@@ -144,6 +144,9 @@ public:
+ 
+     int createSourceElements() { return SourceElementsResult; }
+     ExpressionType makeFunctionCallNode(const JSTokenLocation&, int, int, int, int, int, size_t) { return CallExpr; }
++    ExpressionType makeOptionalCallNode(const JSTokenLocation&, int, int, int, int, int) { return CallExpr; }
++    ExpressionType createOptionalChain(const JSTokenLocation&, ExpressionType) { return OptionalChainExpr; }
++    ExpressionType createOptionalChainBase(const JSTokenLocation&, ExpressionType base) { return base; }
+     ExpressionType createCommaExpr(const JSTokenLocation&, ExpressionType expr) { return expr; }
+     ExpressionType appendToCommaExpr(const JSTokenLocation&, ExpressionType& head, ExpressionType, ExpressionType next) { head = next; return next; }
+     ExpressionType makeAssignNode(const JSTokenLocation&, ExpressionType, Operator, ExpressionType, bool, bool, int, int, int) { return AssignmentExpr; }
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,7 +1,7 @@
 From c8f738f75eb88f0021af3e21296218eacbd3892f Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Thu, 17 Sep 2026 23:51:42 -0400
-Subject: [PATCH 02/30] CMake Mac port: allow building WebKitLegacy without
+Subject: [PATCH 02/34] CMake Mac port: allow building WebKitLegacy without
  WebKit2
 
 POLLIWOG_ENABLE_WEBKIT2=OFF skips WebKit2 and WebGL, which need frameworks

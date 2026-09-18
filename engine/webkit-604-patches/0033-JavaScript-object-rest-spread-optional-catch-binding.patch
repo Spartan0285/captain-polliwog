@@ -1,0 +1,138 @@
+From d0cab375bb66b7645dc22e1aa228d98641b62641 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 14:27:29 -0400
+Subject: [PATCH 33/34] JavaScript: object rest/spread, optional catch binding,
+ globalThis
+
+Object rest/spread was implemented in 604 behind a flag, which Safari
+11.1 turned on. Modern sites fail to parse whole scripts without these
+(BBC News, GitHub, Gmail).
+---
+ .../bytecompiler/NodesCodegen.cpp             |  3 +-
+ Source/JavaScriptCore/parser/Parser.cpp       | 51 +++++++++++--------
+ .../JavaScriptCore/runtime/JSGlobalObject.cpp |  2 +
+ Source/JavaScriptCore/runtime/Options.h       |  2 +-
+ .../network/cocoa/ResourceResponseCocoa.mm    |  3 +-
+ 5 files changed, 38 insertions(+), 23 deletions(-)
+
+diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+index f255d4b1..29d25b8d 100644
+--- a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
++++ b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+@@ -3414,7 +3414,8 @@ void TryNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
+         }
+ 
+         generator.emitPushCatchScope(m_lexicalVariables);
+-        m_catchPattern->bindValue(generator, thrownValueRegister.get());
++        if (m_catchPattern) // absent for "catch { }" (optional catch binding)
++            m_catchPattern->bindValue(generator, thrownValueRegister.get());
+         generator.emitProfileControlFlow(m_tryBlock->endOffset() + 1);
+         if (m_finallyBlock)
+             generator.emitNode(dst, m_catchBlock);
+diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/parser/Parser.cpp
+index fdea4828..12840926 100644
+--- a/Source/JavaScriptCore/parser/Parser.cpp
++++ b/Source/JavaScriptCore/parser/Parser.cpp
+@@ -1632,28 +1632,39 @@ template <class TreeBuilder> TreeStatement Parser<LexerType>::parseTryStatement(
+     VariableEnvironment catchEnvironment; 
+     if (match(CATCH)) {
+         next();
+-        
+-        handleProductionOrFail(OPENPAREN, "(", "start", "'catch' target");
+-        AutoPopScopeRef catchScope(this, pushScope());
+-        catchScope->setIsLexicalScope();
+-        catchScope->preventVarDeclarations();
+-        const Identifier* ident = nullptr;
+-        if (matchSpecIdentifier()) {
+-            ident = m_token.m_data.ident;
+-            catchPattern = context.createBindingLocation(m_token.m_location, *ident, m_token.m_startPosition, m_token.m_endPosition, AssignmentContext::DeclarationStatement);
+-            next();
+-            failIfTrueIfStrict(catchScope->declareLexicalVariable(ident, false) & DeclarationResult::InvalidStrictMode, "Cannot declare a catch variable named '", ident->impl(), "' in strict mode");
++
++        if (match(OPENBRACE)) {
++            // ES2019 optional catch binding: "catch { ... }", with no variable.
++            AutoPopScopeRef catchScope(this, pushScope());
++            catchScope->setIsLexicalScope();
++            catchScope->preventVarDeclarations();
++            catchBlock = parseBlockStatement(context);
++            failIfFalse(catchBlock, "Unable to parse 'catch' block");
++            catchEnvironment = catchScope->finalizeLexicalEnvironment();
++            popScope(catchScope, TreeBuilder::NeedsFreeVariableInfo);
+         } else {
+-            catchPattern = parseDestructuringPattern(context, DestructuringKind::DestructureToCatchParameters, ExportType::NotExported);
+-            failIfFalse(catchPattern, "Cannot parse this destructuring pattern");
++            handleProductionOrFail(OPENPAREN, "(", "start", "'catch' target");
++            AutoPopScopeRef catchScope(this, pushScope());
++            catchScope->setIsLexicalScope();
++            catchScope->preventVarDeclarations();
++            const Identifier* ident = nullptr;
++            if (matchSpecIdentifier()) {
++                ident = m_token.m_data.ident;
++                catchPattern = context.createBindingLocation(m_token.m_location, *ident, m_token.m_startPosition, m_token.m_endPosition, AssignmentContext::DeclarationStatement);
++                next();
++                failIfTrueIfStrict(catchScope->declareLexicalVariable(ident, false) & DeclarationResult::InvalidStrictMode, "Cannot declare a catch variable named '", ident->impl(), "' in strict mode");
++            } else {
++                catchPattern = parseDestructuringPattern(context, DestructuringKind::DestructureToCatchParameters, ExportType::NotExported);
++                failIfFalse(catchPattern, "Cannot parse this destructuring pattern");
++            }
++            handleProductionOrFail(CLOSEPAREN, ")", "end", "'catch' target");
++            matchOrFail(OPENBRACE, "Expected exception handler to be a block statement");
++            catchBlock = parseBlockStatement(context);
++            failIfFalse(catchBlock, "Unable to parse 'catch' block");
++            catchEnvironment = catchScope->finalizeLexicalEnvironment();
++            RELEASE_ASSERT(!ident || (catchEnvironment.size() == 1 && catchEnvironment.contains(ident->impl())));
++            popScope(catchScope, TreeBuilder::NeedsFreeVariableInfo);
+         }
+-        handleProductionOrFail(CLOSEPAREN, ")", "end", "'catch' target");
+-        matchOrFail(OPENBRACE, "Expected exception handler to be a block statement");
+-        catchBlock = parseBlockStatement(context);
+-        failIfFalse(catchBlock, "Unable to parse 'catch' block");
+-        catchEnvironment = catchScope->finalizeLexicalEnvironment();
+-        RELEASE_ASSERT(!ident || (catchEnvironment.size() == 1 && catchEnvironment.contains(ident->impl())));
+-        popScope(catchScope, TreeBuilder::NeedsFreeVariableInfo);
+     }
+     
+     if (match(FINALLY)) {
+diff --git a/Source/JavaScriptCore/runtime/JSGlobalObject.cpp b/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
+index a551722e..7c908994 100644
+--- a/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
++++ b/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
+@@ -345,6 +345,8 @@ void JSGlobalObject::destroy(JSCell* cell)
+ void JSGlobalObject::setGlobalThis(VM& vm, JSObject* globalThis)
+ {
+     m_globalThis.set(vm, this, globalThis);
++    // ES2020 globalThis: the global this value (the window proxy in a browser).
++    putDirect(vm, Identifier::fromString(&vm, "globalThis"), globalThis, DontEnum);
+ }
+ 
+ static JSObject* getGetterById(ExecState* exec, JSObject* base, const Identifier& ident)
+diff --git a/Source/JavaScriptCore/runtime/Options.h b/Source/JavaScriptCore/runtime/Options.h
+index 1a8b2939..a321ffe5 100644
+--- a/Source/JavaScriptCore/runtime/Options.h
++++ b/Source/JavaScriptCore/runtime/Options.h
+@@ -464,7 +464,7 @@ typedef const char* optionString;
+     v(bool, useWebAssemblyFastTLS, true, Normal, "If true, we will try to use fast thread-local storage if available on the current platform.") \
+     v(bool, useFastTLSForWasmContext, true, Normal, "If true (and fast TLS is enabled), we will store context in fast TLS. If false, we will pin it to a register.") \
+     v(bool, useCallICsForWebAssemblyToJSCalls, true, Normal, "If true, we will use CallLinkInfo to inline cache Wasm to JS calls.") \
+-    v(bool, useObjectRestSpread, false, Normal, "If true, we will enable Object Rest/Spread feature.") \
++    v(bool, useObjectRestSpread, true, Normal, "If true, we will enable Object Rest/Spread feature.") \
+     v(bool, useArrayAllocationProfiling, true, Normal, "If true, we will use our normal array allocation profiling. If false, the allocation profile will always claim to be undecided.")
+ 
+ 
+diff --git a/Source/WebCore/platform/network/cocoa/ResourceResponseCocoa.mm b/Source/WebCore/platform/network/cocoa/ResourceResponseCocoa.mm
+index 4eb60d80..5bea8280 100644
+--- a/Source/WebCore/platform/network/cocoa/ResourceResponseCocoa.mm
++++ b/Source/WebCore/platform/network/cocoa/ResourceResponseCocoa.mm
+@@ -211,7 +211,8 @@ static inline void initializeHTTPHeaders(OnlyCommonHeaders onlyCommonHeaders, NS
+     // cross-origin check failed and no security or caching header applied.
+     if (!messageRef) {
+         NSDictionary *allHeaders = [httpResponse allHeaderFields];
+-        for (NSString *name in allHeaders)
++        NSEnumerator *names = [allHeaders keyEnumerator]; // not for-in: Tiger's Foundation lacks it
++        while (NSString *name = [names nextObject])
+             headersMap.set(String(name), String([allHeaders objectForKey:name]));
+         return;
+     }
+-- 
+2.50.1 (Apple Git-155)
+
