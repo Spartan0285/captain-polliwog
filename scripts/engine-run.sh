@@ -29,6 +29,13 @@ ssh -o ConnectTimeout=90 "$host" "
         plutil -convert xml1 \"\$A/Contents/Info.plist\"
         /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f \"\$A\"
     fi
+    # The app itself from the latest build there, keeping this copy's
+    # Info.plist (which points it at the frameworks) and anything else added.
+    B=\$HOME/CaptainPolliwog/build/'Captain Polliwog.app'
+    if [ -d \"\$B\" ]; then
+        cp \"\$B/Contents/MacOS/CaptainPolliwog\" \"\$A/Contents/MacOS/\"
+        cp -R \"\$B/Contents/Resources/\" \"\$A/Contents/Resources/\"
+    fi
     cd \"\$A/Contents\" && rm -rf Frameworks && unzip -q /tmp/Frameworks.zip
     D=org.captainpolliwog.browser S=/tmp/polliwog-snapshot.png
     rm -f \$S

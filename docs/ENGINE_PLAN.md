@@ -278,6 +278,43 @@ Apple's: WebKit's caret rules use an Apple-only option (`!!RINoChain`), and
 the failed rule set left a null iterator that typing into a password field
 or clicking into some text fields dereferenced.
 
+**Catching up with 2020s JavaScript** (18 September 2026). GitHub's front
+page loads 67 JavaScript modules; 51 parsed. Each construct below made
+whole scripts fail somewhere, and each now has a test in `engine/tests`:
+
+- **The response headers, again.** WebCore's fallback to `-allHeaderFields`
+  was not enough: Leopard's Foundation hands WebKit a response rebuilt from
+  the CFNetwork response underneath ours, and a subclass's fields don't
+  survive that. Captain Polliwog now builds its responses on a real
+  CFNetwork HTTP message (`CPCurlProtocol.m`); GitHub's 27 cross-origin
+  failures went to none.
+- **Class fields and private members** (ES2022). As upstream JSC does it:
+  a class with fields gets a generated initializer function whose source
+  is the class body; compiling it parses only the recorded field
+  positions; constructors run it on entry, or after `super()` returns.
+  Private names (`#x`) are hidden constants in the class scope holding a
+  symbol made per class evaluation, and `obj.#x` is `obj[that symbol]`,
+  which gives scoping, closures and nesting for free but no brand check.
+  Also static blocks.
+- **Smaller syntax.** Logical assignment (`??=`, `||=`, `&&=`), numeric
+  separators, `import.meta`, and `await` right after a unary operator
+  (`return void await x`), which 604 read as an identifier.
+- **Regular expressions.** Named groups (`(?<name>)`, `\k<name>`,
+  `match.groups`, `$<name>`), Unicode property escapes (`\p{L}`, with the
+  sets from ICU), and the `s` flag. Lookbehind is still missing.
+- **The platform.** User Timing and Resource Timing (`performance.mark`,
+  which Safari 11 shipped on), import maps (Safari 16.4; GitHub loads React
+  through one), and `Resources/polyfills.js`, which the app runs in every
+  frame before the page's scripts: AbortController, IntersectionObserver,
+  ResizeObserver, `Array.prototype.flat`, `Promise.prototype.finally`,
+  `structuredClone`, `queueMicrotask`, Intl additions and more, each only
+  where missing.
+
+A lesson from the way: `CommonIdentifiers.h` and `BuiltinNames.h` are
+compiled into WebCore, so adding a name to either shifts what WebCore reads
+(`Document.prototype` came back undefined). After changing them, rebuild
+everything, not just JavaScriptCore.
+
 Next: move the engine from a test copy into the app proper (loaded only on
 Leopard with a G4, with the system engine as a fallback), re-verify every
 shell feature on it and measure it against the system engine; then the G3

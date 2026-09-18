@@ -8,6 +8,7 @@
 #import "CPDownloadsController.h"
 #import "CPSiteModes.h"
 #import "CPScriptWatchdog.h"
+#import "CPUserScripts.h"
 #import <WebKit/WebKit.h>
 
 // How long a loading page may go without progress before the debug log
@@ -39,6 +40,7 @@ static NSString *CPEscapeHTML(NSString *text)
 
 - (void)createWebView
 {
+    [CPUserScripts installForGroup:@"CaptainPolliwog"];
     webView = [[WebView alloc] initWithFrame:NSMakeRect(0.0f, 0.0f, 400.0f, 300.0f)
                                    frameName:nil
                                    groupName:@"CaptainPolliwog"];

@@ -108,8 +108,17 @@ unaryAwait().then(function (r) { asyncResult = r; });
 drainMicrotasks();
 check("await after unary operators", asyncResult, "undefined,true,string,-4");
 
+// Numeric separators.
+check("decimal separators", 1_000_000, 1000000);
+check("fraction separators", 1_0.2_5, 10.25);
+check("exponent separators", 1e1_0, 1e10);
+check("hex separators", 0xFF_FF, 65535);
+check("binary separators", 0b1010_1010, 170);
+check("octal separators", 0o7_7, 63);
+check("big decimal", 12_345_678_901_234, 12345678901234);
+
 // Syntax that must still be rejected.
-var syntaxErrors = ["1 ||= 2", "f() &&= 1", "a ?? = 1"];
+var syntaxErrors = ["1 ||= 2", "f() &&= 1", "a ?? = 1", "1__0", "1_", "0x_1"];
 for (var i = 0; i < syntaxErrors.length; i++) {
     var threw = false;
     try { eval(syntaxErrors[i]); } catch (e) { threw = e instanceof SyntaxError || e instanceof ReferenceError; }
