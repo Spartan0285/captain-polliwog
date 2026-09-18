@@ -198,7 +198,7 @@ static NSString *CPCleanFilename(NSString *filename, NSURL *url)
     } else {
         state = CPDownloadFinished;
     }
-    if (CPDebugSnapshotPath() != nil)
+    if (CPDebugLogging())
         NSLog(@"Captain Polliwog: download %@ %lld bytes in %.1fs -> %@",
               (state == CPDownloadFinished ? @"finished" : @"failed"),
               received, -[started timeIntervalSinceNow], [self path]);

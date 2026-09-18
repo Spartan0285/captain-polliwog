@@ -12,3 +12,9 @@
 // The scripts in scripts/ rely on this. Does nothing when unset.
 NSString *CPDebugSnapshotPath(void);
 void CPWriteWindowSnapshot(NSWindow *window);
+
+// Diagnostic logging to the system log (network, page loads, JavaScript
+// errors, stalled loads): on while testing with snapshots, or by itself with
+//
+//   defaults write org.captainpolliwog.browser CPDebugLog -bool YES
+BOOL CPDebugLogging(void);

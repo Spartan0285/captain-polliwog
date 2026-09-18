@@ -7,7 +7,12 @@
 #import "CPDebugSnapshot.h"
 #import "CPDownloadsController.h"
 #import "CPSiteModes.h"
+#import "CPScriptWatchdog.h"
 #import <WebKit/WebKit.h>
+
+// How long a loading page may go without progress before the debug log
+// lists what it is still waiting for.
+#define CPStallReportDelay 20.0
 
 static NSString *CPEscapeHTML(NSString *text)
 {
@@ -42,6 +47,12 @@ static NSString *CPEscapeHTML(NSString *text)
     [webView setUIDelegate:self];
     [webView setPolicyDelegate:self];
     [webView setApplicationNameForUserAgent:[CPAppDelegate userAgentApplicationName]];
+    if (CPDebugLogging()) {
+        [webView setResourceLoadDelegate:self];
+        if (pendingResources == nil)
+            pendingResources = [[NSMutableDictionary alloc] init];
+    }
+    [CPScriptWatchdog installForWebView:webView];
 
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(progressChanged:)
                                                  name:WebViewProgressStartedNotification object:webView];
@@ -60,6 +71,9 @@ static NSString *CPEscapeHTML(NSString *text)
     [webView setFrameLoadDelegate:nil];
     [webView setUIDelegate:nil];
     [webView setPolicyDelegate:nil];
+    [webView setResourceLoadDelegate:nil];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(reportStall) object:nil];
+    [pendingResources removeAllObjects];
     [webView removeFromSuperview];
     // -[WebView close] arrived with WebKit 3; Tiger's original WebKit lacks it.
     if ([webView respondsToSelector:@selector(close)])
@@ -168,6 +182,7 @@ static NSString *CPEscapeHTML(NSString *text)
     [title release];
     [lastSelected release];
     [loadStarted release];
+    [pendingResources release];
     [super dealloc];
 }
 
@@ -196,7 +211,7 @@ static NSString *CPEscapeHTML(NSString *text)
     savedScrollOffset = [[webView stringByEvaluatingJavaScriptFromString:@"window.pageYOffset"] floatValue];
     [self destroyWebView];
     [self setLoading:NO];
-    if (CPDebugSnapshotPath() != nil)
+    if (CPDebugLogging())
         NSLog(@"Captain Polliwog: discarded tab %@", URL);
     [self changed];
 }
@@ -319,11 +334,65 @@ static NSString *CPEscapeHTML(NSString *text)
 
 - (void)progressChanged:(NSNotification *)notification
 {
-    if ([[notification name] isEqualToString:WebViewProgressFinishedNotification])
+    BOOL finished = [[notification name] isEqualToString:WebViewProgressFinishedNotification];
+
+    if (finished)
         progress = 0.0;
     else
         progress = [webView estimatedProgress];
+    if (pendingResources != nil) {
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(reportStall) object:nil];
+        if (!finished)
+            [self performSelector:@selector(reportStall) withObject:nil afterDelay:CPStallReportDelay];
+    }
     [self changed];
+}
+
+// Debug log: a page has made no progress for a while; say what it waits on.
+- (void)reportStall
+{
+    NSArray *waiting;
+
+    if (!loading)
+        return;
+    waiting = [pendingResources allValues];
+    NSLog(@"Captain Polliwog: stalled %@ (%.0fs since progress), waiting for %u: %@", URL,
+          CPStallReportDelay, [waiting count],
+          [[waiting subarrayWithRange:NSMakeRange(0, MIN([waiting count], 8U))] componentsJoinedByString:@" "]);
+}
+
+#pragma mark WebResourceLoadDelegate (debug logging only)
+
+- (id)webView:(WebView *)sender identifierForInitialRequest:(NSURLRequest *)request
+fromDataSource:(WebDataSource *)dataSource
+{
+    NSNumber *identifier = [NSNumber numberWithUnsignedInt:++nextResourceID];
+    NSString *address = [[request URL] absoluteString];
+    [pendingResources setObject:(address != nil ? address : @"(no URL)") forKey:identifier];
+    return identifier;
+}
+
+- (NSURLRequest *)webView:(WebView *)sender resource:(id)identifier willSendRequest:(NSURLRequest *)request
+         redirectResponse:(NSURLResponse *)redirectResponse fromDataSource:(WebDataSource *)dataSource
+{
+    NSString *address = [[request URL] absoluteString];
+    if (address != nil && [pendingResources objectForKey:identifier] != nil)
+        [pendingResources setObject:address forKey:identifier];
+    return request;
+}
+
+- (void)webView:(WebView *)sender resource:(id)identifier didFinishLoadingFromDataSource:(WebDataSource *)dataSource
+{
+    [pendingResources removeObjectForKey:identifier];
+}
+
+- (void)webView:(WebView *)sender resource:(id)identifier didFailLoadingWithError:(NSError *)error
+ fromDataSource:(WebDataSource *)dataSource
+{
+    NSString *address = [pendingResources objectForKey:identifier];
+    if (address != nil && [error code] != NSURLErrorCancelled)
+        NSLog(@"Captain Polliwog: resource failed %@ (%@ %d)", address, [error domain], [error code]);
+    [pendingResources removeObjectForKey:identifier];
 }
 
 #pragma mark WebFrameLoadDelegate
@@ -372,7 +441,7 @@ static NSString *CPEscapeHTML(NSString *text)
         savedScrollOffset = 0.0f;
     }
 
-    if (CPDebugSnapshotPath() != nil && loadStarted != nil)
+    if (CPDebugLogging() && loadStarted != nil)
         NSLog(@"Captain Polliwog: page-load %.1fs %@",
               -[loadStarted timeIntervalSinceNow], [[[frame dataSource] request] URL]);
     [self changed];
@@ -578,6 +647,21 @@ decisionListener:(id<WebPolicyDecisionListener>)listener
     NSURL *link = [elementInformation objectForKey:WebElementLinkURLKey];
     if ([owner respondsToSelector:@selector(tab:showStatusText:)])
         [owner tab:self showStatusText:[link absoluteString]];
+}
+
+// Page JavaScript errors and console output, for the debug log. Not in the
+// public delegate protocol, but WebKit calls it on Tiger and later.
+- (void)webView:(WebView *)sender addMessageToConsole:(NSDictionary *)message
+{
+    if (!CPDebugLogging())
+        return;
+    NSLog(@"Captain Polliwog: console %@ line %@: %@", [message objectForKey:@"sourceURL"],
+          [message objectForKey:@"lineNumber"], [message objectForKey:@"message"]);
+}
+
+- (void)webView:(WebView *)sender addMessageToConsole:(NSDictionary *)message withSource:(NSString *)source
+{
+    [self webView:sender addMessageToConsole:message];
 }
 
 - (void)webView:(WebView *)sender runJavaScriptAlertPanelWithMessage:(NSString *)message

@@ -1,0 +1,28 @@
+From eb3584ed236d74bac659468fefd78ab521b9507b Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 13:42:18 -0400
+Subject: [PATCH 30/30] Build WebCoreView.m after all
+
+Without it, WebKit throws (and discards) an exception on focus changes,
+which aborts the event being handled: clicking an account in Google's
+sign-in chooser did nothing. The mobile Wikipedia stall it was blamed
+for needs a proper diagnosis.
+---
+ Source/WebCore/PlatformMac.cmake | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Source/WebCore/PlatformMac.cmake b/Source/WebCore/PlatformMac.cmake
+index 1c93e29d..b8061204 100644
+--- a/Source/WebCore/PlatformMac.cmake
++++ b/Source/WebCore/PlatformMac.cmake
+@@ -549,6 +549,7 @@ list(APPEND WebCore_SOURCES
+     platform/mac/DragDataMac.mm
+     platform/mac/DragImageMac.mm
+     platform/mac/EventLoopMac.mm
++    platform/mac/WebCoreView.m
+     platform/mac/FileSystemMac.mm
+     platform/mac/KeyEventMac.mm
+     platform/mac/LocalCurrentGraphicsContext.mm
+-- 
+2.50.1 (Apple Git-155)
+

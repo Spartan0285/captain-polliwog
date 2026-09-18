@@ -55,7 +55,7 @@ static NSString *CPCookieKey(NSHTTPCookie *cookie)
         [store setCookie:[deleted objectAtIndex:index]];
     restored += [deleted count];
 
-    if (CPDebugSnapshotPath() != nil)
+    if (CPDebugLogging())
         NSLog(@"Captain Polliwog: private browsing ended: %u cookies removed, %u restored "
               @"(%u at start, %u at end)", removed, restored, [cookiesAtStart count], [now count]);
 }

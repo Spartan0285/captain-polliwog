@@ -31,6 +31,10 @@
     float     savedScrollOffset;
     NSDate   *lastSelected;
     NSDate   *loadStarted;
+    // With debug logging on: what each resource request is for, until it
+    // finishes, so a page that stops making progress can say what it waits on.
+    NSMutableDictionary *pendingResources;
+    unsigned  nextResourceID;
 }
 
 - (id)initWithOwner:(id)anOwner;

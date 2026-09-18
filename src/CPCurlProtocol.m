@@ -38,7 +38,7 @@
     NSCachedURLResponse *cached = [CPHTTPCache cachedResponseForRequest:[self request]];
 
     if (cached != nil && [CPHTTPCache cachedResponseIsFresh:cached forRequest:[self request]]) {
-        if (CPDebugSnapshotPath() != nil)
+        if (CPDebugLogging())
             NSLog(@"Captain Polliwog: cache-hit %@", [[self request] URL]);
         // Still fresh: no connection, no handshake, no transfer. Delivered on
         // the next pass of the run loop rather than inside -startLoading.

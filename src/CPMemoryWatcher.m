@@ -111,7 +111,7 @@ static unsigned long long CPFreeMemoryFloor(void)
         [webCache performSelector:@selector(empty)];
     [CPHTTPCache emptyMemoryCache];
 
-    if (CPDebugSnapshotPath() != nil)
+    if (CPDebugLogging())
         NSLog(@"Captain Polliwog: freed WebKit's memory cache (%@)", reason);
 }
 

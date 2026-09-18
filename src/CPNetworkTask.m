@@ -79,7 +79,7 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
         // Not modified: the stored copy stands, and only headers came over
         // the wire. This is the cheap path we want as often as possible.
         servedFromCache = YES;
-        if (CPDebugSnapshotPath() != nil)
+        if (CPDebugLogging())
             NSLog(@"Captain Polliwog: revalidated %@", [request URL]);
         [self callOnMainThread:@selector(deliverCachedResponse:) withObject:cachedResponse];
         return;
@@ -113,7 +113,7 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     }
 
     responseDelivered = YES;
-    if (CPDebugSnapshotPath() != nil)
+    if (CPDebugLogging())
         NSLog(@"Captain Polliwog: from-network(%d) %@", statusCode, [request URL]);
     [lastResponse release];
     lastResponse = [[self buildResponse] retain];

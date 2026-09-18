@@ -9,6 +9,12 @@ NSString *CPDebugSnapshotPath(void)
     return [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugSnapshotPath"];
 }
 
+BOOL CPDebugLogging(void)
+{
+    return CPDebugSnapshotPath() != nil ||
+           [[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugLog"];
+}
+
 void CPWriteWindowSnapshot(NSWindow *window)
 {
     NSString *path = CPDebugSnapshotPath();
