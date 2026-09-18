@@ -1,7 +1,7 @@
 From dd78ccfdc718c9147c65de48318ce5d34f439537 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 00:06:48 -0400
-Subject: [PATCH 10/36] Keep CMAKE_SHARED_LINKER_FLAGS a string on Mac
+Subject: [PATCH 10/38] Keep CMAKE_SHARED_LINKER_FLAGS a string on Mac
 
 Appending unquoted made it a list, so any existing flags put a ';'
 into the link command.

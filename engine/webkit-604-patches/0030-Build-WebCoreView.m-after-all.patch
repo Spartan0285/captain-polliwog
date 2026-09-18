@@ -1,7 +1,7 @@
 From eb3584ed236d74bac659468fefd78ab521b9507b Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 13:42:18 -0400
-Subject: [PATCH 30/36] Build WebCoreView.m after all
+Subject: [PATCH 30/38] Build WebCoreView.m after all
 
 Without it, WebKit throws (and discards) an exception on focus changes,
 which aborts the event being handled: clicking an account in Google's

@@ -1,0 +1,1191 @@
+From 4f06deae79de38ca7caea3eef4d073960aac7c6a Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Fri, 18 Sep 2026 19:16:11 -0400
+Subject: [PATCH 38/38] More JavaScript: lookbehind, dotAll, static blocks,
+ numeric separators, import maps
+
+- Regular expression lookbehind, (?<=...) and (?<!...): the body is
+  compiled on its own, anchored at its end, and tried backwards from
+  each position. Captures inside it keep their numbers but never
+  capture. Patterns with lookbehind skip the PowerPC regex JIT.
+- The s (dotAll) flag; Unicode emoji properties for \p{...}, newer than
+  the bundled ICU (tables from Unicode 17); identifiers by ID_Start and
+  ID_Continue, including characters beyond the BMP.
+- Class static blocks; numeric separators (1_000).
+- Import maps (<script type="importmap">, "imports" only), which
+  GitHub loads React through.
+---
+ Source/JavaScriptCore/parser/Lexer.cpp        |  59 ++++++-
+ Source/JavaScriptCore/parser/Parser.cpp       |  19 ++
+ .../runtime/CommonIdentifiers.h               |   1 +
+ Source/JavaScriptCore/runtime/RegExp.cpp      |  10 +-
+ Source/JavaScriptCore/runtime/RegExp.h        |   1 +
+ Source/JavaScriptCore/runtime/RegExpKey.h     |   3 +-
+ .../runtime/RegExpPrototype.cpp               |  23 ++-
+ .../JavaScriptCore/yarr/YarrEmojiProperties.h | 163 ++++++++++++++++++
+ .../JavaScriptCore/yarr/YarrInterpreter.cpp   |  59 ++++++-
+ Source/JavaScriptCore/yarr/YarrInterpreter.h  |  18 ++
+ Source/JavaScriptCore/yarr/YarrParser.h       |  63 ++++++-
+ Source/JavaScriptCore/yarr/YarrPattern.cpp    |  32 ++++
+ Source/JavaScriptCore/yarr/YarrPattern.h      |  17 ++
+ .../JavaScriptCore/yarr/YarrSyntaxChecker.cpp |   1 +
+ .../bindings/js/ScriptModuleLoader.cpp        |  64 +++++++
+ .../WebCore/bindings/js/ScriptModuleLoader.h  |   6 +
+ .../contentextensions/URLFilterParser.cpp     |  22 ++-
+ Source/WebCore/dom/ScriptElement.cpp          |  12 ++
+ 18 files changed, 558 insertions(+), 15 deletions(-)
+ create mode 100644 Source/JavaScriptCore/yarr/YarrEmojiProperties.h
+
+diff --git a/Source/JavaScriptCore/parser/Lexer.cpp b/Source/JavaScriptCore/parser/Lexer.cpp
+index 6d2afc70..ff428b44 100644
+--- a/Source/JavaScriptCore/parser/Lexer.cpp
++++ b/Source/JavaScriptCore/parser/Lexer.cpp
+@@ -37,6 +37,7 @@
+ #include <ctype.h>
+ #include <limits.h>
+ #include <string.h>
++#include <unicode/uchar.h>
+ #include <wtf/Assertions.h>
+ #include <wtf/dtoa.h>
+ 
+@@ -725,9 +726,10 @@ ALWAYS_INLINE void Lexer<T>::skipWhitespace()
+         shift();
+ }
+ 
+-static NEVER_INLINE bool isNonLatin1IdentStart(UChar c)
++static NEVER_INLINE bool isNonLatin1IdentStart(UChar32 c)
+ {
+-    return U_GET_GC_MASK(c) & U_GC_L_MASK;
++    // ID_Start, as ES2015 says: letters, and a few symbols such as U+2118.
++    return u_hasBinaryProperty(c, UCHAR_ID_START);
+ }
+ 
+ static ALWAYS_INLINE bool isLatin1(LChar)
+@@ -757,8 +759,7 @@ static inline bool isIdentStart(UChar32 c)
+ 
+ static NEVER_INLINE bool isNonLatin1IdentPart(UChar32 c)
+ {
+-    // FIXME: ES6 says this should be based on the Unicode property ID_Continue now instead.
+-    return (U_GET_GC_MASK(c) & (U_GC_L_MASK | U_GC_MN_MASK | U_GC_MC_MASK | U_GC_ND_MASK | U_GC_PC_MASK)) || c == 0x200C || c == 0x200D;
++    return u_hasBinaryProperty(c, UCHAR_ID_CONTINUE) || c == 0x200C || c == 0x200D;
+ }
+ 
+ static ALWAYS_INLINE bool isIdentPart(LChar c)
+@@ -774,6 +775,17 @@ static ALWAYS_INLINE bool isIdentPart(UChar32 c)
+     return isLatin1(c) ? isIdentPart(static_cast<LChar>(c)) : isNonLatin1IdentPart(c);
+ }
+ 
++// An identifier character beyond the Basic Multilingual Plane, such as the
++// mathematical letters U+1D400 and on, which UTF-16 writes as two units.
++template<typename CharType>
++static ALWAYS_INLINE bool isIdentSurrogatePair(CharType current, CharType next, bool start)
++{
++    if (!U16_IS_LEAD(current) || !U16_IS_TRAIL(next))
++        return false;
++    UChar32 character = U16_GET_SUPPLEMENTARY(current, next);
++    return start ? isNonLatin1IdentStart(character) : isNonLatin1IdentPart(character);
++}
++
+ static ALWAYS_INLINE bool isIdentPart(UChar c)
+ {
+     return isIdentPart(static_cast<UChar32>(c));
+@@ -1018,8 +1030,16 @@ template <bool shouldCreateIdentifier> ALWAYS_INLINE JSTokenType Lexer<UChar>::p
+ 
+     UChar orAllChars = 0;
+     
+-    while (isIdentPart(m_current)) {
+-        orAllChars |= m_current;
++    while (true) {
++        if (isIdentPart(m_current)) {
++            orAllChars |= m_current;
++            shift();
++            continue;
++        }
++        if (!isIdentSurrogatePair(m_current, peek(1), false))
++            break;
++        orAllChars |= 0xFFFF;
++        shift();
+         shift();
+     }
+     
+@@ -1084,6 +1104,11 @@ template<typename CharacterType> template<bool shouldCreateIdentifier> JSTokenTy
+             shift();
+             continue;
+         }
++        if (isIdentSurrogatePair(m_current, peek(1), false)) {
++            shift();
++            shift();
++            continue;
++        }
+         if (LIKELY(m_current != '\\'))
+             break;
+ 
+@@ -1507,6 +1532,8 @@ ALWAYS_INLINE void Lexer<T>::parseHex(double& returnValue)
+     do {
+         hexValue = (hexValue << 4) + toASCIIHexValue(m_current);
+         shift();
++        if (UNLIKELY(m_current == '_') && isASCIIHexDigit(peek(1)))
++            shift(); // numeric separator (ES2021): 1_000
+         --maximumDigits;
+     } while (isASCIIHexDigit(m_current) && maximumDigits >= 0);
+ 
+@@ -1529,6 +1556,8 @@ ALWAYS_INLINE void Lexer<T>::parseHex(double& returnValue)
+     while (isASCIIHexDigit(m_current)) {
+         record8(m_current);
+         shift();
++        if (UNLIKELY(m_current == '_') && isASCIIHexDigit(peek(1)))
++            shift(); // numeric separator (ES2021): 1_000
+     }
+ 
+     returnValue = parseIntOverflow(m_buffer8.data(), m_buffer8.size(), 16);
+@@ -1549,6 +1578,8 @@ ALWAYS_INLINE bool Lexer<T>::parseBinary(double& returnValue)
+         binaryValue = (binaryValue << 1) + (m_current - '0');
+         digits[digit] = m_current;
+         shift();
++        if (UNLIKELY(m_current == '_') && isASCIIBinaryDigit(peek(1)))
++            shift(); // numeric separator (ES2021): 1_000
+         --digit;
+     } while (isASCIIBinaryDigit(m_current) && digit >= 0);
+ 
+@@ -1563,6 +1594,8 @@ ALWAYS_INLINE bool Lexer<T>::parseBinary(double& returnValue)
+     while (isASCIIBinaryDigit(m_current)) {
+         record8(m_current);
+         shift();
++        if (UNLIKELY(m_current == '_') && isASCIIBinaryDigit(peek(1)))
++            shift(); // numeric separator (ES2021): 1_000
+     }
+ 
+     if (isASCIIDigit(m_current)) {
+@@ -1589,6 +1622,8 @@ ALWAYS_INLINE bool Lexer<T>::parseOctal(double& returnValue)
+         octalValue = octalValue * 8 + (m_current - '0');
+         digits[digit] = m_current;
+         shift();
++        if (UNLIKELY(m_current == '_') && isASCIIOctalDigit(peek(1)))
++            shift(); // numeric separator (ES2021): 1_000
+         --digit;
+     } while (isASCIIOctalDigit(m_current) && digit >= 0);
+ 
+@@ -1603,6 +1638,8 @@ ALWAYS_INLINE bool Lexer<T>::parseOctal(double& returnValue)
+     while (isASCIIOctalDigit(m_current)) {
+         record8(m_current);
+         shift();
++        if (UNLIKELY(m_current == '_') && isASCIIOctalDigit(peek(1)))
++            shift(); // numeric separator (ES2021): 1_000
+     }
+ 
+     if (isASCIIDigit(m_current)) {
+@@ -1633,6 +1670,8 @@ ALWAYS_INLINE bool Lexer<T>::parseDecimal(double& returnValue)
+             decimalValue = decimalValue * 10 + (m_current - '0');
+             digits[digit] = m_current;
+             shift();
++            if (UNLIKELY(m_current == '_') && isASCIIDigit(peek(1)))
++                shift(); // numeric separator (ES2021): 1_000
+             --digit;
+         } while (isASCIIDigit(m_current) && digit >= 0);
+ 
+@@ -1648,6 +1687,8 @@ ALWAYS_INLINE bool Lexer<T>::parseDecimal(double& returnValue)
+     while (isASCIIDigit(m_current)) {
+         record8(m_current);
+         shift();
++        if (UNLIKELY(m_current == '_') && isASCIIDigit(peek(1)))
++            shift(); // numeric separator (ES2021): 1_000
+     }
+ 
+     return false;
+@@ -1660,6 +1701,8 @@ ALWAYS_INLINE void Lexer<T>::parseNumberAfterDecimalPoint()
+     while (isASCIIDigit(m_current)) {
+         record8(m_current);
+         shift();
++        if (UNLIKELY(m_current == '_') && isASCIIDigit(peek(1)))
++            shift(); // numeric separator (ES2021): 1_000
+     }
+ }
+ 
+@@ -1679,6 +1722,8 @@ ALWAYS_INLINE bool Lexer<T>::parseNumberAfterExponentIndicator()
+     do {
+         record8(m_current);
+         shift();
++        if (UNLIKELY(m_current == '_') && isASCIIDigit(peek(1)))
++            shift(); // numeric separator (ES2021): 1_000
+     } while (isASCIIDigit(m_current));
+     return true;
+ }
+@@ -1805,7 +1850,7 @@ start:
+     CharacterType type;
+     if (LIKELY(isLatin1(m_current)))
+         type = static_cast<CharacterType>(typesOfLatin1Characters[m_current]);
+-    else if (isNonLatin1IdentStart(m_current))
++    else if (isNonLatin1IdentStart(m_current) || isIdentSurrogatePair(m_current, peek(1), true))
+         type = CharacterIdentifierStart;
+     else if (isLineTerminator(m_current))
+         type = CharacterLineTerminator;
+diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/parser/Parser.cpp
+index ac853925..c689c9f9 100644
+--- a/Source/JavaScriptCore/parser/Parser.cpp
++++ b/Source/JavaScriptCore/parser/Parser.cpp
+@@ -2714,6 +2714,18 @@ template <class TreeBuilder> TreeClassExpression Parser<LexerType>::parseClass(T
+                 // Reparse "static()" as a method named "static", and
+                 // "static = ..." as a field named "static".
+                 restoreSavePoint(savePoint);
++            } else if (match(OPENBRACE)) {
++                // A static block (ES2022): run once, in order with the static
++                // fields, as part of the same generated initializer.
++                JSTextPosition blockLocation(tokenLine(), tokenStart(), tokenLineStart());
++                AutoPopScopeRef blockScope(this, pushScope());
++                blockScope->setSourceParseMode(SourceParseMode::MethodMode);
++                blockScope->setExpectedSuperBinding(SuperBinding::Needed);
++                TreeStatement block = parseBlockStatement(context);
++                failIfFalse(block, "Cannot parse this static block");
++                popScope(blockScope, TreeBuilder::NeedsFreeVariableInfo);
++                info.staticFieldLocations.append(blockLocation);
++                continue;
+             } else
+                 isStaticMethod = true;
+         }
+@@ -2913,6 +2925,13 @@ template <class TreeBuilder> TreeSourceElements Parser<LexerType>::parseClassFie
+         m_lexer->setLineNumber(fieldLocation.line);
+         next();
+ 
++        if (match(OPENBRACE)) {
++            TreeStatement block = parseBlockStatement(context);
++            failIfFalse(block, "Cannot parse this static block");
++            context.appendStatement(sourceElements, block);
++            continue;
++        }
++
+         JSTokenLocation location(tokenLocation());
+         JSTextPosition start = tokenStartPosition();
+         const Identifier* ident = nullptr;
+diff --git a/Source/JavaScriptCore/runtime/CommonIdentifiers.h b/Source/JavaScriptCore/runtime/CommonIdentifiers.h
+index bf64599b..963b95b9 100644
+--- a/Source/JavaScriptCore/runtime/CommonIdentifiers.h
++++ b/Source/JavaScriptCore/runtime/CommonIdentifiers.h
+@@ -320,6 +320,7 @@
+     macro(top) \
+     macro(uid) \
+     macro(unicode) \
++    macro(dotAll) \
+     macro(usage) \
+     macro(value) \
+     macro(valueOf) \
+diff --git a/Source/JavaScriptCore/runtime/RegExp.cpp b/Source/JavaScriptCore/runtime/RegExp.cpp
+index f2b329b7..f3b39c1c 100644
+--- a/Source/JavaScriptCore/runtime/RegExp.cpp
++++ b/Source/JavaScriptCore/runtime/RegExp.cpp
+@@ -71,6 +71,12 @@ RegExpFlags regExpFlags(const String& string)
+             flags = static_cast<RegExpFlags>(flags | FlagSticky);
+             break;
+ 
++        case 's':
++            if (flags & FlagDotAll)
++                return InvalidFlags;
++            flags = static_cast<RegExpFlags>(flags | FlagDotAll);
++            break;
++
+         default:
+             return InvalidFlags;
+         }
+@@ -292,7 +298,7 @@ void RegExp::compile(VM* vm, Yarr::YarrCharSize charSize)
+     }
+ 
+ #if ENABLE(YARR_JIT)
+-    if (!pattern.m_containsBackreferences && !pattern.containsUnsignedLengthPattern() && !unicode() && vm->canUseRegExpJIT()) {
++    if (!pattern.m_containsBackreferences && !pattern.containsUnsignedLengthPattern() && !unicode() && !pattern.containsLookbehind() && vm->canUseRegExpJIT()) {
+         Yarr::jitCompile(pattern, charSize, vm, m_regExpJITCode);
+         if (!m_regExpJITCode.isFallBack()) {
+             m_state = JITCode;
+@@ -345,7 +351,7 @@ void RegExp::compileMatchOnly(VM* vm, Yarr::YarrCharSize charSize)
+     }
+ 
+ #if ENABLE(YARR_JIT)
+-    if (!pattern.m_containsBackreferences && !pattern.containsUnsignedLengthPattern() && !unicode() && vm->canUseRegExpJIT()) {
++    if (!pattern.m_containsBackreferences && !pattern.containsUnsignedLengthPattern() && !unicode() && !pattern.containsLookbehind() && vm->canUseRegExpJIT()) {
+         Yarr::jitCompile(pattern, charSize, vm, m_regExpJITCode, Yarr::MatchOnly);
+         if (!m_regExpJITCode.isFallBack()) {
+             m_state = JITCode;
+diff --git a/Source/JavaScriptCore/runtime/RegExp.h b/Source/JavaScriptCore/runtime/RegExp.h
+index 544363cf..8b52728c 100644
+--- a/Source/JavaScriptCore/runtime/RegExp.h
++++ b/Source/JavaScriptCore/runtime/RegExp.h
+@@ -56,6 +56,7 @@ public:
+     bool sticky() const { return m_flags & FlagSticky; }
+     bool globalOrSticky() const { return global() || sticky(); }
+     bool unicode() const { return m_flags & FlagUnicode; }
++    bool dotAll() const { return m_flags & FlagDotAll; }
+ 
+     const String& pattern() const { return m_patternString; }
+ 
+diff --git a/Source/JavaScriptCore/runtime/RegExpKey.h b/Source/JavaScriptCore/runtime/RegExpKey.h
+index 57a3f359..79b652f8 100644
+--- a/Source/JavaScriptCore/runtime/RegExpKey.h
++++ b/Source/JavaScriptCore/runtime/RegExpKey.h
+@@ -39,7 +39,8 @@ enum RegExpFlags {
+     FlagMultiline = 4,
+     FlagSticky = 8,
+     FlagUnicode = 16,
+-    InvalidFlags = 32,
++    FlagDotAll = 32,
++    InvalidFlags = 64,
+     DeletedValueFlags = -1
+ };
+ 
+diff --git a/Source/JavaScriptCore/runtime/RegExpPrototype.cpp b/Source/JavaScriptCore/runtime/RegExpPrototype.cpp
+index 5a8f0a1e..8daa334a 100644
+--- a/Source/JavaScriptCore/runtime/RegExpPrototype.cpp
++++ b/Source/JavaScriptCore/runtime/RegExpPrototype.cpp
+@@ -52,6 +52,7 @@ static EncodedJSValue JSC_HOST_CALL regExpProtoGetterIgnoreCase(ExecState*);
+ static EncodedJSValue JSC_HOST_CALL regExpProtoGetterMultiline(ExecState*);
+ static EncodedJSValue JSC_HOST_CALL regExpProtoGetterSticky(ExecState*);
+ static EncodedJSValue JSC_HOST_CALL regExpProtoGetterUnicode(ExecState*);
++static EncodedJSValue JSC_HOST_CALL regExpProtoGetterDotAll(ExecState*);
+ static EncodedJSValue JSC_HOST_CALL regExpProtoGetterSource(ExecState*);
+ static EncodedJSValue JSC_HOST_CALL regExpProtoGetterFlags(ExecState*);
+ 
+@@ -74,6 +75,7 @@ void RegExpPrototype::finishCreation(VM& vm, JSGlobalObject* globalObject)
+     JSC_NATIVE_GETTER(vm.propertyNames->multiline, regExpProtoGetterMultiline, DontEnum | Accessor);
+     JSC_NATIVE_GETTER(vm.propertyNames->sticky, regExpProtoGetterSticky, DontEnum | Accessor);
+     JSC_NATIVE_GETTER(vm.propertyNames->unicode, regExpProtoGetterUnicode, DontEnum | Accessor);
++    JSC_NATIVE_GETTER(vm.propertyNames->dotAll, regExpProtoGetterDotAll, DontEnum | Accessor);
+     JSC_NATIVE_GETTER(vm.propertyNames->source, regExpProtoGetterSource, DontEnum | Accessor);
+     JSC_NATIVE_GETTER(vm.propertyNames->flags, regExpProtoGetterFlags, DontEnum | Accessor);
+ 
+@@ -194,7 +196,7 @@ EncodedJSValue JSC_HOST_CALL regExpProtoFuncCompile(ExecState* exec)
+     return JSValue::encode(thisValue);
+ }
+ 
+-typedef std::array<char, 5 + 1> FlagsString; // 5 different flags and a null character terminator.
++typedef std::array<char, 6 + 1> FlagsString; // 6 different flags and a null character terminator.
+ 
+ static inline FlagsString flagsString(ExecState* exec, JSObject* regexp)
+ {
+@@ -210,6 +212,8 @@ static inline FlagsString flagsString(ExecState* exec, JSObject* regexp)
+     RETURN_IF_EXCEPTION(scope, string);
+     JSValue multilineValue = regexp->get(exec, vm.propertyNames->multiline);
+     RETURN_IF_EXCEPTION(scope, string);
++    JSValue dotAllValue = regexp->get(exec, vm.propertyNames->dotAll);
++    RETURN_IF_EXCEPTION(scope, string);
+     JSValue unicodeValue = regexp->get(exec, vm.propertyNames->unicode);
+     RETURN_IF_EXCEPTION(scope, string);
+     JSValue stickyValue = regexp->get(exec, vm.propertyNames->sticky);
+@@ -222,6 +226,8 @@ static inline FlagsString flagsString(ExecState* exec, JSObject* regexp)
+         string[index++] = 'i';
+     if (multilineValue.toBoolean(exec))
+         string[index++] = 'm';
++    if (dotAllValue.toBoolean(exec))
++        string[index++] = 's';
+     if (unicodeValue.toBoolean(exec))
+         string[index++] = 'u';
+     if (stickyValue.toBoolean(exec))
+@@ -321,6 +327,21 @@ EncodedJSValue JSC_HOST_CALL regExpProtoGetterSticky(ExecState* exec)
+     return JSValue::encode(jsBoolean(asRegExpObject(thisValue)->regExp()->sticky()));
+ }
+ 
++EncodedJSValue JSC_HOST_CALL regExpProtoGetterDotAll(ExecState* exec)
++{
++    VM& vm = exec->vm();
++    auto scope = DECLARE_THROW_SCOPE(vm);
++
++    JSValue thisValue = exec->thisValue();
++    if (UNLIKELY(!thisValue.inherits(vm, RegExpObject::info()))) {
++        if (thisValue.inherits(vm, RegExpPrototype::info()))
++            return JSValue::encode(jsUndefined());
++        return throwVMTypeError(exec, scope, ASCIILiteral("The RegExp.prototype.dotAll getter can only be called on a RegExp object"));
++    }
++
++    return JSValue::encode(jsBoolean(asRegExpObject(thisValue)->regExp()->dotAll()));
++}
++
+ EncodedJSValue JSC_HOST_CALL regExpProtoGetterUnicode(ExecState* exec)
+ {
+     VM& vm = exec->vm();
+diff --git a/Source/JavaScriptCore/yarr/YarrEmojiProperties.h b/Source/JavaScriptCore/yarr/YarrEmojiProperties.h
+new file mode 100644
+index 00000000..58426dae
+--- /dev/null
++++ b/Source/JavaScriptCore/yarr/YarrEmojiProperties.h
+@@ -0,0 +1,163 @@
++/*
++ * Unicode emoji properties for \p{...} in regular expressions. The ICU that
++ * Captain Polliwog bundles (55) predates them; these ranges are Unicode 17.0.0,
++ * written by Captain Polliwog's scripts/toolchain/emoji-properties.py from the
++ * ICU in macOS. Unicode data: Unicode License v3, (c) Unicode, Inc.
++ */
++
++#pragma once
++
++namespace JSC { namespace Yarr {
++
++struct EmojiPropertyTable {
++    const char* name;
++    const char* alias;
++    const UChar32 (*ranges)[2];
++    unsigned count;
++};
++
++static const UChar32 emojiEmojiRanges[][2] = {
++    { 0x23, 0x23 }, { 0x2A, 0x2A }, { 0x30, 0x39 }, { 0xA9, 0xA9 }, { 0xAE, 0xAE },
++    { 0x203C, 0x203C }, { 0x2049, 0x2049 }, { 0x2122, 0x2122 }, { 0x2139, 0x2139 },
++    { 0x2194, 0x2199 }, { 0x21A9, 0x21AA }, { 0x231A, 0x231B }, { 0x2328, 0x2328 },
++    { 0x23CF, 0x23CF }, { 0x23E9, 0x23F3 }, { 0x23F8, 0x23FA }, { 0x24C2, 0x24C2 },
++    { 0x25AA, 0x25AB }, { 0x25B6, 0x25B6 }, { 0x25C0, 0x25C0 }, { 0x25FB, 0x25FE },
++    { 0x2600, 0x2604 }, { 0x260E, 0x260E }, { 0x2611, 0x2611 }, { 0x2614, 0x2615 },
++    { 0x2618, 0x2618 }, { 0x261D, 0x261D }, { 0x2620, 0x2620 }, { 0x2622, 0x2623 },
++    { 0x2626, 0x2626 }, { 0x262A, 0x262A }, { 0x262E, 0x262F }, { 0x2638, 0x263A },
++    { 0x2640, 0x2640 }, { 0x2642, 0x2642 }, { 0x2648, 0x2653 }, { 0x265F, 0x2660 },
++    { 0x2663, 0x2663 }, { 0x2665, 0x2666 }, { 0x2668, 0x2668 }, { 0x267B, 0x267B },
++    { 0x267E, 0x267F }, { 0x2692, 0x2697 }, { 0x2699, 0x2699 }, { 0x269B, 0x269C },
++    { 0x26A0, 0x26A1 }, { 0x26A7, 0x26A7 }, { 0x26AA, 0x26AB }, { 0x26B0, 0x26B1 },
++    { 0x26BD, 0x26BE }, { 0x26C4, 0x26C5 }, { 0x26C8, 0x26C8 }, { 0x26CE, 0x26CF },
++    { 0x26D1, 0x26D1 }, { 0x26D3, 0x26D4 }, { 0x26E9, 0x26EA }, { 0x26F0, 0x26F5 },
++    { 0x26F7, 0x26FA }, { 0x26FD, 0x26FD }, { 0x2702, 0x2702 }, { 0x2705, 0x2705 },
++    { 0x2708, 0x270D }, { 0x270F, 0x270F }, { 0x2712, 0x2712 }, { 0x2714, 0x2714 },
++    { 0x2716, 0x2716 }, { 0x271D, 0x271D }, { 0x2721, 0x2721 }, { 0x2728, 0x2728 },
++    { 0x2733, 0x2734 }, { 0x2744, 0x2744 }, { 0x2747, 0x2747 }, { 0x274C, 0x274C },
++    { 0x274E, 0x274E }, { 0x2753, 0x2755 }, { 0x2757, 0x2757 }, { 0x2763, 0x2764 },
++    { 0x2795, 0x2797 }, { 0x27A1, 0x27A1 }, { 0x27B0, 0x27B0 }, { 0x27BF, 0x27BF },
++    { 0x2934, 0x2935 }, { 0x2B05, 0x2B07 }, { 0x2B1B, 0x2B1C }, { 0x2B50, 0x2B50 },
++    { 0x2B55, 0x2B55 }, { 0x3030, 0x3030 }, { 0x303D, 0x303D }, { 0x3297, 0x3297 },
++    { 0x3299, 0x3299 }, { 0x1F004, 0x1F004 }, { 0x1F0CF, 0x1F0CF }, { 0x1F170, 0x1F171 },
++    { 0x1F17E, 0x1F17F }, { 0x1F18E, 0x1F18E }, { 0x1F191, 0x1F19A }, { 0x1F1E6, 0x1F1FF },
++    { 0x1F201, 0x1F202 }, { 0x1F21A, 0x1F21A }, { 0x1F22F, 0x1F22F }, { 0x1F232, 0x1F23A },
++    { 0x1F250, 0x1F251 }, { 0x1F300, 0x1F321 }, { 0x1F324, 0x1F393 }, { 0x1F396, 0x1F397 },
++    { 0x1F399, 0x1F39B }, { 0x1F39E, 0x1F3F0 }, { 0x1F3F3, 0x1F3F5 }, { 0x1F3F7, 0x1F4FD },
++    { 0x1F4FF, 0x1F53D }, { 0x1F549, 0x1F54E }, { 0x1F550, 0x1F567 }, { 0x1F56F, 0x1F570 },
++    { 0x1F573, 0x1F57A }, { 0x1F587, 0x1F587 }, { 0x1F58A, 0x1F58D }, { 0x1F590, 0x1F590 },
++    { 0x1F595, 0x1F596 }, { 0x1F5A4, 0x1F5A5 }, { 0x1F5A8, 0x1F5A8 }, { 0x1F5B1, 0x1F5B2 },
++    { 0x1F5BC, 0x1F5BC }, { 0x1F5C2, 0x1F5C4 }, { 0x1F5D1, 0x1F5D3 }, { 0x1F5DC, 0x1F5DE },
++    { 0x1F5E1, 0x1F5E1 }, { 0x1F5E3, 0x1F5E3 }, { 0x1F5E8, 0x1F5E8 }, { 0x1F5EF, 0x1F5EF },
++    { 0x1F5F3, 0x1F5F3 }, { 0x1F5FA, 0x1F64F }, { 0x1F680, 0x1F6C5 }, { 0x1F6CB, 0x1F6D2 },
++    { 0x1F6D5, 0x1F6D8 }, { 0x1F6DC, 0x1F6E5 }, { 0x1F6E9, 0x1F6E9 }, { 0x1F6EB, 0x1F6EC },
++    { 0x1F6F0, 0x1F6F0 }, { 0x1F6F3, 0x1F6FC }, { 0x1F7E0, 0x1F7EB }, { 0x1F7F0, 0x1F7F0 },
++    { 0x1F90C, 0x1F93A }, { 0x1F93C, 0x1F945 }, { 0x1F947, 0x1F9FF }, { 0x1FA70, 0x1FA7C },
++    { 0x1FA80, 0x1FA8A }, { 0x1FA8E, 0x1FAC6 }, { 0x1FAC8, 0x1FAC8 }, { 0x1FACD, 0x1FADC },
++    { 0x1FADF, 0x1FAEA }, { 0x1FAEF, 0x1FAF8 },
++};
++
++static const UChar32 emojiEmojiPresentationRanges[][2] = {
++    { 0x231A, 0x231B }, { 0x23E9, 0x23EC }, { 0x23F0, 0x23F0 }, { 0x23F3, 0x23F3 },
++    { 0x25FD, 0x25FE }, { 0x2614, 0x2615 }, { 0x2648, 0x2653 }, { 0x267F, 0x267F },
++    { 0x2693, 0x2693 }, { 0x26A1, 0x26A1 }, { 0x26AA, 0x26AB }, { 0x26BD, 0x26BE },
++    { 0x26C4, 0x26C5 }, { 0x26CE, 0x26CE }, { 0x26D4, 0x26D4 }, { 0x26EA, 0x26EA },
++    { 0x26F2, 0x26F3 }, { 0x26F5, 0x26F5 }, { 0x26FA, 0x26FA }, { 0x26FD, 0x26FD },
++    { 0x2705, 0x2705 }, { 0x270A, 0x270B }, { 0x2728, 0x2728 }, { 0x274C, 0x274C },
++    { 0x274E, 0x274E }, { 0x2753, 0x2755 }, { 0x2757, 0x2757 }, { 0x2795, 0x2797 },
++    { 0x27B0, 0x27B0 }, { 0x27BF, 0x27BF }, { 0x2B1B, 0x2B1C }, { 0x2B50, 0x2B50 },
++    { 0x2B55, 0x2B55 }, { 0x1F004, 0x1F004 }, { 0x1F0CF, 0x1F0CF }, { 0x1F18E, 0x1F18E },
++    { 0x1F191, 0x1F19A }, { 0x1F1E6, 0x1F1FF }, { 0x1F201, 0x1F201 }, { 0x1F21A, 0x1F21A },
++    { 0x1F22F, 0x1F22F }, { 0x1F232, 0x1F236 }, { 0x1F238, 0x1F23A }, { 0x1F250, 0x1F251 },
++    { 0x1F300, 0x1F320 }, { 0x1F32D, 0x1F335 }, { 0x1F337, 0x1F37C }, { 0x1F37E, 0x1F393 },
++    { 0x1F3A0, 0x1F3CA }, { 0x1F3CF, 0x1F3D3 }, { 0x1F3E0, 0x1F3F0 }, { 0x1F3F4, 0x1F3F4 },
++    { 0x1F3F8, 0x1F43E }, { 0x1F440, 0x1F440 }, { 0x1F442, 0x1F4FC }, { 0x1F4FF, 0x1F53D },
++    { 0x1F54B, 0x1F54E }, { 0x1F550, 0x1F567 }, { 0x1F57A, 0x1F57A }, { 0x1F595, 0x1F596 },
++    { 0x1F5A4, 0x1F5A4 }, { 0x1F5FB, 0x1F64F }, { 0x1F680, 0x1F6C5 }, { 0x1F6CC, 0x1F6CC },
++    { 0x1F6D0, 0x1F6D2 }, { 0x1F6D5, 0x1F6D8 }, { 0x1F6DC, 0x1F6DF }, { 0x1F6EB, 0x1F6EC },
++    { 0x1F6F4, 0x1F6FC }, { 0x1F7E0, 0x1F7EB }, { 0x1F7F0, 0x1F7F0 }, { 0x1F90C, 0x1F93A },
++    { 0x1F93C, 0x1F945 }, { 0x1F947, 0x1F9FF }, { 0x1FA70, 0x1FA7C }, { 0x1FA80, 0x1FA8A },
++    { 0x1FA8E, 0x1FAC6 }, { 0x1FAC8, 0x1FAC8 }, { 0x1FACD, 0x1FADC }, { 0x1FADF, 0x1FAEA },
++    { 0x1FAEF, 0x1FAF8 },
++};
++
++static const UChar32 emojiEmojiModifierRanges[][2] = {
++    { 0x1F3FB, 0x1F3FF },
++};
++
++static const UChar32 emojiEmojiModifierBaseRanges[][2] = {
++    { 0x261D, 0x261D }, { 0x26F9, 0x26F9 }, { 0x270A, 0x270D }, { 0x1F385, 0x1F385 },
++    { 0x1F3C2, 0x1F3C4 }, { 0x1F3C7, 0x1F3C7 }, { 0x1F3CA, 0x1F3CC }, { 0x1F442, 0x1F443 },
++    { 0x1F446, 0x1F450 }, { 0x1F466, 0x1F478 }, { 0x1F47C, 0x1F47C }, { 0x1F481, 0x1F483 },
++    { 0x1F485, 0x1F487 }, { 0x1F48F, 0x1F48F }, { 0x1F491, 0x1F491 }, { 0x1F4AA, 0x1F4AA },
++    { 0x1F574, 0x1F575 }, { 0x1F57A, 0x1F57A }, { 0x1F590, 0x1F590 }, { 0x1F595, 0x1F596 },
++    { 0x1F645, 0x1F647 }, { 0x1F64B, 0x1F64F }, { 0x1F6A3, 0x1F6A3 }, { 0x1F6B4, 0x1F6B6 },
++    { 0x1F6C0, 0x1F6C0 }, { 0x1F6CC, 0x1F6CC }, { 0x1F90C, 0x1F90C }, { 0x1F90F, 0x1F90F },
++    { 0x1F918, 0x1F91F }, { 0x1F926, 0x1F926 }, { 0x1F930, 0x1F939 }, { 0x1F93C, 0x1F93E },
++    { 0x1F977, 0x1F977 }, { 0x1F9B5, 0x1F9B6 }, { 0x1F9B8, 0x1F9B9 }, { 0x1F9BB, 0x1F9BB },
++    { 0x1F9CD, 0x1F9CF }, { 0x1F9D1, 0x1F9DD }, { 0x1FAC3, 0x1FAC5 }, { 0x1FAF0, 0x1FAF8 },
++};
++
++static const UChar32 emojiEmojiComponentRanges[][2] = {
++    { 0x23, 0x23 }, { 0x2A, 0x2A }, { 0x30, 0x39 }, { 0x200D, 0x200D }, { 0x20E3, 0x20E3 },
++    { 0xFE0F, 0xFE0F }, { 0x1F1E6, 0x1F1FF }, { 0x1F3FB, 0x1F3FF }, { 0x1F9B0, 0x1F9B3 },
++    { 0xE0020, 0xE007F },
++};
++
++static const UChar32 emojiExtendedPictographicRanges[][2] = {
++    { 0xA9, 0xA9 }, { 0xAE, 0xAE }, { 0x203C, 0x203C }, { 0x2049, 0x2049 }, { 0x2122, 0x2122 },
++    { 0x2139, 0x2139 }, { 0x2194, 0x2199 }, { 0x21A9, 0x21AA }, { 0x231A, 0x231B },
++    { 0x2328, 0x2328 }, { 0x23CF, 0x23CF }, { 0x23E9, 0x23F3 }, { 0x23F8, 0x23FA },
++    { 0x24C2, 0x24C2 }, { 0x25AA, 0x25AB }, { 0x25B6, 0x25B6 }, { 0x25C0, 0x25C0 },
++    { 0x25FB, 0x25FE }, { 0x2600, 0x2604 }, { 0x260E, 0x260E }, { 0x2611, 0x2611 },
++    { 0x2614, 0x2615 }, { 0x2618, 0x2618 }, { 0x261D, 0x261D }, { 0x2620, 0x2620 },
++    { 0x2622, 0x2623 }, { 0x2626, 0x2626 }, { 0x262A, 0x262A }, { 0x262E, 0x262F },
++    { 0x2638, 0x263A }, { 0x2640, 0x2640 }, { 0x2642, 0x2642 }, { 0x2648, 0x2653 },
++    { 0x265F, 0x2660 }, { 0x2663, 0x2663 }, { 0x2665, 0x2666 }, { 0x2668, 0x2668 },
++    { 0x267B, 0x267B }, { 0x267E, 0x267F }, { 0x2692, 0x2697 }, { 0x2699, 0x2699 },
++    { 0x269B, 0x269C }, { 0x26A0, 0x26A1 }, { 0x26A7, 0x26A7 }, { 0x26AA, 0x26AB },
++    { 0x26B0, 0x26B1 }, { 0x26BD, 0x26BE }, { 0x26C4, 0x26C5 }, { 0x26C8, 0x26C8 },
++    { 0x26CE, 0x26CF }, { 0x26D1, 0x26D1 }, { 0x26D3, 0x26D4 }, { 0x26E9, 0x26EA },
++    { 0x26F0, 0x26F5 }, { 0x26F7, 0x26FA }, { 0x26FD, 0x26FD }, { 0x2702, 0x2702 },
++    { 0x2705, 0x2705 }, { 0x2708, 0x270D }, { 0x270F, 0x270F }, { 0x2712, 0x2712 },
++    { 0x2714, 0x2714 }, { 0x2716, 0x2716 }, { 0x271D, 0x271D }, { 0x2721, 0x2721 },
++    { 0x2728, 0x2728 }, { 0x2733, 0x2734 }, { 0x2744, 0x2744 }, { 0x2747, 0x2747 },
++    { 0x274C, 0x274C }, { 0x274E, 0x274E }, { 0x2753, 0x2755 }, { 0x2757, 0x2757 },
++    { 0x2763, 0x2764 }, { 0x2795, 0x2797 }, { 0x27A1, 0x27A1 }, { 0x27B0, 0x27B0 },
++    { 0x27BF, 0x27BF }, { 0x2934, 0x2935 }, { 0x2B05, 0x2B07 }, { 0x2B1B, 0x2B1C },
++    { 0x2B50, 0x2B50 }, { 0x2B55, 0x2B55 }, { 0x3030, 0x3030 }, { 0x303D, 0x303D },
++    { 0x3297, 0x3297 }, { 0x3299, 0x3299 }, { 0x1F004, 0x1F004 }, { 0x1F02C, 0x1F02F },
++    { 0x1F094, 0x1F09F }, { 0x1F0AF, 0x1F0B0 }, { 0x1F0C0, 0x1F0C0 }, { 0x1F0CF, 0x1F0D0 },
++    { 0x1F0F6, 0x1F0FF }, { 0x1F170, 0x1F171 }, { 0x1F17E, 0x1F17F }, { 0x1F18E, 0x1F18E },
++    { 0x1F191, 0x1F19A }, { 0x1F1AE, 0x1F1E5 }, { 0x1F201, 0x1F20F }, { 0x1F21A, 0x1F21A },
++    { 0x1F22F, 0x1F22F }, { 0x1F232, 0x1F23A }, { 0x1F23C, 0x1F23F }, { 0x1F249, 0x1F25F },
++    { 0x1F266, 0x1F321 }, { 0x1F324, 0x1F393 }, { 0x1F396, 0x1F397 }, { 0x1F399, 0x1F39B },
++    { 0x1F39E, 0x1F3F0 }, { 0x1F3F3, 0x1F3F5 }, { 0x1F3F7, 0x1F3FA }, { 0x1F400, 0x1F4FD },
++    { 0x1F4FF, 0x1F53D }, { 0x1F549, 0x1F54E }, { 0x1F550, 0x1F567 }, { 0x1F56F, 0x1F570 },
++    { 0x1F573, 0x1F57A }, { 0x1F587, 0x1F587 }, { 0x1F58A, 0x1F58D }, { 0x1F590, 0x1F590 },
++    { 0x1F595, 0x1F596 }, { 0x1F5A4, 0x1F5A5 }, { 0x1F5A8, 0x1F5A8 }, { 0x1F5B1, 0x1F5B2 },
++    { 0x1F5BC, 0x1F5BC }, { 0x1F5C2, 0x1F5C4 }, { 0x1F5D1, 0x1F5D3 }, { 0x1F5DC, 0x1F5DE },
++    { 0x1F5E1, 0x1F5E1 }, { 0x1F5E3, 0x1F5E3 }, { 0x1F5E8, 0x1F5E8 }, { 0x1F5EF, 0x1F5EF },
++    { 0x1F5F3, 0x1F5F3 }, { 0x1F5FA, 0x1F64F }, { 0x1F680, 0x1F6C5 }, { 0x1F6CB, 0x1F6D2 },
++    { 0x1F6D5, 0x1F6E5 }, { 0x1F6E9, 0x1F6E9 }, { 0x1F6EB, 0x1F6F0 }, { 0x1F6F3, 0x1F6FF },
++    { 0x1F7DA, 0x1F7FF }, { 0x1F80C, 0x1F80F }, { 0x1F848, 0x1F84F }, { 0x1F85A, 0x1F85F },
++    { 0x1F888, 0x1F88F }, { 0x1F8AE, 0x1F8AF }, { 0x1F8BC, 0x1F8BF }, { 0x1F8C2, 0x1F8CF },
++    { 0x1F8D9, 0x1F8FF }, { 0x1F90C, 0x1F93A }, { 0x1F93C, 0x1F945 }, { 0x1F947, 0x1F9FF },
++    { 0x1FA58, 0x1FA5F }, { 0x1FA6E, 0x1FAFF }, { 0x1FC00, 0x1FFFD },
++};
++
++static const UChar32 emojiRegionalIndicatorRanges[][2] = {
++    { 0x1F1E6, 0x1F1FF },
++};
++
++static const EmojiPropertyTable emojiPropertyTables[] = {
++    { "Emoji", "Emoji", emojiEmojiRanges, 151 },
++    { "Emoji_Presentation", "EPres", emojiEmojiPresentationRanges, 81 },
++    { "Emoji_Modifier", "EMod", emojiEmojiModifierRanges, 1 },
++    { "Emoji_Modifier_Base", "EBase", emojiEmojiModifierBaseRanges, 40 },
++    { "Emoji_Component", "EComp", emojiEmojiComponentRanges, 10 },
++    { "Extended_Pictographic", "ExtPict", emojiExtendedPictographicRanges, 156 },
++    { "Regional_Indicator", "RI", emojiRegionalIndicatorRanges, 1 },
++};
++
++} } // namespace JSC::Yarr
+diff --git a/Source/JavaScriptCore/yarr/YarrInterpreter.cpp b/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+index c9f43021..b5e5fc1a 100644
+--- a/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
++++ b/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+@@ -33,6 +33,7 @@
+ #include <wtf/BumpPointerAllocator.h>
+ #include <wtf/DataLog.h>
+ #include <wtf/text/CString.h>
++#include <wtf/text/StringConcatenate.h>
+ #include <wtf/text/WTFString.h>
+ 
+ using namespace WTF;
+@@ -257,6 +258,11 @@ public:
+             return pos;
+         }
+ 
++        const CharType* data()
++        {
++            return input;
++        }
++
+         void setPos(unsigned p)
+         {
+             pos = p;
+@@ -395,6 +401,23 @@ public:
+         return true;
+     }
+ 
++    // Whether the lookbehind's body matches some stretch of the input that
++    // ends here: its compiled form, sticky and anchored at its end, is tried
++    // from each start position.
++    bool matchLookbehind(ByteTerm& term)
++    {
++        BytecodePattern* lookbehind = term.atom.lookbehindPattern;
++        if (!lookbehind)
++            return false;
++        unsigned end = input.getPos() - term.inputPosition;
++        Vector<unsigned, 16> lookbehindOutput((lookbehind->m_body->m_numSubpatterns + 1) * 2);
++        for (unsigned start = end + 1; start-- > 0;) {
++            if (Yarr::interpret(lookbehind, input.data(), end, start, lookbehindOutput.data()) != offsetNoMatch)
++                return true;
++        }
++        return false;
++    }
++
+     bool matchAssertionBOL(ByteTerm& term)
+     {
+         return (input.atStart(term.inputPosition)) || (pattern->multiline() && testCharacterClass(pattern->newlineCharacterClass, input.readChecked(term.inputPosition + 1)));
+@@ -1219,6 +1242,10 @@ public:
+             if (matchAssertionBOL(currentTerm()))
+                 MATCH_NEXT();
+             BACKTRACK();
++        case ByteTerm::TypeLookbehind:
++            if (matchLookbehind(currentTerm()) != currentTerm().invert())
++                MATCH_NEXT();
++            BACKTRACK();
+         case ByteTerm::TypeAssertionEOL:
+             if (matchAssertionEOL(currentTerm()))
+                 MATCH_NEXT();
+@@ -1435,6 +1462,7 @@ public:
+         case ByteTerm::TypeAssertionBOL:
+         case ByteTerm::TypeAssertionEOL:
+         case ByteTerm::TypeAssertionWordBoundary:
++        case ByteTerm::TypeLookbehind:
+             BACKTRACK();
+ 
+         case ByteTerm::TypePatternCharacterOnce:
+@@ -1605,7 +1633,30 @@ public:
+         emitDisjunction(m_pattern.m_body);
+         regexEnd();
+ 
+-        return std::make_unique<BytecodePattern>(WTFMove(m_bodyDisjunction), m_allParenthesesInfo, m_pattern, allocator, lock);
++        auto bytecode = std::make_unique<BytecodePattern>(WTFMove(m_bodyDisjunction), m_allParenthesesInfo, m_pattern, allocator, lock);
++        bytecode->m_lookbehindAllocators = WTFMove(m_lookbehindAllocators);
++        bytecode->m_lookbehindPatterns = WTFMove(m_lookbehindPatterns);
++        return bytecode;
++    }
++
++    void emitLookbehind(PatternTerm& term, unsigned currentCountAlreadyChecked)
++    {
++        // The body, anchored to end where the input is cut off, and sticky so
++        // that each try starts exactly where it is told to.
++        String source = makeString("(?:", m_pattern.m_lookbehindSources[term.parentheses.lookbehindIndex], ")(?![\\s\\S])");
++        RegExpFlags flags = static_cast<RegExpFlags>((m_pattern.m_flags & ~FlagGlobal) | FlagSticky);
++        const char* error = nullptr;
++        YarrPattern lookbehindPattern(source, flags, &error, nullptr);
++        BytecodePattern* compiled = nullptr;
++        if (!error) {
++            auto allocator = std::make_unique<BumpPointerAllocator>();
++            auto bytecode = byteCompile(lookbehindPattern, allocator.get(), nullptr);
++            compiled = bytecode.get();
++            m_lookbehindAllocators.append(WTFMove(allocator));
++            m_lookbehindPatterns.append(WTFMove(bytecode));
++        }
++        ASSERT(currentCountAlreadyChecked >= term.inputPosition);
++        m_bodyDisjunction->terms.append(ByteTerm::Lookbehind(compiled, term.invert(), currentCountAlreadyChecked - term.inputPosition));
+     }
+ 
+     void checkInput(unsigned count)
+@@ -2019,6 +2070,10 @@ public:
+                 }
+ 
+                 case PatternTerm::TypeParentheticalAssertion: {
++                    if (term.m_lookbehind) {
++                        emitLookbehind(term, currentCountAlreadyChecked);
++                        break;
++                    }
+                     unsigned alternativeFrameLocation = term.frameLocation + YarrStackSpaceForBackTrackInfoParentheticalAssertion;
+ 
+                     ASSERT(currentCountAlreadyChecked >= term.inputPosition);
+@@ -2054,6 +2109,8 @@ private:
+     unsigned m_currentAlternativeIndex;
+     Vector<ParenthesesStackEntry> m_parenthesesStack;
+     Vector<std::unique_ptr<ByteDisjunction>> m_allParenthesesInfo;
++    Vector<std::unique_ptr<BumpPointerAllocator>> m_lookbehindAllocators;
++    Vector<std::unique_ptr<BytecodePattern>> m_lookbehindPatterns;
+ };
+ 
+ std::unique_ptr<BytecodePattern> byteCompile(YarrPattern& pattern, BumpPointerAllocator* allocator, ConcurrentJSLock* lock)
+diff --git a/Source/JavaScriptCore/yarr/YarrInterpreter.h b/Source/JavaScriptCore/yarr/YarrInterpreter.h
+index 43dcb1f4..cf2de383 100644
+--- a/Source/JavaScriptCore/yarr/YarrInterpreter.h
++++ b/Source/JavaScriptCore/yarr/YarrInterpreter.h
+@@ -27,6 +27,7 @@
+ 
+ #include "ConcurrentJSLock.h"
+ #include "YarrPattern.h"
++#include <wtf/BumpPointerAllocator.h>
+ 
+ namespace WTF {
+ class BumpPointerAllocator;
+@@ -37,6 +38,8 @@ namespace JSC { namespace Yarr {
+ 
+ class ByteDisjunction;
+ 
++struct BytecodePattern;
++
+ struct ByteTerm {
+     enum Type {
+         TypeBodyAlternativeBegin,
+@@ -70,6 +73,7 @@ struct ByteTerm {
+         TypeCheckInput,
+         TypeUncheckInput,
+         TypeDotStarEnclosure,
++        TypeLookbehind,
+     } type;
+     union {
+         struct {
+@@ -85,6 +89,7 @@ struct ByteTerm {
+             union {
+                 ByteDisjunction* parenthesesDisjunction;
+                 unsigned parenthesesWidth;
++                BytecodePattern* lookbehindPattern;
+             };
+             QuantifierType quantityType;
+             unsigned quantityMinCount;
+@@ -202,6 +207,14 @@ struct ByteTerm {
+         inputPosition = inputPos;
+     }
+ 
++    static ByteTerm Lookbehind(BytecodePattern* lookbehindPattern, bool invert, unsigned inputPos)
++    {
++        ByteTerm term(TypeLookbehind, invert);
++        term.atom.lookbehindPattern = lookbehindPattern;
++        term.inputPosition = inputPos;
++        return term;
++    }
++
+     static ByteTerm BOL(unsigned inputPos)
+     {
+         ByteTerm term(TypeAssertionBOL);
+@@ -382,6 +395,11 @@ public:
+     CharacterClass* newlineCharacterClass;
+     CharacterClass* wordcharCharacterClass;
+ 
++    // Lookbehind bodies, compiled on their own, each with its own allocator
++    // since they run in the middle of this pattern's match.
++    Vector<std::unique_ptr<BumpPointerAllocator>> m_lookbehindAllocators;
++    Vector<std::unique_ptr<BytecodePattern>> m_lookbehindPatterns;
++
+ private:
+     Vector<std::unique_ptr<ByteDisjunction>> m_allParenthesesInfo;
+     Vector<std::unique_ptr<CharacterClass>> m_userCharacterClasses;
+diff --git a/Source/JavaScriptCore/yarr/YarrParser.h b/Source/JavaScriptCore/yarr/YarrParser.h
+index f6ab027a..7dbefa0e 100644
+--- a/Source/JavaScriptCore/yarr/YarrParser.h
++++ b/Source/JavaScriptCore/yarr/YarrParser.h
+@@ -694,8 +694,24 @@ private:
+                 break;
+ 
+             case '<': {
+-                // Named capture group (ES2018): (?<name>...). Lookbehind,
+-                // (?<= and (?<!, is not supported.
++                if (!atEndOfPattern() && (peek() == '=' || peek() == '!')) {
++                    // Lookbehind (ES2018): (?<=...) and (?<!...). The body is
++                    // handed over whole, as source, and matched separately.
++                    bool invert = consume() == '!';
++                    unsigned bodyStart = m_index;
++                    unsigned capturingGroups = 0;
++                    if (!skipLookbehindBody(capturingGroups)) {
++                        m_err = YarrPattern::MissingParentheses;
++                        break;
++                    }
++                    String body(m_data + bodyStart, m_index - bodyStart);
++                    consume();
++                    m_delegate.atomLookbehind(body, invert, capturingGroups);
++                    // The group is already closed: no nesting to count.
++                    return;
++                }
++
++                // Named capture group (ES2018): (?<name>...).
+                 String groupName;
+                 if (!tryConsumeGroupName(groupName)) {
+                     m_err = YarrPattern::ParenthesesTypeInvalid;
+@@ -985,6 +1001,49 @@ private:
+         return n;
+     }
+ 
++    // Moves to the ')' that closes a lookbehind, counting the capturing
++    // groups inside it so the ones after keep their numbers.
++    bool skipLookbehindBody(unsigned& capturingGroups)
++    {
++        unsigned depth = 0;
++        while (!atEndOfPattern()) {
++            int ch = peek();
++            if (ch == '\\') {
++                consume();
++                if (!atEndOfPattern())
++                    consume();
++                continue;
++            }
++            if (ch == '[') {
++                consume();
++                while (!atEndOfPattern() && peek() != ']') {
++                    if (consume() == '\\' && !atEndOfPattern())
++                        consume();
++                }
++                if (atEndOfPattern())
++                    return false;
++                consume();
++                continue;
++            }
++            if (ch == '(') {
++                consume();
++                if (atEndOfPattern() || peek() != '?')
++                    ++capturingGroups;
++                else if (m_index + 2 < m_size && m_data[m_index + 1] == '<' && m_data[m_index + 2] != '=' && m_data[m_index + 2] != '!')
++                    ++capturingGroups;
++                ++depth;
++                continue;
++            }
++            if (ch == ')') {
++                if (!depth)
++                    return true;
++                --depth;
++            }
++            consume();
++        }
++        return false;
++    }
++
+     // A group name after "(?<" or "\\k<": an identifier, then '>'.
+     bool tryConsumeGroupName(String& name)
+     {
+diff --git a/Source/JavaScriptCore/yarr/YarrPattern.cpp b/Source/JavaScriptCore/yarr/YarrPattern.cpp
+index 7e77b50b..655b053b 100644
+--- a/Source/JavaScriptCore/yarr/YarrPattern.cpp
++++ b/Source/JavaScriptCore/yarr/YarrPattern.cpp
+@@ -29,6 +29,7 @@
+ 
+ #include "Yarr.h"
+ #include "YarrCanonicalize.h"
++#include "YarrEmojiProperties.h"
+ #include "YarrParser.h"
+ #include <wtf/Vector.h>
+ #include <unicode/uset.h>
+@@ -358,6 +359,14 @@ public:
+                 m_alternative->m_terms.append(PatternTerm(m_pattern.wordcharCharacterClass(), invert));
+             break;
+         case NewlineClassID:
++            if (invert && m_pattern.dotAll()) {
++                // "." with the s flag (ES2018): any character at all, which
++                // is the empty class inverted.
++                auto anyCharacter = std::make_unique<CharacterClass>();
++                m_alternative->m_terms.append(PatternTerm(anyCharacter.get(), true));
++                m_pattern.m_userCharacterClasses.append(WTFMove(anyCharacter));
++                break;
++            }
+             m_alternative->m_terms.append(PatternTerm(m_pattern.newlineCharacterClass(), invert));
+             break;
+         }
+@@ -465,6 +474,19 @@ public:
+         m_pattern.m_disjunctions.append(WTFMove(parenthesesDisjunction));
+     }
+ 
++    void atomLookbehind(const String& body, bool invert, unsigned capturingGroups)
++    {
++        // Groups inside keep their numbers, though they never capture.
++        m_pattern.m_numSubpatterns += capturingGroups;
++        unsigned index = m_pattern.m_lookbehindSources.size();
++        m_pattern.m_lookbehindSources.append(body);
++        atomParentheticalAssertionBegin(invert);
++        atomParenthesesEnd();
++        PatternTerm& term = m_alternative->lastTerm();
++        term.m_lookbehind = true;
++        term.parentheses.lookbehindIndex = index;
++    }
++
+     void atomParenthesesEnd()
+     {
+         ASSERT(m_alternative->m_parent);
+@@ -964,6 +986,16 @@ bool unicodePropertyRanges(const String& expression, UnicodePropertyRanges& rang
+     uset_applyPropertyAlias(set, nameCharacters.data(), name.length(), valueCharacters.data(), value.length(), &status);
+     if (U_FAILURE(status)) {
+         uset_close(set);
++        // Properties newer than the bundled ICU.
++        if (!value.isNull())
++            return false;
++        for (auto& table : emojiPropertyTables) {
++            if (name == table.name || name == table.alias) {
++                for (unsigned i = 0; i < table.count; ++i)
++                    ranges.append(std::make_pair(table.ranges[i][0], table.ranges[i][1]));
++                return true;
++            }
++        }
+         return false;
+     }
+     int32_t itemCount = uset_getItemCount(set);
+diff --git a/Source/JavaScriptCore/yarr/YarrPattern.h b/Source/JavaScriptCore/yarr/YarrPattern.h
+index ca2d8d6c..a3268c35 100644
+--- a/Source/JavaScriptCore/yarr/YarrPattern.h
++++ b/Source/JavaScriptCore/yarr/YarrPattern.h
+@@ -99,6 +99,9 @@ struct PatternTerm {
+     } type;
+     bool m_capture :1;
+     bool m_invert :1;
++    // A lookbehind assertion: a parenthetical assertion with an empty body,
++    // whose real body is compiled on its own from its source.
++    bool m_lookbehind :1;
+     union {
+         UChar32 patternCharacter;
+         CharacterClass* characterClass;
+@@ -109,6 +112,7 @@ struct PatternTerm {
+             unsigned lastSubpatternId;
+             bool isCopy;
+             bool isTerminal;
++            unsigned lookbehindIndex;
+         } parentheses;
+         struct {
+             bool bolAnchor : 1;
+@@ -125,6 +129,7 @@ struct PatternTerm {
+         : type(PatternTerm::TypePatternCharacter)
+         , m_capture(false)
+         , m_invert(false)
++        , m_lookbehind(false)
+     {
+         patternCharacter = ch;
+         quantityType = QuantifierFixedCount;
+@@ -135,6 +140,7 @@ struct PatternTerm {
+         : type(PatternTerm::TypeCharacterClass)
+         , m_capture(false)
+         , m_invert(invert)
++        , m_lookbehind(false)
+     {
+         characterClass = charClass;
+         quantityType = QuantifierFixedCount;
+@@ -145,6 +151,7 @@ struct PatternTerm {
+         : type(type)
+         , m_capture(capture)
+         , m_invert(invert)
++        , m_lookbehind(false)
+     {
+         parentheses.disjunction = disjunction;
+         parentheses.subpatternId = subpatternId;
+@@ -158,6 +165,7 @@ struct PatternTerm {
+         : type(type)
+         , m_capture(false)
+         , m_invert(invert)
++        , m_lookbehind(false)
+     {
+         quantityType = QuantifierFixedCount;
+         quantityMinCount = quantityMaxCount = 1;
+@@ -167,6 +175,7 @@ struct PatternTerm {
+         : type(TypeBackReference)
+         , m_capture(false)
+         , m_invert(false)
++        , m_lookbehind(false)
+     {
+         backReferenceSubpatternId = spatternId;
+         quantityType = QuantifierFixedCount;
+@@ -177,6 +186,7 @@ struct PatternTerm {
+         : type(TypeDotStarEnclosure)
+         , m_capture(false)
+         , m_invert(false)
++        , m_lookbehind(false)
+     {
+         anchors.bolAnchor = bolAnchor;
+         anchors.eolAnchor = eolAnchor;
+@@ -375,6 +385,7 @@ struct YarrPattern {
+         m_userCharacterClasses.clear();
+         m_captureGroupNames.clear();
+         m_namedGroupToParenIndex.clear();
++        m_lookbehindSources.clear();
+     }
+ 
+     bool containsIllegalBackReference()
+@@ -464,6 +475,7 @@ struct YarrPattern {
+     bool multiline() const { return m_flags & FlagMultiline; }
+     bool sticky() const { return m_flags & FlagSticky; }
+     bool unicode() const { return m_flags & FlagUnicode; }
++    bool dotAll() const { return m_flags & FlagDotAll; }
+ 
+     bool m_containsBackreferences : 1;
+     bool m_containsBOL : 1;
+@@ -481,6 +493,11 @@ struct YarrPattern {
+     // (null where unnamed), and the other way round.
+     Vector<String> m_captureGroupNames;
+     HashMap<String, unsigned> m_namedGroupToParenIndex;
++    // The source of each lookbehind's body, by PatternTerm's lookbehindIndex.
++    Vector<String> m_lookbehindSources;
++    // The regular expression JIT has no lookbehind; such patterns are
++    // interpreted.
++    bool containsLookbehind() const { return !m_lookbehindSources.isEmpty(); }
+ 
+ private:
+     const char* compile(const String& patternString, void* stackLimit);
+diff --git a/Source/JavaScriptCore/yarr/YarrSyntaxChecker.cpp b/Source/JavaScriptCore/yarr/YarrSyntaxChecker.cpp
+index dad748b9..b6c5afa0 100644
+--- a/Source/JavaScriptCore/yarr/YarrSyntaxChecker.cpp
++++ b/Source/JavaScriptCore/yarr/YarrSyntaxChecker.cpp
+@@ -44,6 +44,7 @@ public:
+     void atomCharacterClassEnd() {}
+     void atomParenthesesSubpatternBegin(bool = true, std::optional<String> = std::nullopt) {}
+     void atomNamedBackReference(const String&) {}
++    void atomLookbehind(const String&, bool, unsigned) {}
+     void atomUnicodePropertyClass(const UnicodePropertyRanges&, bool) {}
+     void atomCharacterClassUnicodeProperty(const UnicodePropertyRanges&, bool) {}
+     void atomParentheticalAssertionBegin(bool = false) {}
+diff --git a/Source/WebCore/bindings/js/ScriptModuleLoader.cpp b/Source/WebCore/bindings/js/ScriptModuleLoader.cpp
+index b67ffa3e..98f36281 100644
+--- a/Source/WebCore/bindings/js/ScriptModuleLoader.cpp
++++ b/Source/WebCore/bindings/js/ScriptModuleLoader.cpp
+@@ -26,6 +26,8 @@
+ #include "config.h"
+ #include "ScriptModuleLoader.h"
+ 
++#include <inspector/InspectorValues.h>
++
+ #include "CachedModuleScriptLoader.h"
+ #include "CachedScript.h"
+ #include "CachedScriptFetcher.h"
+@@ -65,11 +67,73 @@ static bool isRootModule(JSC::JSValue importerModuleKey)
+     return importerModuleKey.isSymbol() || importerModuleKey.isUndefined();
+ }
+ 
++static bool isURLLikeSpecifier(const String& specifier)
++{
++    return specifier.startsWith('/') || specifier.startsWith("./") || specifier.startsWith("../");
++}
++
++void ScriptModuleLoader::registerImportMap(const String& json, const URL& baseURL)
++{
++    RefPtr<Inspector::InspectorValue> value;
++    RefPtr<Inspector::InspectorObject> map;
++    RefPtr<Inspector::InspectorObject> imports;
++    if (!Inspector::InspectorValue::parseJSON(json, value) || !value->asObject(map) || !map->getObject(ASCIILiteral("imports"), imports))
++        return;
++
++    for (auto& entry : *imports) {
++        String address;
++        if (!entry.value->asString(address))
++            continue;
++        URL addressURL = m_document.completeURL(address, baseURL);
++        if (!addressURL.isValid())
++            continue;
++        String key = entry.key;
++        if (isURLLikeSpecifier(key))
++            key = m_document.completeURL(key, baseURL).string();
++        else {
++            URL keyURL(URL(), key);
++            if (keyURL.isValid())
++                key = keyURL.string();
++        }
++        m_importMap.append(std::make_pair(key, addressURL));
++    }
++}
++
++std::optional<URL> ScriptModuleLoader::resolveWithImportMap(const String& normalizedSpecifier) const
++{
++    // An exact match, else the longest key ending in "/" that begins it.
++    const std::pair<String, URL>* bestPrefix = nullptr;
++    for (auto& entry : m_importMap) {
++        if (entry.first == normalizedSpecifier)
++            return entry.second;
++        if (entry.first.endsWith('/') && normalizedSpecifier.startsWith(entry.first)
++            && (!bestPrefix || entry.first.length() > bestPrefix->first.length()))
++            bestPrefix = &entry;
++    }
++    if (!bestPrefix)
++        return std::nullopt;
++    URL result(bestPrefix->second, normalizedSpecifier.substring(bestPrefix->first.length()));
++    if (!result.isValid())
++        return std::nullopt;
++    return result;
++}
++
+ static Expected<URL, ASCIILiteral> resolveModuleSpecifier(Document& document, const String& specifier, const URL& baseURL)
+ {
+     // https://html.spec.whatwg.org/multipage/webappapis.html#resolve-a-module-specifier
+ 
+     URL absoluteURL(URL(), specifier);
++
++    if (auto* moduleLoader = document.moduleLoader()) {
++        String normalized = specifier;
++        if (absoluteURL.isValid())
++            normalized = absoluteURL.string();
++        else if (isURLLikeSpecifier(specifier))
++            normalized = document.completeURL(specifier, baseURL).string();
++        if (auto mapped = moduleLoader->resolveWithImportMap(normalized))
++            return mapped.value();
++    }
++
+     if (absoluteURL.isValid())
+         return absoluteURL;
+ 
+diff --git a/Source/WebCore/bindings/js/ScriptModuleLoader.h b/Source/WebCore/bindings/js/ScriptModuleLoader.h
+index 6e7a61b5..eeff454a 100644
+--- a/Source/WebCore/bindings/js/ScriptModuleLoader.h
++++ b/Source/WebCore/bindings/js/ScriptModuleLoader.h
+@@ -55,6 +55,11 @@ public:
+ 
+     Document& document() { return m_document; }
+ 
++    // Import maps (<script type="importmap">): module specifiers such as
++    // "react" mapped to URLs. Only "imports" is supported, not "scopes".
++    void registerImportMap(const String& json, const URL& baseURL);
++    std::optional<URL> resolveWithImportMap(const String& normalizedSpecifier) const;
++
+     JSC::JSInternalPromise* resolve(JSC::JSGlobalObject*, JSC::ExecState*, JSC::JSModuleLoader*, JSC::JSValue moduleName, JSC::JSValue importerModuleKey, JSC::JSValue scriptFetcher);
+     JSC::JSInternalPromise* fetch(JSC::JSGlobalObject*, JSC::ExecState*, JSC::JSModuleLoader*, JSC::JSValue moduleKey, JSC::JSValue scriptFetcher);
+     JSC::JSValue evaluate(JSC::JSGlobalObject*, JSC::ExecState*, JSC::JSModuleLoader*, JSC::JSValue moduleKey, JSC::JSValue moduleRecord, JSC::JSValue scriptFetcher);
+@@ -65,6 +70,7 @@ private:
+ 
+     Document& m_document;
+     HashMap<URL, URL> m_requestURLToResponseURLMap;
++    Vector<std::pair<String, URL>> m_importMap;
+     HashSet<Ref<CachedModuleScriptLoader>> m_loaders;
+ };
+ 
+diff --git a/Source/WebCore/contentextensions/URLFilterParser.cpp b/Source/WebCore/contentextensions/URLFilterParser.cpp
+index 60c34029..0f03b506 100644
+--- a/Source/WebCore/contentextensions/URLFilterParser.cpp
++++ b/Source/WebCore/contentextensions/URLFilterParser.cpp
+@@ -129,6 +129,26 @@ public:
+         fail(URLFilterParser::BackReference);
+     }
+ 
++    void atomLookbehind(const String&, bool, unsigned)
++    {
++        fail(URLFilterParser::Group);
++    }
++
++    void atomNamedBackReference(const String&)
++    {
++        fail(URLFilterParser::BackReference);
++    }
++
++    void atomUnicodePropertyClass(const JSC::Yarr::UnicodePropertyRanges&, bool)
++    {
++        fail(URLFilterParser::UnsupportedCharacterClass);
++    }
++
++    void atomCharacterClassUnicodeProperty(const JSC::Yarr::UnicodePropertyRanges&, bool)
++    {
++        fail(URLFilterParser::UnsupportedCharacterClass);
++    }
++
+     void assertionBOL()
+     {
+         if (hasError())
+@@ -203,7 +223,7 @@ public:
+         fail(URLFilterParser::AtomCharacter);
+     }
+ 
+-    void atomParenthesesSubpatternBegin(bool = true)
++    void atomParenthesesSubpatternBegin(bool = true, std::optional<String> = std::nullopt)
+     {
+         if (hasError())
+             return;
+diff --git a/Source/WebCore/dom/ScriptElement.cpp b/Source/WebCore/dom/ScriptElement.cpp
+index 93e14b7f..4976b0ff 100644
+--- a/Source/WebCore/dom/ScriptElement.cpp
++++ b/Source/WebCore/dom/ScriptElement.cpp
+@@ -24,6 +24,8 @@
+ #include "config.h"
+ #include "ScriptElement.h"
+ 
++#include "ScriptModuleLoader.h"
++
+ #include "CachedResourceLoader.h"
+ #include "CachedResourceRequest.h"
+ #include "CachedScript.h"
+@@ -202,6 +204,16 @@ bool ScriptElement::prepareScript(const TextPosition& scriptStartPosition, Legac
+     if (!m_element.isConnected())
+         return false;
+ 
++    // An import map: nothing to run, but it decides where later module
++    // scripts load from.
++    if (equalLettersIgnoringASCIICase(typeAttributeValue().stripWhiteSpace(), "importmap")) {
++        if (hasSourceAttribute() || !m_element.document().frame() || !m_element.document().moduleLoader())
++            return false;
++        m_alreadyStarted = true;
++        m_element.document().moduleLoader()->registerImportMap(scriptContent(), m_element.document().baseURL());
++        return false;
++    }
++
+     ScriptType scriptType = ScriptType::Classic;
+     if (std::optional<ScriptType> result = determineScriptType(supportLegacyTypes))
+         scriptType = result.value();
+-- 
+2.50.1 (Apple Git-155)
+

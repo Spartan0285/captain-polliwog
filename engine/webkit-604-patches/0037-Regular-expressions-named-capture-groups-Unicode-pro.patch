@@ -1,0 +1,642 @@
+From 28159d1e477a1d95fead951e9a47f8373b8ba56f Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Fri, 18 Sep 2026 17:27:51 -0400
+Subject: [PATCH 37/38] Regular expressions: named capture groups, Unicode
+ property escapes
+
+- (?<name>...), \k<name>, match.groups, $<name> in replacement strings,
+  and the groups argument to replace functions (ES2018). Lookbehind,
+  (?<= and (?<!, is still unsupported.
+- \p{...} and \P{...} in /u patterns (ES2018): General_Category,
+  Script, Script_Extensions and binary properties, with their sets
+  taken from ICU when the pattern is compiled.
+---
+ .../builtins/RegExpPrototype.js               |  22 ++-
+ .../runtime/CommonIdentifiers.h               |   1 +
+ Source/JavaScriptCore/runtime/RegExp.cpp      |  13 +-
+ Source/JavaScriptCore/runtime/RegExp.h        |   7 +
+ .../runtime/RegExpMatchesArray.h              |  11 ++
+ .../runtime/StringPrototype.cpp               |  38 +++++-
+ Source/JavaScriptCore/yarr/YarrParser.h       | 125 +++++++++++++++++-
+ Source/JavaScriptCore/yarr/YarrPattern.cpp    |  89 ++++++++++++-
+ Source/JavaScriptCore/yarr/YarrPattern.h      |  16 +++
+ .../JavaScriptCore/yarr/YarrSyntaxChecker.cpp |   5 +-
+ 10 files changed, 319 insertions(+), 8 deletions(-)
+
+diff --git a/Source/JavaScriptCore/builtins/RegExpPrototype.js b/Source/JavaScriptCore/builtins/RegExpPrototype.js
+index 60a728bc..1a9df562 100644
+--- a/Source/JavaScriptCore/builtins/RegExpPrototype.js
++++ b/Source/JavaScriptCore/builtins/RegExpPrototype.js
+@@ -134,7 +134,7 @@ function replace(strArg, replace)
+ {
+     "use strict";
+ 
+-    function getSubstitution(matched, str, position, captures, replacement)
++    function getSubstitution(matched, str, position, captures, namedCaptures, replacement)
+     {
+         "use strict";
+ 
+@@ -174,6 +174,21 @@ function replace(strArg, replace)
+                         result = result + str.substring(tailPos);
+                     start++;
+                     break;
++                case "<":
++                    // "$<name>": a named group's capture (ES2018).
++                    if (namedCaptures !== @undefined) {
++                        let close = replacement.indexOf(">", start);
++                        if (close !== -1) {
++                            let capture = namedCaptures[replacement.substring(start + 1, close)];
++                            if (capture !== @undefined)
++                                result = result + @toString(capture);
++                            start = close + 1;
++                            break;
++                        }
++                    }
++                    result = result + "$<";
++                    start++;
++                    break;
+                 default:
+                     let chCode = ch.charCodeAt(0);
+                     if (chCode >= 0x30 && chCode <= 0x39) {
+@@ -272,16 +287,19 @@ function replace(strArg, replace)
+         }
+ 
+         let replacement;
++        let namedCaptures = result.groups;
+ 
+         if (functionalReplace) {
+             let replacerArgs = [ matched ].concat(captures.slice(1));
+             replacerArgs.@push(position);
+             replacerArgs.@push(str);
++            if (namedCaptures !== @undefined)
++                replacerArgs.@push(namedCaptures);
+ 
+             let replValue = replace.@apply(@undefined, replacerArgs);
+             replacement = @toString(replValue);
+         } else
+-            replacement = getSubstitution(matched, str, position, captures, replace);
++            replacement = getSubstitution(matched, str, position, captures, namedCaptures, replace);
+ 
+         if (position >= nextSourcePosition && position >= lastPosition) {
+             accumulatedResult = accumulatedResult + str.substring(nextSourcePosition, position) + replacement;
+diff --git a/Source/JavaScriptCore/runtime/CommonIdentifiers.h b/Source/JavaScriptCore/runtime/CommonIdentifiers.h
+index b3a20c30..bf64599b 100644
+--- a/Source/JavaScriptCore/runtime/CommonIdentifiers.h
++++ b/Source/JavaScriptCore/runtime/CommonIdentifiers.h
+@@ -227,6 +227,7 @@
+     macro(fromCharCode) \
+     macro(get) \
+     macro(global) \
++    macro(groups) \
+     macro(go) \
+     macro(has) \
+     macro(hasOwnProperty) \
+diff --git a/Source/JavaScriptCore/runtime/RegExp.cpp b/Source/JavaScriptCore/runtime/RegExp.cpp
+index 60232b77..f2b329b7 100644
+--- a/Source/JavaScriptCore/runtime/RegExp.cpp
++++ b/Source/JavaScriptCore/runtime/RegExp.cpp
+@@ -225,8 +225,19 @@ void RegExp::finishCreation(VM& vm)
+     Yarr::YarrPattern pattern(m_patternString, m_flags, &m_constructionError, vm.stackLimit());
+     if (!isValid())
+         m_state = ParseError;
+-    else
++    else {
+         m_numSubpatterns = pattern.m_numSubpatterns;
++        m_captureGroupNames = pattern.m_captureGroupNames;
++    }
++}
++
++unsigned RegExp::subpatternForName(const String& groupName) const
++{
++    for (unsigned i = 1; i < m_captureGroupNames.size(); ++i) {
++        if (m_captureGroupNames[i] == groupName)
++            return i;
++    }
++    return 0;
+ }
+ 
+ void RegExp::destroy(JSCell* cell)
+diff --git a/Source/JavaScriptCore/runtime/RegExp.h b/Source/JavaScriptCore/runtime/RegExp.h
+index 868a1934..544363cf 100644
+--- a/Source/JavaScriptCore/runtime/RegExp.h
++++ b/Source/JavaScriptCore/runtime/RegExp.h
+@@ -78,6 +78,12 @@ public:
+     
+     unsigned numSubpatterns() const { return m_numSubpatterns; }
+ 
++    // Named capture groups (ES2018): each group's name by its number, null
++    // where unnamed; and the number of a name, 0 if none.
++    bool hasNamedCaptures() const { return !m_captureGroupNames.isEmpty(); }
++    const Vector<String>& captureGroupNames() const { return m_captureGroupNames; }
++    unsigned subpatternForName(const String&) const;
++
+     bool hasCode()
+     {
+         return m_state != NotCompiled;
+@@ -133,6 +139,7 @@ private:
+     RegExpFlags m_flags;
+     const char* m_constructionError;
+     unsigned m_numSubpatterns;
++    Vector<String> m_captureGroupNames;
+ #if ENABLE(REGEXP_TRACING)
+     double m_rtMatchOnlyTotalSubjectStringLen;
+     double m_rtMatchTotalSubjectStringLen;
+diff --git a/Source/JavaScriptCore/runtime/RegExpMatchesArray.h b/Source/JavaScriptCore/runtime/RegExpMatchesArray.h
+index a4c22a87..69860072 100644
+--- a/Source/JavaScriptCore/runtime/RegExpMatchesArray.h
++++ b/Source/JavaScriptCore/runtime/RegExpMatchesArray.h
+@@ -128,6 +128,17 @@ ALWAYS_INLINE JSArray* createRegExpMatchesArray(
+             array->initializeIndexWithoutBarrier(scope, i, value, ArrayWithContiguous);
+         }
+     }
++
++    // match.groups: each named group's capture, by name.
++    if (UNLIKELY(regExp->hasNamedCaptures())) {
++        JSObject* groups = JSFinalObject::create(vm, globalObject->nullPrototypeObjectStructure());
++        const Vector<String>& names = regExp->captureGroupNames();
++        for (unsigned i = 1; i < names.size(); ++i) {
++            if (!names[i].isNull())
++                groups->putDirect(vm, Identifier::fromString(&vm, names[i]), array->getIndexQuickly(i));
++        }
++        array->putDirect(vm, vm.propertyNames->groups, groups);
++    }
+     return array;
+ }
+ 
+diff --git a/Source/JavaScriptCore/runtime/StringPrototype.cpp b/Source/JavaScriptCore/runtime/StringPrototype.cpp
+index 68a010ca..be494dcf 100644
+--- a/Source/JavaScriptCore/runtime/StringPrototype.cpp
++++ b/Source/JavaScriptCore/runtime/StringPrototype.cpp
+@@ -179,6 +179,22 @@ StringPrototype* StringPrototype::create(VM& vm, JSGlobalObject* globalObject, S
+ 
+ // ------------------------------ Functions --------------------------
+ 
++// The last argument a replace function gets when the pattern has named
++// groups (ES2018): each named group's capture, by name.
++static JSObject* namedCapturesObject(VM& vm, JSGlobalObject* globalObject, RegExp* regExp, const String& source, const int* ovector)
++{
++    JSObject* groups = JSFinalObject::create(vm, globalObject->nullPrototypeObjectStructure());
++    const Vector<String>& names = regExp->captureGroupNames();
++    for (unsigned i = 1; i < names.size(); ++i) {
++        if (names[i].isNull())
++            continue;
++        int start = ovector[i * 2];
++        JSValue value = start < 0 ? jsUndefined() : jsSubstring(&vm, source, start, ovector[i * 2 + 1] - start);
++        groups->putDirect(vm, Identifier::fromString(&vm, names[i]), value);
++    }
++    return groups;
++}
++
+ static NEVER_INLINE String substituteBackreferencesSlow(StringView replacement, StringView source, const int* ovector, RegExp* reg, size_t i)
+ {
+     StringBuilder substitutedReplacement;
+@@ -227,6 +243,20 @@ static NEVER_INLINE String substituteBackreferencesSlow(StringView replacement,
+                 continue;
+             backrefStart = ovector[2 * backrefIndex];
+             backrefLength = ovector[2 * backrefIndex + 1] - backrefStart;
++        } else if (ref == '<' && reg && reg->hasNamedCaptures()) {
++            // "$<name>": a named group's capture (ES2018).
++            size_t close = replacement.find('>', i + 2);
++            if (close == notFound)
++                continue;
++            unsigned backrefIndex = reg->subpatternForName(replacement.substring(i + 2, close - i - 2).toString());
++            advance = close - i - 1;
++            if (backrefIndex) {
++                backrefStart = ovector[2 * backrefIndex];
++                backrefLength = ovector[2 * backrefIndex + 1] - backrefStart;
++            } else {
++                backrefStart = -1;
++                backrefLength = 0;
++            }
+         } else
+             continue;
+ 
+@@ -512,7 +542,7 @@ static ALWAYS_INLINE EncodedJSValue replaceUsingRegExpSearch(
+     // This is either a loop (if global is set) or a one-way (if not).
+     if (global && callType == CallType::JS) {
+         // regExp->numSubpatterns() + 1 for pattern args, + 2 for match start and string
+-        int argCount = regExp->numSubpatterns() + 1 + 2;
++        int argCount = regExp->numSubpatterns() + 1 + 2 + (regExp->hasNamedCaptures() ? 1 : 0);
+         JSFunction* func = jsCast<JSFunction*>(replaceValue);
+         CachedCall cachedCall(exec, func, argCount);
+         RETURN_IF_EXCEPTION(scope, encodedJSValue());
+@@ -540,6 +570,8 @@ static ALWAYS_INLINE EncodedJSValue replaceUsingRegExpSearch(
+ 
+                 cachedCall.appendArgument(jsNumber(result.start));
+                 cachedCall.appendArgument(string);
++                if (regExp->hasNamedCaptures())
++                    cachedCall.appendArgument(namedCapturesObject(vm, exec->lexicalGlobalObject(), regExp, source, ovector));
+ 
+                 cachedCall.setThis(jsUndefined());
+                 JSValue jsResult = cachedCall.call();
+@@ -581,6 +613,8 @@ static ALWAYS_INLINE EncodedJSValue replaceUsingRegExpSearch(
+ 
+                 cachedCall.appendArgument(jsNumber(result.start));
+                 cachedCall.appendArgument(string);
++                if (regExp->hasNamedCaptures())
++                    cachedCall.appendArgument(namedCapturesObject(vm, exec->lexicalGlobalObject(), regExp, source, ovector));
+ 
+                 cachedCall.setThis(jsUndefined());
+                 JSValue jsResult = cachedCall.call();
+@@ -624,6 +658,8 @@ static ALWAYS_INLINE EncodedJSValue replaceUsingRegExpSearch(
+ 
+                 args.append(jsNumber(result.start));
+                 args.append(string);
++                if (regExp->hasNamedCaptures())
++                    args.append(namedCapturesObject(vm, exec->lexicalGlobalObject(), regExp, source, ovector));
+ 
+                 JSValue replacement = call(exec, replaceValue, callType, callData, jsUndefined(), args);
+                 RETURN_IF_EXCEPTION(scope, encodedJSValue());
+diff --git a/Source/JavaScriptCore/yarr/YarrParser.h b/Source/JavaScriptCore/yarr/YarrParser.h
+index 4bd7e0fb..f6ab027a 100644
+--- a/Source/JavaScriptCore/yarr/YarrParser.h
++++ b/Source/JavaScriptCore/yarr/YarrParser.h
+@@ -28,6 +28,7 @@
+ #include "Yarr.h"
+ #include "YarrPattern.h"
+ #include <wtf/ASCIICType.h>
++#include <wtf/text/StringBuilder.h>
+ #include <wtf/text/WTFString.h>
+ 
+ namespace JSC { namespace Yarr {
+@@ -193,10 +194,39 @@ private:
+             m_delegate.atomCharacterClassEnd();
+         }
+ 
++        /*
++         * atomUnicodePropertyClass():
++         *
++         * Adds the characters of a Unicode property escape, \p{...} or
++         * \P{...}, called by parseEscape().
++         */
++        void atomUnicodePropertyClass(const UnicodePropertyRanges& ranges, bool invert)
++        {
++            switch (m_state) {
++            case CachedCharacter:
++                m_delegate.atomCharacterClassAtom(m_character);
++                FALLTHROUGH;
++            case Empty:
++            case AfterCharacterClass:
++                m_state = AfterCharacterClass;
++                m_delegate.atomCharacterClassUnicodeProperty(ranges, invert);
++                return;
++            case CachedCharacterHyphen:
++                m_delegate.atomCharacterClassAtom(m_character);
++                m_delegate.atomCharacterClassAtom('-');
++                FALLTHROUGH;
++            case AfterCharacterClassHyphen:
++                m_delegate.atomCharacterClassUnicodeProperty(ranges, invert);
++                m_state = Empty;
++                return;
++            }
++        }
++
+         // parseEscape() should never call these delegate methods when
+         // invoked with inCharacterClass set.
+         NO_RETURN_DUE_TO_ASSERT void assertionWordBoundary(bool) { RELEASE_ASSERT_NOT_REACHED(); }
+         NO_RETURN_DUE_TO_ASSERT void atomBackReference(unsigned) { RELEASE_ASSERT_NOT_REACHED(); }
++        NO_RETURN_DUE_TO_ASSERT void atomNamedBackReference(const String&) { RELEASE_ASSERT_NOT_REACHED(); }
+ 
+     private:
+         Delegate& m_delegate;
+@@ -221,6 +251,17 @@ private:
+         , m_isUnicode(isUnicode)
+         , m_parenthesesNestingDepth(0)
+     {
++        // Whether the pattern has named groups decides what \k means.
++        for (unsigned i = 0; i + 3 < m_size; ++i) {
++            if (m_data[i] == '\\') {
++                ++i;
++                continue;
++            }
++            if (m_data[i] == '(' && m_data[i + 1] == '?' && m_data[i + 2] == '<' && m_data[i + 3] != '=' && m_data[i + 3] != '!') {
++                m_hasNamedGroups = true;
++                break;
++            }
++        }
+     }
+ 
+     // The handling of IdentityEscapes is different depending on the unicode flag.
+@@ -295,6 +336,58 @@ private:
+             }
+             break;
+ 
++        // Named back reference (ES2018): \k<name>
++        case 'k': {
++            consume();
++            if (!m_isUnicode && !m_hasNamedGroups) {
++                delegate.atomPatternCharacter('k');
++                break;
++            }
++            String groupName;
++            if (!inCharacterClass && tryConsume('<') && tryConsumeGroupName(groupName)) {
++                delegate.atomNamedBackReference(groupName);
++                break;
++            }
++            m_err = YarrPattern::InvalidNamedBackReference;
++            break;
++        }
++
++        // Unicode property escape (ES2018): \p{Name}, \p{Name=Value}, \P{...}
++        case 'p':
++        case 'P': {
++            int escapeCharacter = consume();
++            if (!m_isUnicode) {
++                delegate.atomPatternCharacter(escapeCharacter);
++                break;
++            }
++            if (!tryConsume('{')) {
++                m_err = YarrPattern::InvalidUnicodePropertyExpression;
++                break;
++            }
++            StringBuilder expression;
++            while (!atEndOfPattern() && peek() != '}') {
++                int ch = consume();
++                if (!isASCIIAlphanumeric(ch) && ch != '_' && ch != '=') {
++                    m_err = YarrPattern::InvalidUnicodePropertyExpression;
++                    break;
++                }
++                expression.append(static_cast<UChar>(ch));
++            }
++            if (m_err)
++                break;
++            if (!tryConsume('}')) {
++                m_err = YarrPattern::InvalidUnicodePropertyExpression;
++                break;
++            }
++            UnicodePropertyRanges ranges;
++            if (!unicodePropertyRanges(expression.toString(), ranges)) {
++                m_err = YarrPattern::InvalidUnicodePropertyExpression;
++                break;
++            }
++            delegate.atomUnicodePropertyClass(ranges, escapeCharacter == 'P');
++            break;
++        }
++
+         // CharacterClassEscape
+         case 'd':
+             consume();
+@@ -599,7 +692,19 @@ private:
+             case '!':
+                 m_delegate.atomParentheticalAssertionBegin(true);
+                 break;
+-            
++
++            case '<': {
++                // Named capture group (ES2018): (?<name>...). Lookbehind,
++                // (?<= and (?<!, is not supported.
++                String groupName;
++                if (!tryConsumeGroupName(groupName)) {
++                    m_err = YarrPattern::ParenthesesTypeInvalid;
++                    break;
++                }
++                m_delegate.atomParenthesesSubpatternBegin(true, groupName);
++                break;
++            }
++
+             default:
+                 m_err = YarrPattern::ParenthesesTypeInvalid;
+             }
+@@ -880,6 +985,23 @@ private:
+         return n;
+     }
+ 
++    // A group name after "(?<" or "\\k<": an identifier, then '>'.
++    bool tryConsumeGroupName(String& name)
++    {
++        StringBuilder builder;
++        while (!atEndOfPattern() && peek() != '>') {
++            int ch = consume();
++            bool isStart = isASCIIAlpha(ch) || ch == '$' || ch == '_' || ch > 0x7f;
++            if (!(isStart || (builder.length() && isASCIIDigit(ch))))
++                return false;
++            builder.append(static_cast<UChar>(ch));
++        }
++        if (!builder.length() || !tryConsume('>'))
++            return false;
++        name = builder.toString();
++        return true;
++    }
++
+     Delegate& m_delegate;
+     unsigned m_backReferenceLimit;
+     YarrPattern::ErrorCode m_err;
+@@ -888,6 +1010,7 @@ private:
+     unsigned m_index;
+     bool m_isUnicode;
+     unsigned m_parenthesesNestingDepth;
++    bool m_hasNamedGroups { false };
+ 
+     // Derived by empirical testing of compile time in PCRE and WREC.
+     static const unsigned MAX_PATTERN_SIZE = 1024 * 1024;
+diff --git a/Source/JavaScriptCore/yarr/YarrPattern.cpp b/Source/JavaScriptCore/yarr/YarrPattern.cpp
+index 1c2dd75d..7e77b50b 100644
+--- a/Source/JavaScriptCore/yarr/YarrPattern.cpp
++++ b/Source/JavaScriptCore/yarr/YarrPattern.cpp
+@@ -31,6 +31,7 @@
+ #include "YarrCanonicalize.h"
+ #include "YarrParser.h"
+ #include <wtf/Vector.h>
++#include <unicode/uset.h>
+ #include <wtf/WTFThreadData.h>
+ 
+ using namespace WTF;
+@@ -402,6 +403,34 @@ public:
+         }
+     }
+ 
++    void atomUnicodePropertyClass(const UnicodePropertyRanges& ranges, bool invert)
++    {
++        CharacterClassConstructor constructor(m_pattern.ignoreCase(), m_pattern.unicode() ? CanonicalMode::Unicode : CanonicalMode::UCS2);
++        for (auto& range : ranges)
++            constructor.putRange(range.first, range.second);
++        auto newCharacterClass = constructor.charClass();
++        m_alternative->m_terms.append(PatternTerm(newCharacterClass.get(), invert));
++        m_pattern.m_userCharacterClasses.append(WTFMove(newCharacterClass));
++    }
++
++    void atomCharacterClassUnicodeProperty(const UnicodePropertyRanges& ranges, bool invert)
++    {
++        if (!invert) {
++            for (auto& range : ranges)
++                m_characterClassConstructor.putRange(range.first, range.second);
++            return;
++        }
++        // \P{...} in a class: everything between the property's ranges.
++        UChar32 next = 0;
++        for (auto& range : ranges) {
++            if (range.first > next)
++                m_characterClassConstructor.putRange(next, range.first - 1);
++            next = range.second + 1;
++        }
++        if (next <= UCHAR_MAX_VALUE)
++            m_characterClassConstructor.putRange(next, UCHAR_MAX_VALUE);
++    }
++
+     void atomCharacterClassEnd()
+     {
+         auto newCharacterClass = m_characterClassConstructor.charClass();
+@@ -409,11 +438,17 @@ public:
+         m_pattern.m_userCharacterClasses.append(WTFMove(newCharacterClass));
+     }
+ 
+-    void atomParenthesesSubpatternBegin(bool capture = true)
++    void atomParenthesesSubpatternBegin(bool capture = true, std::optional<String> groupName = std::nullopt)
+     {
+         unsigned subpatternId = m_pattern.m_numSubpatterns + 1;
+         if (capture)
+             m_pattern.m_numSubpatterns++;
++        if (groupName) {
++            if (m_pattern.m_captureGroupNames.size() <= subpatternId)
++                m_pattern.m_captureGroupNames.resize(subpatternId + 1);
++            m_pattern.m_captureGroupNames[subpatternId] = *groupName;
++            m_pattern.m_namedGroupToParenIndex.add(*groupName, subpatternId);
++        }
+ 
+         auto parenthesesDisjunction = std::make_unique<PatternDisjunction>(m_alternative);
+         m_alternative->m_terms.append(PatternTerm(PatternTerm::TypeParenthesesSubpattern, subpatternId, parenthesesDisjunction.get(), capture, false));
+@@ -460,6 +495,17 @@ public:
+         m_invertParentheticalAssertion = false;
+     }
+ 
++    void atomNamedBackReference(const String& groupName)
++    {
++        auto index = m_pattern.m_namedGroupToParenIndex.find(groupName);
++        if (index == m_pattern.m_namedGroupToParenIndex.end()) {
++            // A group further on: matches nothing yet, like a forward \1.
++            m_alternative->m_terms.append(PatternTerm::ForwardReference());
++            return;
++        }
++        atomBackReference(index->value);
++    }
++
+     void atomBackReference(unsigned subpatternId)
+     {
+         ASSERT(subpatternId);
+@@ -894,6 +940,43 @@ private:
+     bool m_invertParentheticalAssertion;
+ };
+ 
++bool unicodePropertyRanges(const String& expression, UnicodePropertyRanges& ranges)
++{
++    String name = expression;
++    String value;
++    size_t equals = expression.find('=');
++    if (equals != notFound) {
++        name = expression.left(equals);
++        value = expression.substring(equals + 1);
++        // Only these take a value in ECMAScript.
++        if (name != "General_Category" && name != "gc" && name != "Script" && name != "sc"
++            && name != "Script_Extensions" && name != "scx")
++            return false;
++    }
++    if (name.isEmpty() || (equals != notFound && value.isEmpty()))
++        return false;
++
++    // ICU knows the properties, their aliases and their code points.
++    Vector<UChar> nameCharacters = name.charactersWithNullTermination();
++    Vector<UChar> valueCharacters = value.charactersWithNullTermination();
++    UErrorCode status = U_ZERO_ERROR;
++    USet* set = uset_openEmpty();
++    uset_applyPropertyAlias(set, nameCharacters.data(), name.length(), valueCharacters.data(), value.length(), &status);
++    if (U_FAILURE(status)) {
++        uset_close(set);
++        return false;
++    }
++    int32_t itemCount = uset_getItemCount(set);
++    for (int32_t i = 0; i < itemCount; ++i) {
++        UChar32 start;
++        UChar32 end;
++        if (!uset_getItem(set, i, &start, &end, nullptr, 0, &status) && U_SUCCESS(status))
++            ranges.append(std::make_pair(start, end));
++    }
++    uset_close(set);
++    return true;
++}
++
+ const char* YarrPattern::errorMessage(YarrPattern::ErrorCode error)
+ {
+ #define REGEXP_ERROR_PREFIX "Invalid regular expression: "
+@@ -915,7 +998,9 @@ const char* YarrPattern::errorMessage(YarrPattern::ErrorCode error)
+         REGEXP_ERROR_PREFIX "invalid escaped character for unicode pattern",  // InvalidIdentityEscape
+         REGEXP_ERROR_PREFIX "too many nested disjunctions",                   // TooManyDisjunctions
+         REGEXP_ERROR_PREFIX "pattern exceeds string length limits",           // OffsetTooLarge
+-        REGEXP_ERROR_PREFIX "invalid flags"                                   // InvalidRegularExpressionFlags
++        REGEXP_ERROR_PREFIX "invalid flags",                                  // InvalidRegularExpressionFlags
++        REGEXP_ERROR_PREFIX "invalid \\k<> named back reference",             // InvalidNamedBackReference
++        REGEXP_ERROR_PREFIX "invalid property expression"                     // InvalidUnicodePropertyExpression
+     };
+ 
+     return errorMessages[error];
+diff --git a/Source/JavaScriptCore/yarr/YarrPattern.h b/Source/JavaScriptCore/yarr/YarrPattern.h
+index bb1b779e..ca2d8d6c 100644
+--- a/Source/JavaScriptCore/yarr/YarrPattern.h
++++ b/Source/JavaScriptCore/yarr/YarrPattern.h
+@@ -28,11 +28,19 @@
+ 
+ #include "RegExpKey.h"
+ #include <wtf/CheckedArithmetic.h>
++#include <wtf/HashMap.h>
++#include <wtf/text/StringHash.h>
+ #include <wtf/Vector.h>
+ #include <wtf/text/WTFString.h>
+ 
+ namespace JSC { namespace Yarr {
+ 
++// The code point ranges of a Unicode property escape's set, \p{...}.
++typedef Vector<std::pair<UChar32, UChar32>> UnicodePropertyRanges;
++// Looks up "Name" or "Name=Value" (General_Category, Script,
++// Script_Extensions, or a binary property); false if there is no such property.
++bool unicodePropertyRanges(const String& expression, UnicodePropertyRanges&);
++
+ struct PatternDisjunction;
+ 
+ struct CharacterRange {
+@@ -334,6 +342,8 @@ struct YarrPattern {
+         TooManyDisjunctions,
+         OffsetTooLarge,
+         InvalidRegularExpressionFlags,
++        InvalidNamedBackReference,
++        InvalidUnicodePropertyExpression,
+         NumberOfErrorCodes
+     };
+     
+@@ -363,6 +373,8 @@ struct YarrPattern {
+ 
+         m_disjunctions.clear();
+         m_userCharacterClasses.clear();
++        m_captureGroupNames.clear();
++        m_namedGroupToParenIndex.clear();
+     }
+ 
+     bool containsIllegalBackReference()
+@@ -465,6 +477,10 @@ struct YarrPattern {
+     PatternDisjunction* m_body;
+     Vector<std::unique_ptr<PatternDisjunction>, 4> m_disjunctions;
+     Vector<std::unique_ptr<CharacterClass>> m_userCharacterClasses;
++    // Named capture groups: each group's name by its subpattern number
++    // (null where unnamed), and the other way round.
++    Vector<String> m_captureGroupNames;
++    HashMap<String, unsigned> m_namedGroupToParenIndex;
+ 
+ private:
+     const char* compile(const String& patternString, void* stackLimit);
+diff --git a/Source/JavaScriptCore/yarr/YarrSyntaxChecker.cpp b/Source/JavaScriptCore/yarr/YarrSyntaxChecker.cpp
+index 218f451a..dad748b9 100644
+--- a/Source/JavaScriptCore/yarr/YarrSyntaxChecker.cpp
++++ b/Source/JavaScriptCore/yarr/YarrSyntaxChecker.cpp
+@@ -42,7 +42,10 @@ public:
+     void atomCharacterClassRange(UChar, UChar) {}
+     void atomCharacterClassBuiltIn(BuiltInCharacterClassID, bool) {}
+     void atomCharacterClassEnd() {}
+-    void atomParenthesesSubpatternBegin(bool = true) {}
++    void atomParenthesesSubpatternBegin(bool = true, std::optional<String> = std::nullopt) {}
++    void atomNamedBackReference(const String&) {}
++    void atomUnicodePropertyClass(const UnicodePropertyRanges&, bool) {}
++    void atomCharacterClassUnicodeProperty(const UnicodePropertyRanges&, bool) {}
+     void atomParentheticalAssertionBegin(bool = false) {}
+     void atomParenthesesEnd() {}
+     void atomBackReference(unsigned) {}
+-- 
+2.50.1 (Apple Git-155)
+

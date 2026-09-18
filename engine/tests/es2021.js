@@ -121,6 +121,8 @@ check("big decimal", 12_345_678_901_234, 12345678901234);
 var \u2118 = "weierstrass";
 check("U+2118 identifier", \u2118, "weierstrass");
 check("U+2118 by eval", eval("var \u2118x = 1; \u2118x"), 1);
+check("astral identifier", eval("var \uD835\uDC65 = 5; \uD835\uDC65 * 2"), 10);
+check("astral identifier part", eval("var a\uD835\uDC65b = 3; a\uD835\uDC65b"), 3);
 
 // Syntax that must still be rejected.
 var syntaxErrors = ["1 ||= 2", "f() &&= 1", "a ?? = 1", "1__0", "1_", "0x_1"];
