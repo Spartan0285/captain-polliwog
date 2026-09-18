@@ -35,6 +35,10 @@
     // finishes, so a page that stops making progress can say what it waits on.
     NSMutableDictionary *pendingResources;
     unsigned  nextResourceID;
+    // Reader: showing a page's article on its own (see CPReader).
+    id        reader;           // a CPReader fetching the page, if any
+    BOOL      showingReader;
+    BOOL      readerLoadPending;
 }
 
 - (id)initWithOwner:(id)anOwner;
@@ -66,5 +70,12 @@
 // says; used after the choice for this site changes.
 - (void)reloadForSiteMode;
 - (void)stopLoading;
+
+// Reader: the page's article alone, with no scripts and small images. From
+// the page as loaded when it has finished; otherwise the page's HTML is
+// fetched on its own, which is the quick way through a heavy page.
+- (BOOL)isShowingReader;
+- (BOOL)canShowReader;
+- (void)toggleReader;
 
 @end

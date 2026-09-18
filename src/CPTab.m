@@ -6,6 +6,7 @@
 #import "CPAppDelegate.h"
 #import "CPDebugSnapshot.h"
 #import "CPDownloadsController.h"
+#import "CPReader.h"
 #import "CPSiteModes.h"
 #import "CPScriptWatchdog.h"
 #import "CPUserScripts.h"
@@ -179,6 +180,8 @@ static NSString *CPEscapeHTML(NSString *text)
 
 - (void)dealloc
 {
+    [reader cancel];
+    [reader release];
     [self destroyWebView];
     [URL release];
     [title release];
@@ -211,6 +214,8 @@ static NSString *CPEscapeHTML(NSString *text)
     if (webView == nil)
         return;
     savedScrollOffset = [[webView stringByEvaluatingJavaScriptFromString:@"window.pageYOffset"] floatValue];
+    // Coming back reloads the page itself, not its reader version.
+    showingReader = NO;
     [self destroyWebView];
     [self setLoading:NO];
     if (CPDebugLogging())
@@ -334,6 +339,80 @@ static NSString *CPEscapeHTML(NSString *text)
 
 #pragma mark Progress
 
+- (BOOL)isShowingReader
+{
+    return showingReader || reader != nil;
+}
+
+- (BOOL)canShowReader
+{
+    NSString *scheme = [[URL scheme] lowercaseString];
+    return [scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"];
+}
+
+- (void)showReaderHTML:(NSString *)html forURL:(NSURL *)aURL
+{
+    if (html == nil)
+        html = [NSString stringWithFormat:
+                @"<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Reader</title></head>"
+                @"<body style=\"font: 13px 'Lucida Grande', Helvetica, sans-serif; margin: 3em auto; max-width: 30em; color: #444\">"
+                @"<p><b>Reader found no article on this page.</b></p>"
+                @"<p>Some pages build their text with scripts, which Reader leaves out. "
+                @"<a href=\"%@\">Show the original page</a>.</p></body></html>",
+                CPEscapeHTML([aURL absoluteString])];
+    readerLoadPending = YES;
+    if (CPDebugLogging())
+        NSLog(@"Captain Polliwog: reader page for %@ (%u characters)", aURL, [html length]);
+    [[[self webView] mainFrame] loadHTMLString:html baseURL:aURL];
+}
+
+- (void)toggleReader
+{
+    NSString *html;
+
+    if ([self isShowingReader]) {
+        BOOL wasShowing = showingReader;
+        [reader cancel];
+        [reader release];
+        reader = nil;
+        showingReader = NO;
+        if (wasShowing && URL != nil)
+            [self loadURL:URL];
+        [self changed];
+        return;
+    }
+    if (![self canShowReader])
+        return;
+
+    // A page that has finished loading is read as it stands, scripts' work
+    // included, and at once.
+    if (webView != nil && !loading) {
+        html = [CPReader readerHTMLForDocument:[[webView mainFrame] DOMDocument] URL:URL];
+        if (html != nil) {
+            [self showReaderHTML:html forURL:URL];
+            return;
+        }
+    }
+
+    // Otherwise stop the page and fetch its HTML alone.
+    [[self webView] stopLoading:nil];
+    reader = [[CPReader alloc] initWithDelegate:self];
+    [(CPReader *)reader loadURL:URL userAgent:[webView customUserAgent]];
+    [self setLoading:YES];
+    [self changed];
+}
+
+- (void)reader:(CPReader *)aReader didMakeHTML:(NSString *)html forURL:(NSURL *)aURL
+{
+    if (aReader != reader)
+        return;
+    [reader autorelease];
+    reader = nil;
+    [self setLoading:NO];
+    [self showReaderHTML:html forURL:aURL];
+    [self changed];
+}
+
 - (void)progressChanged:(NSNotification *)notification
 {
     BOOL finished = [[notification name] isEqualToString:WebViewProgressFinishedNotification];
@@ -416,6 +495,11 @@ fromDataSource:(WebDataSource *)dataSource
 
     if (frame != [sender mainFrame])
         return;
+    // Anything that replaces the reader page (a link, Back) leaves Reader.
+    showingReader = readerLoadPending;
+    readerLoadPending = NO;
+    if (CPDebugLogging())
+        NSLog(@"Captain Polliwog: committed %@%@", [[[frame dataSource] request] URL], showingReader ? @" (reader)" : @"");
     unreachableURL = [[frame dataSource] unreachableURL];
     [self setURL:(unreachableURL != nil ? unreachableURL : [[[frame dataSource] request] URL])];
     [self setTitle:nil];
@@ -456,6 +540,8 @@ fromDataSource:(WebDataSource *)dataSource
     [self setLoading:NO];
     [self changed];
 
+    if (CPDebugLogging())
+        NSLog(@"Captain Polliwog: provisional load failed (%@ %d)", [error domain], [error code]);
     if ([[error domain] isEqualToString:NSURLErrorDomain] && [error code] == NSURLErrorCancelled)
         return;
     if ([[error domain] isEqualToString:WebKitErrorDomain] &&
@@ -495,8 +581,9 @@ decisionListener:(id<WebPolicyDecisionListener>)listener
     // Moving to a site with a different site version: switch identity. If
     // WebKit has already written the old one into this request, load it
     // again so the site sees the new one (except when going back or forward,
-    // where a fresh load would disturb the history).
-    if (frame == [sender mainFrame] && [self applySiteModeForURL:[request URL]] &&
+    // where a fresh load would disturb the history). The reader page is
+    // local HTML, never reloaded.
+    if (frame == [sender mainFrame] && !readerLoadPending && [self applySiteModeForURL:[request URL]] &&
         type != WebNavigationTypeBackForward) {
         NSString *sent = [request valueForHTTPHeaderField:@"User-Agent"];
         if (sent != nil && ![sent isEqualToString:[sender userAgentForURL:[request URL]]]) {

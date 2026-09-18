@@ -379,6 +379,16 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     // The test scripts photograph the window once the selected page is in.
     if (selectedWasLoading && ![tab isLoading] && ![tab isDiscarded]) {
         if (CPDebugSnapshotPath() != nil) {
+            // CPDebugReader: photograph the page's Reader version instead.
+            static BOOL switchedToReader = NO;
+            if ([[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugReader"] && !switchedToReader) {
+                switchedToReader = YES;
+                NSLog(@"Captain Polliwog: finished %@, switching to Reader", [tab URL]);
+                // Not from inside the load that just finished.
+                [tab performSelector:@selector(toggleReader) withObject:nil afterDelay:0.5];
+                selectedWasLoading = YES;
+                return;
+            }
             NSLog(@"Captain Polliwog: finished %@", [tab URL]);
             [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(writeDebugSnapshot) object:nil];
             [self performSelector:@selector(writeDebugSnapshot) withObject:nil afterDelay:2.0];
@@ -499,6 +509,12 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [selectedTab reloadForSiteMode];
 }
 
+- (IBAction)toggleReader:(id)sender
+{
+    [[self selectedTab] toggleReader];
+    [self updateChromeForSelectedTab];
+}
+
 - (IBAction)makeTextLarger:(id)sender
 {
     [[selectedTab webView] makeTextLarger:sender];
@@ -552,6 +568,10 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         return (page != nil && [page canMakeTextSmaller]);
     if (action == @selector(selectNextTab:) || action == @selector(selectPreviousTab:))
         return ([tabs count] > 1);
+    if (action == @selector(toggleReader:)) {
+        [item setState:[selectedTab isShowingReader] ? NSOnState : NSOffState];
+        return [selectedTab isShowingReader] || [selectedTab canShowReader];
+    }
     if (action == @selector(setSiteMode:)) {
         NSURL *site = [selectedTab URL];
         BOOL applies = [CPSiteModes appliesToURL:site];

@@ -64,6 +64,23 @@ check("flags string", /x/gims.flags, "gims");
 check("RegExp constructor s", new RegExp("^.$", "s").test("\r"), true);
 check("dotAll with u", /^.$/su.test("\u2028"), true);
 
+// Emoji properties, newer than the bundled ICU.
+check("Extended_Pictographic", /^\p{Extended_Pictographic}$/u.test("\u{1F600}"), true);
+check("Emoji_Presentation", /\p{Emoji_Presentation}/u.test("\u00A9"), false);
+check("Emoji", /\p{Emoji}/u.test("\u00A9"), true);
+check("EPres alias", /\p{EPres}/u.test("\u{1F680}"), true);
+
+// Lookbehind.
+check("positive lookbehind", "price: $42".match(/(?<=\$)\d+/)[0], "42");
+check("negative lookbehind", "x1 $2 y3".match(/(?<!\$)\b\d/g), null);
+check("negative lookbehind finds", "$1 2".replace(/(?<!\$)\d/g, "#"), "$1 #");
+check("variable length", "https://a.example/path/x".match(/(?<=https:\/\/[^/]+\/)(.*)/)[1], "path/x");
+check("groups after keep numbers", /(?<=(a))(b)/.exec("ab")[2], "b");
+check("at the start", /(?<=^)a/.test("a"), true);
+check("case-insensitive", /(?<=X)y/i.test("xy"), true);
+check("lookbehind in replace", "a1b2".replace(/(?<=[a-z])\d/g, "_"), "a_b_");
+check("nested lookbehind", /(?<=(?<!b)a)c/.test("ac") && !/(?<=(?<!b)a)c/.test("bac"), true);
+
 var syntaxErrors = ["/\\p{Nonsense}/u", "/\\p{L/u", "/(?<1a>x)/", "/(?<a>x)\\k<b/u", "/\\p{Script}/u"];
 for (var i = 0; i < syntaxErrors.length; i++) {
     var threw = false;

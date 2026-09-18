@@ -117,6 +117,11 @@ check("binary separators", 0b1010_1010, 170);
 check("octal separators", 0o7_7, 63);
 check("big decimal", 12_345_678_901_234, 12345678901234);
 
+// Identifiers use Unicode ID_Start and ID_Continue.
+var \u2118 = "weierstrass";
+check("U+2118 identifier", \u2118, "weierstrass");
+check("U+2118 by eval", eval("var \u2118x = 1; \u2118x"), 1);
+
 // Syntax that must still be rejected.
 var syntaxErrors = ["1 ||= 2", "f() &&= 1", "a ?? = 1", "1__0", "1_", "0x_1"];
 for (var i = 0; i < syntaxErrors.length; i++) {
