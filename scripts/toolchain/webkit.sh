@@ -17,7 +17,10 @@ shift 2 || true
 MAC_SRC=${MAC_SRC:-/Users/adam/polliwog-build/webkit-604}
 SRC=$HOME/src/webkit-604
 BUILD=$HOME/build/$VARIANT
+# Libraries bundled as Leopard WebKit bundles them (built by the other
+# scripts here): ICU, SQLite, libxml2/libxslt, and OTS for web fonts.
 ICU=/opt/ppc/icu/lib/libicucore.dylib
+OTS="/opt/ppc/ots/lib/libots.a;/opt/ppc/ots/lib/libwoff2.a;/opt/ppc/ots/lib/libbrotli.a;/opt/ppc/ots/lib/liblz4.a"
 
 case $VARIANT in
     leopard-g4) TARGET=10.5; CPU="-mcpu=7400 -maltivec" ;;
@@ -40,7 +43,11 @@ configure)
         -DENABLE_JIT=OFF -DENABLE_DFG_JIT=OFF -DENABLE_FTL_JIT=OFF -DENABLE_API_TESTS=OFF \
         -DPOLLIWOG_ENABLE_WEBKIT2=OFF \
         -DICU_INCLUDE_DIR=/opt/ppc/icu/include \
-        -DICU_LIBRARY=$ICU -DICU_I18N_LIBRARY=$ICU -DICU_DATA_LIBRARY=$ICU
+        -DICU_LIBRARY=$ICU -DICU_I18N_LIBRARY=$ICU -DICU_DATA_LIBRARY=$ICU \
+        -DSQLITE3_LIBRARY=/opt/ppc/sqlite/lib/libsqlite3.dylib -DSQLITE3_INCLUDE_DIR=/opt/ppc/sqlite/include \
+        -DXML2_LIBRARY=/opt/ppc/xml/lib/libxml2.dylib -DLIBXML2_INCLUDE_DIR=/opt/ppc/xml/include/libxml2 \
+        -DXSLT_LIBRARY=/opt/ppc/xml/lib/libxslt.dylib -DLIBXSLT_INCLUDE_DIR=/opt/ppc/xml/include \
+        -DOTS_INCLUDE_DIR=/opt/ppc/ots/include -DOTS_LIBRARIES="$OTS"
     ;;
 build)
     cd "$BUILD"

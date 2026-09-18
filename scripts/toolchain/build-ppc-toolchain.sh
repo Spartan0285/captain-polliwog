@@ -43,7 +43,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential clang llvm-dev \
     libxml2-dev uuid-dev libssl-dev cmake git texinfo flex bison gperf libgmp-dev \
     libmpfr-dev libmpc-dev zlib1g-dev python2.7 ruby perl distcc autoconf automake \
-    libtool wget xz-utils unzip file
+    libtool wget xz-utils unzip file pkg-config rsync
 
 mkdir -p ~/src && cd ~/src
 sudo mkdir -p /opt/ppc/SDKs
@@ -139,4 +139,9 @@ if [ ! -f /opt/ppc/icu/lib/libicucore.dylib ]; then
         $R/libstdc++.6.dylib $R/libgcc_s.1.dylib -lgcc -lSystem -o /tmp/libicucore.dylib
     sudo mv /tmp/libicucore.dylib /opt/ppc/icu/lib/
 fi
+
+# The other libraries WebKit bundles.
+[ -f /opt/ppc/sqlite/lib/libsqlite3.dylib ] || bash "$REPO/scripts/toolchain/build-sqlite.sh"
+[ -f /opt/ppc/xml/lib/libxml2.dylib ] || bash "$REPO/scripts/toolchain/build-xml.sh"
+[ -f /opt/ppc/ots/lib/libots.a ] || bash "$REPO/scripts/toolchain/build-ots.sh"
 VMSCRIPT
