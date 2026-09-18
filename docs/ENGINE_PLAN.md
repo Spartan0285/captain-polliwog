@@ -129,6 +129,30 @@ runtime, so the Core Animation classes need real (empty) stand-ins.
 two risks worth testing first are text layout on Tiger's private CoreText and
 rendering with accelerated compositing turned off.
 
+## Building the 2018 engine ourselves
+
+What Leopard WebKit's own sources show (SourceForge, `604/Sources/Patches_604.5.6.tar.bz2`):
+
+- **Source.** One patch against Apple's WebKit tag `Safari-604.5.6`, which is
+  still on WebKit's GitHub, plus small patches for lz4 and OTS. The patch adds
+  73,000 lines across 1,352 files, most of them in WebKitLegacy and
+  WebCore/platform: it already carries a WebKit written for macOS 10.11 all
+  the way back to 10.5. Tiger is one more step down the same road.
+- **Build system.** Apple's Xcode projects, with settings keyed on
+  `TARGET_MAC_OS_X_VERSION_MAJOR` (1050, 1060...), so a 1040 (Tiger) target
+  fits the existing structure. CPU tuning is per architecture
+  (`ppc7400` for G4, `ppc64`/`ppc970` for G5); a `ppc` (G3, `-mcpu=750`) build
+  is an architecture the build scripts already accept.
+- **Toolchain.** Xcode 3.1 on Leopard, with GCC 5/6 plugged in as an Xcode
+  compiler (601 and later were built against GCC 6.1's libgcc and libstdc++),
+  plus Python 2.7, Ruby 1.9+, Perl 5.10+ and newer flex, which the author
+  installed from MacPorts. The published step-by-step instructions stop at
+  WebKit 600; 604's have to be reconstructed from the patch.
+- **Size.** About 15GB of disk for four architectures. Build time on a
+  1.42GHz G4 is unknown but likely many hours per architecture; spreading the
+  compile with distcc (which the instructions mention) to a cross compiler on
+  a modern Mac would cut that sharply.
+
 ## Options
 
 | | What | Tiger | Leopard | Effort | Engine age | Main risk |
