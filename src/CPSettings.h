@@ -47,6 +47,12 @@ extern NSString * const CPSettingsDidChangeNotification;
 - (unsigned)maximumLiveTabs;
 - (unsigned)maximumCachedResponseBytes;
 
+// ~/Library/Application Support/Captain Polliwog, created on first use.
+- (NSString *)supportDirectory;
+
+// How much browsing history to keep in memory; every entry stays in RAM.
+- (unsigned)historyItemLimit;
+
 - (void)apply;
 - (void)clearCaches;
 - (unsigned long long)diskCacheBytesInUse;

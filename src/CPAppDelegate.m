@@ -10,6 +10,8 @@
 #import "CPDebugSnapshot.h"
 #import "CPTab.h"
 #import "CPMemoryWatcher.h"
+#import "CPBookmarksController.h"
+#import "CPHistory.h"
 #import <WebKit/WebKit.h>
 
 static NSMenuItem *CPAddItem(NSMenu *menu, NSString *title, SEL action, NSString *key)
@@ -76,6 +78,7 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@"MainMenu"];
     NSMenuItem *item;
     NSMenu *menu;
+    NSMenu *historyMenu;
 
     [NSApp setMainMenu:mainMenu];
     [mainMenu release];
@@ -123,6 +126,18 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     CPAddItem(menu, @"Back", @selector(goBack:), @"[");
     CPAddItem(menu, @"Forward", @selector(goForward:), @"]");
     CPAddItem(menu, @"Home", @selector(goHome:), @"H");
+    historyMenu = menu;
+
+    menu = CPAddSubmenu(mainMenu, @"Bookmarks");
+    item = CPAddItem(menu, @"Add Bookmark...", @selector(addBookmark:), @"d");
+    [item setTarget:[CPBookmarksController sharedController]];
+    item = CPAddItem(menu, @"Edit Bookmarks", @selector(editBookmarks:), @"b");
+    [item setKeyEquivalentModifierMask:(NSCommandKeyMask | NSAlternateKeyMask)];
+    [item setTarget:[CPBookmarksController sharedController]];
+    item = CPAddItem(menu, @"Import Bookmarks from Safari...", @selector(importSafariBookmarks:), nil);
+    [item setTarget:[CPBookmarksController sharedController]];
+    [menu addItem:[NSMenuItem separatorItem]];
+    [[CPBookmarksController sharedController] attachBookmarksMenu:menu historyMenu:historyMenu];
 
     menu = CPAddSubmenu(mainMenu, @"Window");
     CPAddItem(menu, @"Minimize", @selector(performMiniaturize:), @"m");
@@ -249,6 +264,8 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     unsigned index;
 
     [[CPSettings sharedSettings] apply];
+    // Before any page loads, so the first visits are recorded too.
+    [[CPHistory sharedHistory] start];
     if ([browserWindows count] == 0)
         [self newWindow:self];
     if (debugURL != nil)
@@ -259,13 +276,24 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
         [[browserWindows lastObject] addTabWithURL:[NSURL URLWithString:[debugTabs objectAtIndex:index]]
                                             select:YES];
     }
-    // Lets the test scripts photograph the Preferences window too.
+    // Lets the test scripts photograph the bookmark editor and Preferences.
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugShowBookmarks"]) {
+        [[CPBookmarksController sharedController] editBookmarks:self];
+        [[CPBookmarksController sharedController] performSelector:@selector(writeDebugSnapshot)
+                                                       withObject:nil
+                                                       afterDelay:2.0];
+    }
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugShowPreferences"]) {
         [self showPreferences:self];
         [[CPPreferencesController sharedController] performSelector:@selector(writeDebugSnapshot)
                                                          withObject:nil
                                                          afterDelay:2.0];
     }
+}
+
+- (void)applicationWillTerminate:(NSNotification *)notification
+{
+    [[CPHistory sharedHistory] save];
 }
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag

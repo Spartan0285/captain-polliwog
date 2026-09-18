@@ -230,8 +230,9 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 
 - (void)writeDebugSnapshot
 {
-    // When the scripts are photographing Preferences, stay out of the way.
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugShowPreferences"])
+    // When the scripts are photographing another window, stay out of the way.
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugShowPreferences"] ||
+        [[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugShowBookmarks"])
         return;
     CPWriteWindowSnapshot([self window]);
 }

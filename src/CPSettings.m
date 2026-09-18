@@ -181,6 +181,29 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
     [self apply];
 }
 
+- (NSString *)supportDirectory
+{
+    NSString *path = [[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support"]
+                      stringByAppendingPathComponent:@"Captain Polliwog"];
+    NSFileManager *files = [NSFileManager defaultManager];
+
+    // Two levels at most, and the 10.4 call cannot create intermediates.
+    if (![files fileExistsAtPath:[path stringByDeletingLastPathComponent]])
+        [files createDirectoryAtPath:[path stringByDeletingLastPathComponent] attributes:nil];
+    if (![files fileExistsAtPath:path])
+        [files createDirectoryAtPath:path attributes:nil];
+    return path;
+}
+
+- (unsigned)historyItemLimit
+{
+    switch ([self effectiveMemoryProfile]) {
+    case CPMemoryProfileSmall:  return 1000;
+    case CPMemoryProfileMedium: return 2500;
+    default:                    return 5000;
+    }
+}
+
 - (unsigned)memoryCacheBytes
 {
     switch ([self effectiveMemoryProfile]) {
