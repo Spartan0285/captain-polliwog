@@ -13,6 +13,7 @@
 #import "CPBookmarksController.h"
 #import "CPHistory.h"
 #import "CPDownloadsController.h"
+#import "CPPrivateBrowsing.h"
 #import <WebKit/WebKit.h>
 
 static NSMenuItem *CPAddItem(NSMenu *menu, NSString *title, SEL action, NSString *key)
@@ -86,6 +87,8 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
 
     menu = CPAddSubmenu(mainMenu, @"Captain Polliwog");
     CPAddItem(menu, @"About Captain Polliwog", @selector(orderFrontStandardAboutPanel:), nil);
+    [menu addItem:[NSMenuItem separatorItem]];
+    CPAddItem(menu, @"Private Browsing", @selector(togglePrivateBrowsing:), nil);
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Hide Captain Polliwog", @selector(hide:), @"h");
     item = CPAddItem(menu, @"Hide Others", @selector(hideOtherApplications:), @"h");
@@ -198,8 +201,28 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     [[NSApp keyWindow] performClose:sender];
 }
 
+- (IBAction)togglePrivateBrowsing:(id)sender
+{
+    CPPrivateBrowsing *privacy = [CPPrivateBrowsing sharedPrivateBrowsing];
+
+    if ([privacy isEnabled]) {
+        [privacy setEnabled:NO];
+        return;
+    }
+    if (NSRunAlertPanel(@"Turn on private browsing?",
+                        @"While it is on, pages are not added to History, nothing is saved to the "
+                        @"disk cache, and cookies set by sites are removed when you turn it off or quit. "
+                        @"Sites can still see cookies you already had.",
+                        @"Turn On", @"Cancel", nil) == NSAlertDefaultReturn)
+        [privacy setEnabled:YES];
+}
+
 - (BOOL)validateMenuItem:(NSMenuItem *)item
 {
+    if ([item action] == @selector(togglePrivateBrowsing:)) {
+        [item setState:([[CPPrivateBrowsing sharedPrivateBrowsing] isEnabled] ? NSOnState : NSOffState)];
+        return YES;
+    }
     if ([item action] == @selector(closeCurrentTab:))
         return ([NSApp keyWindow] != nil);
     return YES;
@@ -268,6 +291,9 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     unsigned index;
 
     [[CPSettings sharedSettings] apply];
+    // Testing aid: start straight in private browsing, without the question.
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugPrivate"])
+        [[CPPrivateBrowsing sharedPrivateBrowsing] setEnabled:YES];
     // Before any page loads, so the first visits are recorded too.
     [[CPHistory sharedHistory] start];
     if ([browserWindows count] == 0)
@@ -313,6 +339,8 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
 
 - (void)applicationWillTerminate:(NSNotification *)notification
 {
+    // Undoes the private session's cookies before the store is written out.
+    [[CPPrivateBrowsing sharedPrivateBrowsing] setEnabled:NO];
     [[CPHistory sharedHistory] save];
 }
 

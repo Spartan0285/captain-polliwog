@@ -89,8 +89,11 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
         [responseHeaders objectForKey:@"location"] != nil) {
         // Redirects go back to WebKit rather than being followed here, so the
         // address bar, cookies and page security all stay in WebKit's hands.
-        NSURL *target = [NSURL URLWithString:[responseHeaders objectForKey:@"location"]
-                                relativeToURL:[request URL]];
+        // -absoluteURL matters: a relative Location ("/cookies") otherwise
+        // stays a URL-with-a-base, and WebKit drops the base and goes to
+        // file:///cookies.
+        NSURL *target = [[NSURL URLWithString:[responseHeaders objectForKey:@"location"]
+                                 relativeToURL:[request URL]] absoluteURL];
         if (target != nil) {
             NSMutableURLRequest *next = [[request mutableCopy] autorelease];
             [next setURL:target];

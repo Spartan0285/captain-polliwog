@@ -4,6 +4,7 @@
 
 #import "CPHTTPCache.h"
 #import "CPCurlProtocol.h"
+#import "CPPrivateBrowsing.h"
 #include <string.h>
 
 // Storage is two plain files per entry rather than NSURLCache. Leopard's
@@ -402,10 +403,11 @@ static void CPEnforceDiskCapacity(void)
     NSString *method = [request HTTPMethod];
     NSString *vary;
 
-    if (CPCacheRoot == nil) {
-        CPLog(@"store refused: no cache root configured");
+    if (CPCacheRoot == nil)
         return NO;
-    }
+    // Reading the cache leaves no trace; writing to it would.
+    if ([[CPPrivateBrowsing sharedPrivateBrowsing] isEnabled])
+        return NO;
     if (method != nil && ![method isEqualToString:@"GET"])
         return NO;
     if ([response statusCode] != 200 && [response statusCode] != 301)
@@ -413,8 +415,6 @@ static void CPEnforceDiskCapacity(void)
     if (CPCacheControlHas(CPHeader(response, @"Cache-Control"), @"no-store"))
         return NO;
 
-    // Content that varies by anything except the encoding could be served back
-    // to the wrong request, and matching on Vary is not worth the code here.
     // "Vary: *" means the response cannot be matched to a later request at all.
     // Anything else is handled by remembering the request headers it varies on.
     // The nil check matters: -rangeOfString: sent to nil yields location 0,

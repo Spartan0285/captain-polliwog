@@ -4,6 +4,7 @@
 
 #import "CPTabBarView.h"
 #import "CPTab.h"
+#import "CPPrivateBrowsing.h"
 
 #define CPTabMaximumWidth  200.0f
 #define CPTabMinimumWidth   60.0f
@@ -62,6 +63,26 @@
 
 @implementation CPTabBarView
 
+- (id)initWithFrame:(NSRect)frame
+{
+    self = [super initWithFrame:frame];
+    if (self != nil)
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(privateBrowsingChanged:)
+                                                     name:CPPrivateBrowsingDidChangeNotification object:nil];
+    return self;
+}
+
+- (void)dealloc
+{
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [super dealloc];
+}
+
+- (void)privateBrowsingChanged:(NSNotification *)notification
+{
+    [self setNeedsDisplay:YES];
+}
+
 - (void)setController:(id)aController
 {
     controller = aController;
@@ -83,6 +104,7 @@
     NSDictionary *activeText;
     NSDictionary *idleText;
     NSRect plus;
+    BOOL isPrivate;
 
     [truncating setLineBreakMode:NSLineBreakByTruncatingTail];
     activeText = [NSDictionary dictionaryWithObjectsAndKeys:
@@ -94,7 +116,10 @@
                 [NSColor colorWithCalibratedWhite:0.45f alpha:1.0f], NSForegroundColorAttributeName,
                 truncating, NSParagraphStyleAttributeName, nil];
 
-    [[NSColor colorWithCalibratedWhite:0.78f alpha:1.0f] set];
+    // Private browsing turns the strip dark, so it is obvious in every window.
+    isPrivate = [[CPPrivateBrowsing sharedPrivateBrowsing] isEnabled];
+    [(isPrivate ? [NSColor colorWithCalibratedWhite:0.28f alpha:1.0f]
+                : [NSColor colorWithCalibratedWhite:0.78f alpha:1.0f]) set];
     NSRectFill([self bounds]);
 
     for (index = 0; index < count; index++) {
@@ -109,7 +134,7 @@
             continue;
 
         [(isSelected ? [NSColor colorWithCalibratedWhite:0.95f alpha:1.0f]
-                     : [NSColor colorWithCalibratedWhite:0.84f alpha:1.0f]) set];
+                     : [NSColor colorWithCalibratedWhite:(isPrivate ? 0.55f : 0.84f) alpha:1.0f]) set];
         NSRectFill(NSInsetRect(frame, 0.5f, 0.0f));
         [[NSColor colorWithCalibratedWhite:0.55f alpha:1.0f] set];
         NSRectFill(NSMakeRect(NSMaxX(frame) - 1.0f, 0.0f, 1.0f, NSHeight(frame)));
@@ -146,7 +171,8 @@
     [@"+" drawAtPoint:NSMakePoint(NSMidX(plus) - 4.0f, NSMinY(plus) + 3.0f)
        withAttributes:[NSDictionary dictionaryWithObjectsAndKeys:
                        [NSFont boldSystemFontOfSize:13.0f], NSFontAttributeName,
-                       [NSColor colorWithCalibratedWhite:0.3f alpha:1.0f], NSForegroundColorAttributeName, nil]];
+                       [NSColor colorWithCalibratedWhite:(isPrivate ? 0.85f : 0.3f) alpha:1.0f],
+                       NSForegroundColorAttributeName, nil]];
 }
 
 - (void)mouseDown:(NSEvent *)event

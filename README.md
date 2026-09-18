@@ -17,10 +17,10 @@ budget), bookmarks with folders and Safari import, history, downloads that
 stream straight to disk, and a disk cache that lets a repeat visit skip the
 network entirely.
 
-Next steps:
+Private browsing records no history, writes nothing to the disk cache, and
+removes the cookies a private session set when it ends.
 
-1. Private browsing.
-2. A modern WebKit engine ported to Tiger/PowerPC.
+Next: a modern WebKit engine ported to Tiger/PowerPC.
 
 ## Building
 

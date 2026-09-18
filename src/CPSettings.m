@@ -6,6 +6,7 @@
 #import <WebKit/WebKit.h>
 #import "CPHTTPCache.h"
 #import "CPMemoryWatcher.h"
+#import "CPPrivateBrowsing.h"
 #include <string.h>
 #include <sys/types.h>
 #include <sys/sysctl.h>
@@ -269,6 +270,9 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
     [preferences setJavaEnabled:NO];
     [preferences setPlugInsEnabled:NO];
     [preferences setLoadsImagesAutomatically:[self loadsImages]];
+    // WebPreferences saves itself, so a session that ended in private mode
+    // would otherwise start the next launch in it without saying so.
+    [preferences setPrivateBrowsingEnabled:[[CPPrivateBrowsing sharedPrivateBrowsing] isEnabled]];
 
     // Neither selector is in the 10.4 SDK, but WebKit 3 and later have both.
     // WebCacheModelDocumentBrowser keeps the page cache small; the primary
