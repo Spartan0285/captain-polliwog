@@ -1,7 +1,7 @@
 From b83a79403ea28fcd970392596e600ab067c5ebcc Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 00:07:43 -0400
-Subject: [PATCH 11/38] Use unrenamed ICU for 10.4/10.5 targets, as the Xcode
+Subject: [PATCH 11/39] Use unrenamed ICU for 10.4/10.5 targets, as the Xcode
  build does
 
 ---

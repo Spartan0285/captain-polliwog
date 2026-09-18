@@ -1,7 +1,7 @@
 From f91e172ce0dea14ae72c98bbcf814a4f4a5205ca Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 00:13:49 -0400
-Subject: [PATCH 12/38] Build JavaScriptCore for Leopard as the Xcode project
+Subject: [PATCH 12/39] Build JavaScriptCore for Leopard as the Xcode project
  does
 
 Link the configured ICU instead of the system libicucore, use the

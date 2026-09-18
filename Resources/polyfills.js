@@ -560,9 +560,19 @@
             return;
         } catch (e) {
         }
+        // Code that calls EventTarget.prototype's methods directly (super.
+        // addEventListener in a subclass, for one) reaches the delegate too.
+        ["addEventListener", "removeEventListener", "dispatchEvent"].forEach(function (name) {
+            var native = NativeEventTarget.prototype[name];
+            NativeEventTarget.prototype[name] = function () {
+                var delegate = this && this.__polliwogEventDelegate;
+                return delegate ? delegate[name].apply(delegate, arguments) : native.apply(this, arguments);
+            };
+        });
         var EventTarget = function EventTarget() {
             var delegate = document.createDocumentFragment();
             var self = this;
+            Object.defineProperty(self, "__polliwogEventDelegate", { value: delegate });
             ["addEventListener", "removeEventListener"].forEach(function (name) {
                 Object.defineProperty(self, name, { value: function () { return delegate[name].apply(delegate, arguments); }, configurable: true, writable: true });
             });
@@ -681,6 +691,33 @@
                 });
             };
         }
+    }
+
+    /* customElements.upgrade: elements upgrade anyway once in the document */
+    if (global.customElements)
+        define(customElements, "upgrade", function upgrade() {});
+
+    /* PerformanceObserver.observe({ type }) as well as { entryTypes } */
+    if (typeof global.PerformanceObserver === "function") {
+        var nativeObserve = PerformanceObserver.prototype.observe;
+        PerformanceObserver.prototype.observe = function observe(options) {
+            if (options && options.type && !options.entryTypes) {
+                var converted = {};
+                for (var key in options) {
+                    if (key !== "type" && key !== "buffered")
+                        converted[key] = options[key];
+                }
+                converted.entryTypes = [options.type];
+                options = converted;
+            }
+            try {
+                return nativeObserve.call(this, options);
+            } catch (e) {
+                // An entry type this engine doesn't record: nothing to observe.
+            }
+        };
+        if (!PerformanceObserver.supportedEntryTypes)
+            define(PerformanceObserver, "supportedEntryTypes", ["mark", "measure", "navigation", "resource"]);
     }
 
     /* requestIdleCallback */

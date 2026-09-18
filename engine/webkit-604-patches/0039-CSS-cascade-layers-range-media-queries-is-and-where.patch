@@ -1,0 +1,250 @@
+From a3b5c6a1ec32837c40ac1528774e6770227749ec Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Fri, 18 Sep 2026 19:38:14 -0400
+Subject: [PATCH 39/39] CSS: cascade layers, range media queries, :is() and
+ :where()
+
+- @layer blocks apply as unlayered rules in source order (kept as a
+  media rule with no query); their relative ordering is not modeled.
+  Google's pages put every rule in a layer, so none applied.
+- Media Queries 4 range syntax, (width >= 600px) and (400px <= width <
+  900px), rewritten into min-/max- features. Strict < and > are taken
+  as <= and >=.
+- :is() and :where() as :matches(); :where()'s zero specificity is not
+  modeled.
+---
+ ...orPseudoClassAndCompatibilityElementMap.in |   2 +
+ Source/WebCore/css/parser/CSSAtRuleID.cpp     |   2 +
+ Source/WebCore/css/parser/CSSAtRuleID.h       |   3 +-
+ Source/WebCore/css/parser/CSSParserImpl.cpp   |  10 ++
+ .../WebCore/css/parser/MediaQueryParser.cpp   | 144 ++++++++++++++++++
+ 5 files changed, 160 insertions(+), 1 deletion(-)
+
+diff --git a/Source/WebCore/css/SelectorPseudoClassAndCompatibilityElementMap.in b/Source/WebCore/css/SelectorPseudoClassAndCompatibilityElementMap.in
+index 7b0ce417..6fd7c2f4 100644
+--- a/Source/WebCore/css/SelectorPseudoClassAndCompatibilityElementMap.in
++++ b/Source/WebCore/css/SelectorPseudoClassAndCompatibilityElementMap.in
+@@ -34,6 +34,7 @@ in-range
+ increment
+ indeterminate
+ invalid
++is, PseudoClassMatches, PseudoElementUnknown
+ lang
+ last-child
+ last-of-type
+@@ -64,6 +65,7 @@ target
+ valid
+ vertical
+ visited
++where, PseudoClassMatches, PseudoElementUnknown
+ window-inactive
+ 
+ #if ENABLE(FULLSCREEN_API)
+diff --git a/Source/WebCore/css/parser/CSSAtRuleID.cpp b/Source/WebCore/css/parser/CSSAtRuleID.cpp
+index c0c3144c..af303814 100644
+--- a/Source/WebCore/css/parser/CSSAtRuleID.cpp
++++ b/Source/WebCore/css/parser/CSSAtRuleID.cpp
+@@ -56,6 +56,8 @@ CSSAtRuleID cssAtRuleID(StringView name)
+         return CSSAtRuleWebkitKeyframes;
+     if (equalIgnoringASCIICase(name, "apply"))
+         return CSSAtRuleApply;
++    if (equalIgnoringASCIICase(name, "layer"))
++        return CSSAtRuleLayer;
+ #if ENABLE(CSS_REGIONS)
+     if (equalIgnoringASCIICase(name, "-webkit-region"))
+         return CSSAtRuleWebkitRegion;
+diff --git a/Source/WebCore/css/parser/CSSAtRuleID.h b/Source/WebCore/css/parser/CSSAtRuleID.h
+index e360a7fd..3c718930 100644
+--- a/Source/WebCore/css/parser/CSSAtRuleID.h
++++ b/Source/WebCore/css/parser/CSSAtRuleID.h
+@@ -47,7 +47,8 @@ enum CSSAtRuleID {
+ 
+     CSSAtRuleWebkitKeyframes = 10,
+     CSSAtRuleApply = 11,
+-    CSSAtRuleWebkitRegion = 12
++    CSSAtRuleWebkitRegion = 12,
++    CSSAtRuleLayer = 13
+ };
+ 
+ CSSAtRuleID cssAtRuleID(StringView name);
+diff --git a/Source/WebCore/css/parser/CSSParserImpl.cpp b/Source/WebCore/css/parser/CSSParserImpl.cpp
+index 106310df..da46ac2a 100644
+--- a/Source/WebCore/css/parser/CSSParserImpl.cpp
++++ b/Source/WebCore/css/parser/CSSParserImpl.cpp
+@@ -438,6 +438,16 @@ RefPtr<StyleRuleBase> CSSParserImpl::consumeAtRule(CSSParserTokenRange& range, A
+     switch (id) {
+     case CSSAtRuleMedia:
+         return consumeMediaRule(prelude, block);
++    case CSSAtRuleLayer: {
++        // Cascade layers (@layer name { ... }): the rules apply as if
++        // unlayered, in source order, which is how they mostly cascade
++        // anyway; the layers' own ordering is not modeled. Kept as a media
++        // rule with no query, which always applies.
++        CSSParserTokenRange noQuery = prelude;
++        while (!noQuery.atEnd())
++            noQuery.consume();
++        return consumeMediaRule(noQuery, block);
++    }
+     case CSSAtRuleSupports:
+         return consumeSupportsRule(prelude, block);
+ #if ENABLE(CSS_DEVICE_ADAPTATION)
+diff --git a/Source/WebCore/css/parser/MediaQueryParser.cpp b/Source/WebCore/css/parser/MediaQueryParser.cpp
+index 5cb6341f..fcecbd54 100644
+--- a/Source/WebCore/css/parser/MediaQueryParser.cpp
++++ b/Source/WebCore/css/parser/MediaQueryParser.cpp
+@@ -246,8 +246,152 @@ void MediaQueryParser::processToken(const CSSParserToken& token)
+ }
+ 
+ // The state machine loop
++// Media Queries 4 range syntax, "(width >= 600px)" or "(400px <= width <
++// 900px)", which newer style sheets use everywhere, rewritten into the
++// min-/max- form this parser reads. A strict < or > is taken as <= or >=.
++static bool isRangeFeature(StringView name)
++{
++    static const char* const features[] = {
++        "width", "height", "device-width", "device-height", "aspect-ratio", "device-aspect-ratio",
++        "resolution", "color", "color-index", "monochrome", "-webkit-device-pixel-ratio", nullptr
++    };
++    for (unsigned i = 0; features[i]; ++i) {
++        if (equalIgnoringASCIICase(name, features[i]))
++            return true;
++    }
++    return false;
++}
++
++enum class RangeComparison { None, Less, Greater, Equal };
++
++static RangeComparison consumeComparison(const Vector<CSSParserToken>& tokens, unsigned& index)
++{
++    if (index >= tokens.size() || tokens[index].type() != DelimiterToken)
++        return RangeComparison::None;
++    UChar first = tokens[index].delimiter();
++    if (first != '<' && first != '>' && first != '=')
++        return RangeComparison::None;
++    ++index;
++    if (first != '=' && index < tokens.size() && tokens[index].type() == DelimiterToken && tokens[index].delimiter() == '=')
++        ++index;
++    return first == '<' ? RangeComparison::Less : first == '>' ? RangeComparison::Greater : RangeComparison::Equal;
++}
++
++static void appendRangeExpression(Vector<CSSParserToken>& out, Vector<String>& names, StringView feature, RangeComparison comparison, const Vector<CSSParserToken>& value)
++{
++    if (!out.isEmpty() && out.last().type() == RightParenthesisToken) {
++        out.append(CSSParserToken(WhitespaceToken));
++        out.append(CSSParserToken(IdentToken, StringView(names[0])));
++        out.append(CSSParserToken(WhitespaceToken));
++    }
++    String name = comparison == RangeComparison::Greater ? makeString("min-", feature.toString())
++        : comparison == RangeComparison::Less ? makeString("max-", feature.toString()) : feature.toString();
++    names.append(name);
++    out.append(CSSParserToken(LeftParenthesisToken, CSSParserToken::BlockStart));
++    out.append(CSSParserToken(IdentToken, StringView(names.last())));
++    out.append(CSSParserToken(ColonToken));
++    out.appendVector(value);
++    out.append(CSSParserToken(RightParenthesisToken, CSSParserToken::BlockEnd));
++}
++
++static RangeComparison reversed(RangeComparison comparison)
++{
++    return comparison == RangeComparison::Less ? RangeComparison::Greater : comparison == RangeComparison::Greater ? RangeComparison::Less : comparison;
++}
++
++// One parenthesized group, without its parentheses or white space, as the
++// old syntax; false if it is not range syntax.
++static bool rewriteRangeGroup(const Vector<CSSParserToken>& group, Vector<CSSParserToken>& out, Vector<String>& names)
++{
++    Vector<unsigned> comparisons;
++    for (unsigned i = 0; i < group.size(); ++i) {
++        if (group[i].type() == DelimiterToken && (group[i].delimiter() == '<' || group[i].delimiter() == '>' || group[i].delimiter() == '='))
++            comparisons.append(i);
++    }
++    if (comparisons.isEmpty())
++        return false;
++
++    // Split into operands and comparisons.
++    Vector<Vector<CSSParserToken>> operands(1);
++    Vector<RangeComparison> operators;
++    for (unsigned i = 0; i < group.size();) {
++        unsigned before = i;
++        RangeComparison comparison = consumeComparison(group, i);
++        if (comparison != RangeComparison::None) {
++            operators.append(comparison);
++            operands.append(Vector<CSSParserToken>());
++            continue;
++        }
++        i = before + 1;
++        operands.last().append(group[before]);
++    }
++    for (auto& operand : operands) {
++        if (operand.isEmpty())
++            return false;
++    }
++
++    auto isFeature = [] (const Vector<CSSParserToken>& operand) {
++        return operand.size() == 1 && operand[0].type() == IdentToken && isRangeFeature(operand[0].value());
++    };
++    if (operands.size() == 2 && isFeature(operands[0])) {
++        appendRangeExpression(out, names, operands[0][0].value(), operators[0], operands[1]);
++        return true;
++    }
++    if (operands.size() == 2 && isFeature(operands[1])) {
++        appendRangeExpression(out, names, operands[1][0].value(), reversed(operators[0]), operands[0]);
++        return true;
++    }
++    if (operands.size() == 3 && isFeature(operands[1])) {
++        appendRangeExpression(out, names, operands[1][0].value(), reversed(operators[0]), operands[0]);
++        appendRangeExpression(out, names, operands[1][0].value(), operators[1], operands[2]);
++        return true;
++    }
++    return false;
++}
++
++static bool rewriteRangeSyntax(CSSParserTokenRange range, Vector<CSSParserToken>& out, Vector<String>& names)
++{
++    bool changed = false;
++    names.reserveCapacity(64);
++    names.append(ASCIILiteral("and"));
++    while (!range.atEnd()) {
++        const CSSParserToken& token = range.peek();
++        if (token.type() != LeftParenthesisToken) {
++            out.append(range.consume());
++            continue;
++        }
++        // A group with no blocks inside: try it as range syntax.
++        CSSParserTokenRange block = range;
++        CSSParserTokenRange contents = block.consumeBlock();
++        Vector<CSSParserToken> group;
++        bool simple = true;
++        CSSParserTokenRange scan = contents;
++        while (!scan.atEnd()) {
++            const CSSParserToken& inner = scan.consume();
++            if (inner.getBlockType() != CSSParserToken::NotBlock) {
++                simple = false;
++                break;
++            }
++            if (inner.type() != WhitespaceToken)
++                group.append(inner);
++        }
++        if (simple && names.size() + 4 < names.capacity() && rewriteRangeGroup(group, out, names)) {
++            changed = true;
++            range = block;
++            continue;
++        }
++        out.append(range.consume());
++    }
++    return changed;
++}
++
+ RefPtr<MediaQuerySet> MediaQueryParser::parseInternal(CSSParserTokenRange range)
+ {
++    Vector<CSSParserToken> rewritten;
++    Vector<String> names;
++    if (rewriteRangeSyntax(range, rewritten, names))
++        range = CSSParserTokenRange(rewritten);
++
+     while (!range.atEnd())
+         processToken(range.consume());
+ 
+-- 
+2.50.1 (Apple Git-155)
+
