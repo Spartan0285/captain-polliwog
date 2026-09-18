@@ -12,6 +12,7 @@
     NSTextField   *diskSizeNote;
     NSTextField   *locationField;
     NSButton      *imagesCheckbox;
+    NSButton      *memoryReliefCheckbox;
 }
 
 + (CPPreferencesController *)sharedController;
@@ -24,5 +25,6 @@
 - (IBAction)useDefaultCacheLocation:(id)sender;
 - (IBAction)clearCacheNow:(id)sender;
 - (IBAction)imagesChanged:(id)sender;
+- (IBAction)memoryReliefChanged:(id)sender;
 
 @end

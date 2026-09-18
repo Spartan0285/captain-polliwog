@@ -17,6 +17,8 @@
                        diskCapacity:(unsigned)diskCapacity
                                path:(NSString *)path;
 + (void)removeAllCachedResponses;
+// Drops only the in-memory layer; the files on disk stay.
++ (void)emptyMemoryCache;
 
 // nil unless the request may be served or revalidated from the cache.
 + (NSCachedURLResponse *)cachedResponseForRequest:(NSURLRequest *)request;

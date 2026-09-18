@@ -9,6 +9,7 @@
 #import "CPPreferencesController.h"
 #import "CPDebugSnapshot.h"
 #import "CPTab.h"
+#import "CPMemoryWatcher.h"
 #import <WebKit/WebKit.h>
 
 static NSMenuItem *CPAddItem(NSMenu *menu, NSString *title, SEL action, NSString *key)
@@ -205,6 +206,7 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     NSMutableArray *candidates = [NSMutableArray array];
     unsigned limit = [[CPSettings sharedSettings] maximumLiveTabs];
     unsigned live = 0;
+    unsigned discarded = 0;
     unsigned windowIndex;
     unsigned index;
 
@@ -231,7 +233,13 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
         [oldest discard];
         [candidates removeObject:oldest];
         live--;
+        discarded++;
     }
+
+    // Over budget means memory is already tight; discarding a tab leaves the
+    // shared WebKit cache untouched, so free that too.
+    if (discarded > 0)
+        [[CPMemoryWatcher sharedWatcher] relieveMemoryPressure:@"tabs were over the memory budget"];
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification

@@ -5,6 +5,7 @@
 #import "CPSettings.h"
 #import <WebKit/WebKit.h>
 #import "CPHTTPCache.h"
+#import "CPMemoryWatcher.h"
 #include <string.h>
 #include <sys/types.h>
 #include <sys/sysctl.h>
@@ -15,6 +16,7 @@ static NSString * const CPMemoryProfileKey     = @"CPMemoryProfile";
 static NSString * const CPDiskCacheMegaKey     = @"CPDiskCacheMegabytes";
 static NSString * const CPDiskCacheLocationKey = @"CPDiskCacheLocation";
 static NSString * const CPLoadsImagesKey       = @"CPLoadsImages";
+static NSString * const CPReleasesMemoryKey    = @"CPReleasesMemoryUnderPressure";
 
 static unsigned long long CPPhysicalMemory(void)
 {
@@ -64,6 +66,7 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
     [defaults setObject:[NSNumber numberWithInt:CPMemoryProfileAuto] forKey:CPMemoryProfileKey];
     [defaults setObject:[NSNumber numberWithInt:0] forKey:CPDiskCacheMegaKey];
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPLoadsImagesKey];
+    [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPReleasesMemoryKey];
     [[NSUserDefaults standardUserDefaults] registerDefaults:defaults];
 }
 
@@ -167,6 +170,17 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
     [self apply];
 }
 
+- (BOOL)releasesMemoryUnderPressure
+{
+    return [[NSUserDefaults standardUserDefaults] boolForKey:CPReleasesMemoryKey];
+}
+
+- (void)setReleasesMemoryUnderPressure:(BOOL)flag
+{
+    [[NSUserDefaults standardUserDefaults] setBool:flag forKey:CPReleasesMemoryKey];
+    [self apply];
+}
+
 - (unsigned)memoryCacheBytes
 {
     switch ([self effectiveMemoryProfile]) {
@@ -221,6 +235,8 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
     [CPHTTPCache configureWithMemoryCapacity:[self memoryCacheBytes]
                                 diskCapacity:([self effectiveDiskCacheMegabytes] * 1024 * 1024)
                                         path:path];
+
+    [[CPMemoryWatcher sharedWatcher] settingsChanged];
 
     [[NSNotificationCenter defaultCenter] postNotificationName:CPSettingsDidChangeNotification
                                                         object:self];

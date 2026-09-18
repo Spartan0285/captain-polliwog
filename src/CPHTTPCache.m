@@ -244,6 +244,13 @@ static void CPEnforceDiskCapacity(void)
     return CPCacheRoot;
 }
 
++ (void)emptyMemoryCache
+{
+    [CPMemoryEntries removeAllObjects];
+    [CPMemoryOrder removeAllObjects];
+    CPMemoryBytes = 0;
+}
+
 + (void)removeAllCachedResponses
 {
     [CPMemoryEntries removeAllObjects];

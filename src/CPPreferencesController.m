@@ -7,7 +7,7 @@
 #import "CPDebugSnapshot.h"
 
 #define CPWindowWidth   520.0f
-#define CPWindowHeight  260.0f
+#define CPWindowHeight  306.0f
 
 static NSTextField *CPLabel(NSView *parent, NSRect frame, NSString *text, BOOL small, BOOL rightAligned)
 {
@@ -101,6 +101,17 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
     [content addSubview:imagesCheckbox];
     [imagesCheckbox release];
 
+    top -= 24.0f;
+    memoryReliefCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(138.0f, top, 360.0f, 18.0f)];
+    [memoryReliefCheckbox setButtonType:NSSwitchButton];
+    [memoryReliefCheckbox setTitle:@"Free memory when this Mac runs low"];
+    [memoryReliefCheckbox setTarget:self];
+    [memoryReliefCheckbox setAction:@selector(memoryReliefChanged:)];
+    [content addSubview:memoryReliefCheckbox];
+    [memoryReliefCheckbox release];
+    CPLabel(content, NSMakeRect(156.0f, top - 16.0f, 340.0f, 14.0f),
+            @"Pages you return to may redraw their images more slowly.", YES, NO);
+
     CPLabel(content, NSMakeRect(20.0f, 16.0f, CPWindowWidth - 40.0f, 28.0f),
             @"A cached page skips the download and the secure handshake, "
             @"which is the slowest part on a G3.", YES, NO);
@@ -134,6 +145,7 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
     [locationField setStringValue:([location length] > 0) ? [settings resolvedDiskCachePath]
                                                           : @"Default (inside your Library folder)"];
     [imagesCheckbox setState:([settings loadsImages] ? NSOnState : NSOffState)];
+    [memoryReliefCheckbox setState:([settings releasesMemoryUnderPressure] ? NSOnState : NSOffState)];
 }
 
 @end
@@ -219,6 +231,12 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
 - (IBAction)clearCacheNow:(id)sender
 {
     [[CPSettings sharedSettings] clearCaches];
+    [self refresh];
+}
+
+- (IBAction)memoryReliefChanged:(id)sender
+{
+    [[CPSettings sharedSettings] setReleasesMemoryUnderPressure:([memoryReliefCheckbox state] == NSOnState)];
     [self refresh];
 }
 

@@ -39,6 +39,10 @@ extern NSString * const CPSettingsDidChangeNotification;
 - (BOOL)loadsImages;
 - (void)setLoadsImages:(BOOL)flag;
 
+// Whether to empty WebKit's shared memory cache when this Mac runs low.
+- (BOOL)releasesMemoryUnderPressure;
+- (void)setReleasesMemoryUnderPressure:(BOOL)flag;
+
 - (unsigned)memoryCacheBytes;
 - (unsigned)maximumLiveTabs;
 - (unsigned)maximumCachedResponseBytes;
