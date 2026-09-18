@@ -26,6 +26,11 @@ case $VARIANT in
     leopard-g4) TARGET=10.5; CPU="-mcpu=7400 -maltivec" ;;
     *) echo "usage: $0 configure|build leopard-g4 [targets...]" >&2; exit 1 ;;
 esac
+# WebCore is about 30MB of code, past the reach of PowerPC's branch
+# instruction; ld64 bridges that with branch islands, but only within one
+# section. GCC otherwise moves cold code and startup code into sections of
+# their own, placed after all 30MB, where calls into them cannot be bridged.
+CPU="$CPU -fno-reorder-blocks-and-partition -fno-reorder-functions"
 
 # rsync -c compares contents, so a synced file's timestamp changes only when
 # the file did, and ninja rebuilds only what was edited.
