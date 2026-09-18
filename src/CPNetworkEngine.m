@@ -122,11 +122,14 @@
     activeTasks = [[NSMutableArray alloc] init];
     cancelledTasks = [[NSMutableArray alloc] init];
 
-    // Six at a time matches what these machines can actually keep busy, and
-    // keeps memory use predictable on a 256MB G3.
-    curl_multi_setopt((CURLM *)multiHandle, CURLMOPT_MAX_TOTAL_CONNECTIONS, (long)6);
-    curl_multi_setopt((CURLM *)multiHandle, CURLMOPT_MAX_HOST_CONNECTIONS, (long)4);
-    curl_multi_setopt((CURLM *)multiHandle, CURLMOPT_MAXCONNECTS, (long)8);
+    // Browser-like limits: six per host, as pages are designed around. Lower
+    // caps queue requests behind a page's slow analytics calls, and libcurl's
+    // connect timeout counts the time spent waiting in that queue: a sign-in
+    // form on Amazon timed out after 30s that way. An idle TLS connection
+    // costs little memory, even on a 256MB G3.
+    curl_multi_setopt((CURLM *)multiHandle, CURLMOPT_MAX_TOTAL_CONNECTIONS, (long)16);
+    curl_multi_setopt((CURLM *)multiHandle, CURLMOPT_MAX_HOST_CONNECTIONS, (long)6);
+    curl_multi_setopt((CURLM *)multiHandle, CURLMOPT_MAXCONNECTS, (long)16);
 
     return self;
 }
