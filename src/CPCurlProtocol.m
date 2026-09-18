@@ -7,6 +7,8 @@
 #import "CPNetworkTask.h"
 #import "CPHTTPCache.h"
 #import "CPDebugSnapshot.h"
+#import <CoreServices/CoreServices.h>
+#include <dlfcn.h>
 
 @implementation CPCurlProtocol
 
@@ -89,6 +91,62 @@
 
 @end
 
+// CFNetwork's own response type, private but present from Leopard on.
+typedef const struct __CFURLResponse *CFURLResponseRef;
+typedef CFURLResponseRef (*CPCreateWithHTTPResponseFunction)(CFAllocatorRef, CFURLRef, CFHTTPMessageRef, int);
+typedef void (*CPSetMIMETypeFunction)(CFURLResponseRef, CFStringRef);
+typedef void (*CPSetExpectedContentLengthFunction)(CFURLResponseRef, SInt64);
+
+@interface NSHTTPURLResponse (CPPrivate)
+- (id)_initWithCFURLResponse:(CFURLResponseRef)response;
+@end
+
+// From Leopard on, NSURLConnection passes WebKit a response rebuilt from the
+// CFNetwork response underneath ours, and a subclass's own fields don't
+// survive that: WebKit got a plain response with no status or headers, so
+// every cross-origin check failed. A response built on a real CFNetwork HTTP
+// message carries them through. Returns NULL where that isn't possible, as on
+// Tiger, whose WebKit reads -allHeaderFields directly.
+static CFURLResponseRef CPCreateBackingResponse(NSURL *URL, int statusCode, NSDictionary *fields,
+                                                NSString *MIMEType, long long contentLength)
+{
+    static BOOL looked = NO;
+    static CPCreateWithHTTPResponseFunction createWithHTTPResponse = NULL;
+    static CPSetMIMETypeFunction setMIMEType = NULL;
+    static CPSetExpectedContentLengthFunction setExpectedContentLength = NULL;
+    CFHTTPMessageRef message;
+    CFURLResponseRef response;
+    NSEnumerator *names;
+    NSString *name;
+
+    if (!looked) {
+        looked = YES;
+        if ([NSHTTPURLResponse instancesRespondToSelector:@selector(_initWithCFURLResponse:)]) {
+            createWithHTTPResponse = (CPCreateWithHTTPResponseFunction)dlsym(RTLD_DEFAULT, "CFURLResponseCreateWithHTTPResponse");
+            setMIMEType = (CPSetMIMETypeFunction)dlsym(RTLD_DEFAULT, "CFURLResponseSetMIMEType");
+            setExpectedContentLength = (CPSetExpectedContentLengthFunction)dlsym(RTLD_DEFAULT, "CFURLResponseSetExpectedContentLength");
+        }
+    }
+    if (createWithHTTPResponse == NULL || setMIMEType == NULL || setExpectedContentLength == NULL)
+        return NULL;
+
+    message = CFHTTPMessageCreateResponse(kCFAllocatorDefault, statusCode, NULL, kCFHTTPVersion1_1);
+    if (message == NULL)
+        return NULL;
+    names = [fields keyEnumerator];
+    while ((name = [names nextObject]) != nil)
+        CFHTTPMessageSetHeaderFieldValue(message, (CFStringRef)name, (CFStringRef)[fields objectForKey:name]);
+    response = createWithHTTPResponse(kCFAllocatorDefault, (CFURLRef)URL, message, 0 /* allowed */);
+    CFRelease(message);
+    if (response == NULL)
+        return NULL;
+    // CFNetwork would take these from the headers; ours are already worked
+    // out, with a default type and without a compressed length.
+    setMIMEType(response, (CFStringRef)MIMEType);
+    setExpectedContentLength(response, contentLength);
+    return response;
+}
+
 @implementation CPHTTPURLResponse
 
 - (id)initWithURL:(NSURL *)aURL
@@ -99,10 +157,16 @@
      textEncoding:(NSString *)encoding
  suggestedFilename:(NSString *)filename
 {
-    self = [super initWithURL:aURL
-                     MIMEType:MIMEType
-        expectedContentLength:contentLength
-             textEncodingName:encoding];
+    CFURLResponseRef backing = CPCreateBackingResponse(aURL, aStatusCode, fields, MIMEType, contentLength);
+
+    if (backing != NULL) {
+        self = [super _initWithCFURLResponse:backing];
+        CFRelease(backing);
+    } else
+        self = [super initWithURL:aURL
+                         MIMEType:MIMEType
+            expectedContentLength:contentLength
+                 textEncodingName:encoding];
     if (self == nil)
         return nil;
 
@@ -152,6 +216,15 @@
         [coder encodeObject:responseHeaderFields];
         [coder encodeObject:responseSuggestedFilename];
     }
+}
+
+// Responses never change once made, so a copy can be the same object.
+// Leopard's Foundation copies a response by rebuilding it from its CFNetwork
+// counterpart, which knows nothing of the fields here: the copy WebKit kept
+// had status 0 and no headers, and every cross-origin check failed.
+- (id)copyWithZone:(NSZone *)zone
+{
+    return [self retain];
 }
 
 - (int)statusCode
