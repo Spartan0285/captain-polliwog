@@ -21,7 +21,10 @@ patch -p1 < "$REPO/scripts/toolchain/ots-unique-font-names.patch"
     CFLAGS="-O2 -mmacosx-version-min=10.4" \
     CXXFLAGS="-O2 -mmacosx-version-min=10.4 -std=gnu++11 -D_GLIBCXX_USE_C99_MATH_TR1=1" \
     LDFLAGS="-mmacosx-version-min=10.4 -static-libgcc"
-make -j8 libots.a libwoff2.a libbrotli.a liblz4.a
+# The archiver must be Apple's (the Makefile hard-codes plain `ar`): the Linux
+# one writes long member names in a form ld64 cannot follow, and the objects
+# behind them silently go missing at link time.
+make -j8 AR=powerpc-apple-darwin9-ar libots.a libwoff2.a libbrotli.a liblz4.a
 
 sudo mkdir -p /opt/ppc/ots/lib /opt/ppc/ots/include/ots
 sudo cp libots.a libwoff2.a libbrotli.a liblz4.a /opt/ppc/ots/lib/
