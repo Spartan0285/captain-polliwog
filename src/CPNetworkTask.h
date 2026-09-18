@@ -6,6 +6,12 @@
 
 @class CPCurlProtocol;
 
+// What a task in download mode reports back, on the main thread.
+@interface NSObject (CPDownloadTaskOwner)
+- (void)downloadReceivedBytes:(NSArray *)receivedAndExpected;
+- (void)downloadFinishedWithError:(NSError *)error;
+@end
+
 // One HTTP(S) transfer. Created on the main thread, driven on the network
 // thread, and it hands results back to the main thread because WebKit must
 // only ever be touched there.
@@ -28,11 +34,22 @@
     NSString            *redirectLocation;
     BOOL                 responseDelivered;
     BOOL                 cancelled;
+
+    // Download mode: the body goes straight to a file on the network thread
+    // and never passes through memory or the main thread.
+    id                   downloadOwner;     // retained
+    FILE                *downloadFile;
+    long long            bytesWritten;
+    long long            bytesExpected;
+    double               lastProgressReport;
 }
 
 - (id)initWithRequest:(NSURLRequest *)aRequest
              protocol:(CPCurlProtocol *)aProtocol
        cachedResponse:(NSCachedURLResponse *)aCachedResponse;
+
+// A download: follows redirects itself and writes the body to path.
+- (id)initWithRequest:(NSURLRequest *)aRequest downloadPath:(NSString *)path owner:(id)owner;
 
 - (NSURLRequest *)request;
 - (CPCurlProtocol *)protocol;
@@ -40,6 +57,11 @@
 
 - (BOOL)isCancelled;
 - (void)markCancelled;
+
+// Main thread, after -markCancelled: drops the download owner so the two do
+// not keep each other alive. The network thread checks for cancellation
+// before it touches the owner.
+- (void)detachDownloadOwner;
 
 // Network thread: build and tear down the libcurl handle.
 - (BOOL)prepareHandle;

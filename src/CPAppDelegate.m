@@ -12,6 +12,7 @@
 #import "CPMemoryWatcher.h"
 #import "CPBookmarksController.h"
 #import "CPHistory.h"
+#import "CPDownloadsController.h"
 #import <WebKit/WebKit.h>
 
 static NSMenuItem *CPAddItem(NSMenu *menu, NSString *title, SEL action, NSString *key)
@@ -146,6 +147,9 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     // Command-Shift-] and [, as in Safari.
     CPAddItem(menu, @"Select Next Tab", @selector(selectNextTab:), @"}");
     CPAddItem(menu, @"Select Previous Tab", @selector(selectPreviousTab:), @"{");
+    [menu addItem:[NSMenuItem separatorItem]];
+    item = CPAddItem(menu, @"Downloads", @selector(showDownloads:), @"l");
+    [item setKeyEquivalentModifierMask:(NSCommandKeyMask | NSAlternateKeyMask)];
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Bring All to Front", @selector(arrangeInFront:), nil);
     [NSApp setWindowsMenu:menu];
@@ -289,6 +293,22 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
                                                          withObject:nil
                                                          afterDelay:2.0];
     }
+}
+
+- (IBAction)showDownloads:(id)sender
+{
+    [[CPDownloadsController sharedController] showWindow:sender];
+}
+
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
+{
+    if (![[CPDownloadsController sharedController] hasActiveDownloads])
+        return NSTerminateNow;
+    if (NSRunAlertPanel(@"Quit while files are downloading?",
+                        @"Downloads in progress will stop, and their partial files will be left as \".download\" files.",
+                        @"Quit", @"Cancel", nil) == NSAlertDefaultReturn)
+        return NSTerminateNow;
+    return NSTerminateCancel;
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification

@@ -7,7 +7,7 @@
 #import "CPDebugSnapshot.h"
 
 #define CPWindowWidth   520.0f
-#define CPWindowHeight  306.0f
+#define CPWindowHeight  348.0f
 
 static NSTextField *CPLabel(NSView *parent, NSRect frame, NSString *text, BOOL small, BOOL rightAligned)
 {
@@ -54,8 +54,15 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
 - (void)buildInterface
 {
     NSView *content = [[self window] contentView];
-    float top = CPWindowHeight - 42.0f;
+    float top = CPWindowHeight - 36.0f;
 
+    CPLabel(content, NSMakeRect(20.0f, top, 110.0f, 17.0f), @"Save downloads to:", NO, YES);
+    downloadsField = CPLabel(content, NSMakeRect(138.0f, top + 1.0f, 260.0f, 14.0f), @"", YES, NO);
+    [[downloadsField cell] setLineBreakMode:NSLineBreakByTruncatingMiddle];
+    CPButton(content, NSMakeRect(402.0f, top - 5.0f, 100.0f, 24.0f), @"Choose...",
+             self, @selector(chooseDownloadsFolder:));
+
+    top -= 42.0f;
     CPLabel(content, NSMakeRect(20.0f, top, 110.0f, 17.0f), @"Memory use:", NO, YES);
     memoryPopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(138.0f, top - 4.0f, 200.0f, 26.0f)];
     [memoryPopUp addItemWithTitle:@"Automatic"];
@@ -146,6 +153,7 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
                                                           : @"Default (inside your Library folder)"];
     [imagesCheckbox setState:([settings loadsImages] ? NSOnState : NSOffState)];
     [memoryReliefCheckbox setState:([settings releasesMemoryUnderPressure] ? NSOnState : NSOffState)];
+    [downloadsField setStringValue:[[settings downloadsFolder] stringByAbbreviatingWithTildeInPath]];
 }
 
 @end
@@ -231,6 +239,19 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
 - (IBAction)clearCacheNow:(id)sender
 {
     [[CPSettings sharedSettings] clearCaches];
+    [self refresh];
+}
+
+- (IBAction)chooseDownloadsFolder:(id)sender
+{
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+
+    [panel setCanChooseFiles:NO];
+    [panel setCanChooseDirectories:YES];
+    [panel setAllowsMultipleSelection:NO];
+    [panel setPrompt:@"Use Folder"];
+    if ([panel runModalForDirectory:[[CPSettings sharedSettings] downloadsFolder] file:nil types:nil] == NSOKButton)
+        [[CPSettings sharedSettings] setDownloadsFolder:[panel filename]];
     [self refresh];
 }
 

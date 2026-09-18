@@ -17,6 +17,7 @@ static NSString * const CPDiskCacheMegaKey     = @"CPDiskCacheMegabytes";
 static NSString * const CPDiskCacheLocationKey = @"CPDiskCacheLocation";
 static NSString * const CPLoadsImagesKey       = @"CPLoadsImages";
 static NSString * const CPReleasesMemoryKey    = @"CPReleasesMemoryUnderPressure";
+static NSString * const CPDownloadsFolderKey   = @"CPDownloadsFolder";
 
 static unsigned long long CPPhysicalMemory(void)
 {
@@ -179,6 +180,28 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
 {
     [[NSUserDefaults standardUserDefaults] setBool:flag forKey:CPReleasesMemoryKey];
     [self apply];
+}
+
+- (NSString *)downloadsFolder
+{
+    NSString *chosen = [[NSUserDefaults standardUserDefaults] stringForKey:CPDownloadsFolderKey];
+    NSString *downloads = [NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"];
+    BOOL isFolder = NO;
+
+    if ([chosen length] > 0 &&
+        [[NSFileManager defaultManager] fileExistsAtPath:chosen isDirectory:&isFolder] && isFolder)
+        return chosen;
+    if ([[NSFileManager defaultManager] fileExistsAtPath:downloads isDirectory:&isFolder] && isFolder)
+        return downloads;
+    return [NSHomeDirectory() stringByAppendingPathComponent:@"Desktop"];
+}
+
+- (void)setDownloadsFolder:(NSString *)path
+{
+    if ([path length] > 0)
+        [[NSUserDefaults standardUserDefaults] setObject:path forKey:CPDownloadsFolderKey];
+    else
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:CPDownloadsFolderKey];
 }
 
 - (NSString *)supportDirectory

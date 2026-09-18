@@ -6,10 +6,11 @@
 
 @class CPNetworkTask;
 
-// Registering this class puts Captain Polliwog's own TLS in front of the one
-// built into Tiger and Leopard, which stops at TLS 1.0 and cannot reach most
-// sites any more. WebKit loads through Foundation, so everything it fetches
-// comes through here.
+// Registering this class puts Captain Polliwog's own network stack in front
+// of the one built into Tiger and Leopard: for https, whose TLS stops at 1.0
+// and cannot reach most sites any more, and for http, whose IPv6-first
+// connections stall for fifteen seconds on networks without IPv6. WebKit loads
+// through Foundation, so everything it fetches comes through here.
 @interface CPCurlProtocol : NSURLProtocol
 {
     CPNetworkTask *task;

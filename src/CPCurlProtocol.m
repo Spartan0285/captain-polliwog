@@ -12,9 +12,15 @@
 
 + (BOOL)canInitWithRequest:(NSURLRequest *)request
 {
-    // Only https is taken over. Plain http already works through the system,
-    // and leaving it alone keeps the change small.
-    return [[[[request URL] scheme] lowercaseString] isEqualToString:@"https"];
+    NSString *scheme = [[[request URL] scheme] lowercaseString];
+
+    // Plain http is taken over too. Tiger and Leopard try a site's IPv6
+    // address first and wait about fifteen seconds for it to fail on a network
+    // without IPv6, which is most home networks; libcurl tries both at once.
+    // Measured on the Pismo against ftp.gnu.org: 15s through the system,
+    // 0.06s over IPv4. It also brings the disk cache and compression to
+    // plain-http sites.
+    return [scheme isEqualToString:@"https"] || [scheme isEqualToString:@"http"];
 }
 
 + (NSURLRequest *)canonicalRequestForRequest:(NSURLRequest *)request

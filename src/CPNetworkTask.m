@@ -10,6 +10,10 @@
 #import "CPDebugSnapshot.h"
 #include <curl/curl.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <CoreFoundation/CoreFoundation.h>
+
+#define CPProgressInterval 0.5
 
 static NSString *CPTrimmed(NSString *text)
 {
@@ -39,6 +43,8 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
 - (void)storeCookiesFromHeaders:(NSArray *)setCookieValues;
 - (void)deliverCachedResponse:(NSCachedURLResponse *)cached;
 - (void)storeInCache:(NSArray *)dataAndResponse;
+- (void)relayDownloadProgress:(NSArray *)receivedAndExpected;
+- (void)relayDownloadFinished:(id)errorOrNull;
 - (void)callOnMainThread:(SEL)selector withObject:(id)object;
 @end
 
@@ -59,6 +65,15 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     }
     if ([setCookieValues count] > 0)
         [self callOnMainThread:@selector(storeCookiesFromHeaders:) withObject:setCookieValues];
+
+    // libcurl follows a download's redirects itself; only the final answer
+    // matters, and only for its size.
+    if (downloadOwner != nil) {
+        if (statusCode >= 200 && statusCode <= 299 && [responseHeaders objectForKey:@"content-length"] != nil &&
+            [responseHeaders objectForKey:@"content-encoding"] == nil)
+            bytesExpected = strtoll([[responseHeaders objectForKey:@"content-length"] UTF8String], NULL, 10);
+        return;
+    }
 
     if (statusCode == 304 && cachedResponse != nil) {
         // Not modified: the stored copy stands, and only headers came over
@@ -279,6 +294,22 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     [finishing release];
 }
 
+- (void)relayDownloadProgress:(NSArray *)receivedAndExpected
+{
+    if (!cancelled)
+        [downloadOwner downloadReceivedBytes:receivedAndExpected];
+}
+
+- (void)relayDownloadFinished:(id)errorOrNull
+{
+    id owner = downloadOwner;
+    if (cancelled || owner == nil)
+        return;
+    downloadOwner = nil;
+    [owner downloadFinishedWithError:(errorOrNull == [NSNull null] ? nil : errorOrNull)];
+    [owner release];
+}
+
 - (void)storeInCache:(NSArray *)dataAndResponse
 {
     [CPHTTPCache storeData:[dataAndResponse objectAtIndex:0]
@@ -320,8 +351,27 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     return self;
 }
 
+- (id)initWithRequest:(NSURLRequest *)aRequest downloadPath:(NSString *)path owner:(id)owner
+{
+    self = [super init];
+    if (self == nil)
+        return nil;
+
+    request = [aRequest retain];
+    downloadOwner = [owner retain];
+    responseHeaders = [[NSMutableDictionary alloc] init];
+    responseHeaderOrder = [[NSMutableArray alloc] init];
+    downloadFile = fopen([path fileSystemRepresentation], "wb");
+    if (downloadFile == NULL) {
+        [self release];
+        return nil;
+    }
+    return self;
+}
+
 - (void)dealloc
 {
+    [downloadOwner release];
     [self releaseHandle];
     [request release];
     [protocol release];
@@ -361,6 +411,12 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     cancelled = YES;
 }
 
+- (void)detachDownloadOwner
+{
+    [downloadOwner release];
+    downloadOwner = nil;
+}
+
 #pragma mark Network thread
 
 - (BOOL)prepareHandle
@@ -383,7 +439,10 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     curl_easy_setopt(easy, CURLOPT_URL, [[[request URL] absoluteString] UTF8String]);
     curl_easy_setopt(easy, CURLOPT_ERRORBUFFER, errorBuffer);
     curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 0L);
+    // A page's redirects go back to WebKit; a download has no WebKit to go
+    // back to, so libcurl follows them itself.
+    curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, (downloadOwner != nil) ? 1L : 0L);
+    curl_easy_setopt(easy, CURLOPT_MAXREDIRS, 10L);
     curl_easy_setopt(easy, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_1_1);
     // Compression is a clear win here: these machines wait on the network far
     // longer than they spend unpacking gzip.
@@ -463,6 +522,10 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
 
 - (void)releaseHandle
 {
+    if (downloadFile != NULL) {
+        fclose(downloadFile);
+        downloadFile = NULL;
+    }
     if (easyHandle != NULL) {
         curl_easy_cleanup((CURL *)easyHandle);
         easyHandle = NULL;
@@ -517,6 +580,25 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
 {
     if (cancelled)
         return 0;
+    if (downloadOwner != nil) {
+        double now;
+        // Error pages are not what the reader asked to save.
+        if (statusCode >= 400)
+            return length;
+        if (downloadFile == NULL || fwrite(bytes, 1, length, downloadFile) != length)
+            return 0;       // disk full or gone: abort the transfer
+        bytesWritten += length;
+        // Progress at most twice a second: redrawing is not free on a G3.
+        now = CFAbsoluteTimeGetCurrent();
+        if (now - lastProgressReport >= CPProgressInterval) {
+            lastProgressReport = now;
+            [self callOnMainThread:@selector(relayDownloadProgress:)
+                        withObject:[NSArray arrayWithObjects:
+                                    [NSNumber numberWithLongLong:bytesWritten],
+                                    [NSNumber numberWithLongLong:bytesExpected], nil]];
+        }
+        return length;
+    }
     if (redirectLocation != nil || servedFromCache)
         return length;      // nothing here belongs to the page
     if (cacheData != nil && length > 0) {
@@ -538,6 +620,28 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
 {
     if (cancelled || servedFromCache)
         return;
+    if (downloadOwner != nil) {
+        NSError *error = nil;
+        if (downloadFile != NULL) {
+            fclose(downloadFile);
+            downloadFile = NULL;
+        }
+        if (code != CURLE_OK) {
+            error = [self errorForCurlCode:code];
+        } else if (statusCode >= 400) {
+            error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorBadServerResponse
+                                    userInfo:[NSDictionary dictionaryWithObject:
+                                              [NSString stringWithFormat:@"The server answered with error %d.", statusCode]
+                                                                         forKey:NSLocalizedDescriptionKey]];
+        }
+        [self callOnMainThread:@selector(relayDownloadProgress:)
+                    withObject:[NSArray arrayWithObjects:
+                                [NSNumber numberWithLongLong:bytesWritten],
+                                [NSNumber numberWithLongLong:bytesExpected], nil]];
+        [self callOnMainThread:@selector(relayDownloadFinished:)
+                    withObject:(error != nil ? (id)error : (id)[NSNull null])];
+        return;
+    }
     if (code != CURLE_OK) {
         [self callOnMainThread:@selector(deliverError:) withObject:[self errorForCurlCode:code]];
         return;

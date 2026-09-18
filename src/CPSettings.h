@@ -47,6 +47,11 @@ extern NSString * const CPSettingsDidChangeNotification;
 - (unsigned)maximumLiveTabs;
 - (unsigned)maximumCachedResponseBytes;
 
+// Where downloads are saved: ~/Downloads when it exists (Leopard and later
+// create one), otherwise the Desktop, as Safari did on Tiger.
+- (NSString *)downloadsFolder;
+- (void)setDownloadsFolder:(NSString *)path;
+
 // ~/Library/Application Support/Captain Polliwog, created on first use.
 - (NSString *)supportDirectory;
 

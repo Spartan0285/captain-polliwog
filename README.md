@@ -8,13 +8,18 @@ OpenSSL 3, libcurl and zlib, because the TLS in Tiger and Leopard stops at
 TLS 1.0 and cannot reach most sites any more. Current Wikipedia and DuckDuckGo
 load on a 500MHz PowerBook G3 with 256MB of RAM, in about 53MB of memory.
 
+Plain http goes through the same stack: Tiger and Leopard try a site's IPv6
+address first and wait about fifteen seconds for it to fail on networks
+without IPv6, where libcurl tries both at once.
+
 Also in place: tabs (background tabs give up their pages beyond a memory
-budget), bookmarks with folders and Safari import, history, and a disk cache
-that lets a repeat visit skip the network entirely.
+budget), bookmarks with folders and Safari import, history, downloads that
+stream straight to disk, and a disk cache that lets a repeat visit skip the
+network entirely.
 
 Next steps:
 
-1. Downloads and private browsing.
+1. Private browsing.
 2. A modern WebKit engine ported to Tiger/PowerPC.
 
 ## Building

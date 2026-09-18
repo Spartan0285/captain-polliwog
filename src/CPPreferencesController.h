@@ -13,6 +13,7 @@
     NSTextField   *locationField;
     NSButton      *imagesCheckbox;
     NSButton      *memoryReliefCheckbox;
+    NSTextField   *downloadsField;
 }
 
 + (CPPreferencesController *)sharedController;
@@ -26,5 +27,6 @@
 - (IBAction)clearCacheNow:(id)sender;
 - (IBAction)imagesChanged:(id)sender;
 - (IBAction)memoryReliefChanged:(id)sender;
+- (IBAction)chooseDownloadsFolder:(id)sender;
 
 @end

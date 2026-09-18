@@ -23,6 +23,7 @@
 
 - (IBAction)newWindow:(id)sender;
 - (IBAction)newTab:(id)sender;
+- (IBAction)showDownloads:(id)sender;
 - (IBAction)showPreferences:(id)sender;
 
 @end

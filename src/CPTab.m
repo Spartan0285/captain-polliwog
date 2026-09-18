@@ -5,6 +5,7 @@
 #import "CPTab.h"
 #import "CPAppDelegate.h"
 #import "CPDebugSnapshot.h"
+#import "CPDownloadsController.h"
 #import <WebKit/WebKit.h>
 
 static NSString *CPEscapeHTML(NSString *text)
@@ -400,7 +401,105 @@ decisionListener:(id<WebPolicyDecisionListener>)listener
     [listener use];
 }
 
+// Anything WebKit cannot display, or that the server marks as an attachment,
+// is saved through the downloads window instead.
+- (void)webView:(WebView *)sender decidePolicyForMIMEType:(NSString *)type
+        request:(NSURLRequest *)request
+          frame:(WebFrame *)frame
+decisionListener:(id<WebPolicyDecisionListener>)listener
+{
+    NSURLResponse *response = [[frame provisionalDataSource] response];
+    NSString *disposition = nil;
+    NSDictionary *headers;
+    NSEnumerator *names;
+    NSString *name;
+
+    if ([response respondsToSelector:@selector(allHeaderFields)]) {
+        headers = [(NSHTTPURLResponse *)response allHeaderFields];
+        names = [headers keyEnumerator];
+        while ((name = [names nextObject]) != nil) {
+            if ([name caseInsensitiveCompare:@"Content-Disposition"] == NSOrderedSame)
+                disposition = [headers objectForKey:name];
+        }
+    }
+    if (!(disposition != nil && [[disposition lowercaseString] hasPrefix:@"attachment"]) &&
+        [WebView canShowMIMEType:type]) {
+        [listener use];
+        return;
+    }
+
+    [listener ignore];
+    [[CPDownloadsController sharedController] startDownloadWithRequest:request
+                                                     suggestedFilename:[response suggestedFilename]];
+    // A tab opened only to fetch this file has nothing to show, so it goes;
+    // deferred, since its WebView is in the middle of this callback.
+    if ([[sender backForwardList] currentItem] == nil && [owner respondsToSelector:@selector(tabWantsToClose:)])
+        [owner performSelector:@selector(tabWantsToClose:) withObject:self afterDelay:0.0];
+}
+
 #pragma mark WebUIDelegate
+
+// WebKit's own "new window" and "download" items bypass the tabs and the
+// bundled network stack, so they are swapped for ones that use both.
+- (NSArray *)webView:(WebView *)sender contextMenuItemsForElement:(NSDictionary *)element
+    defaultMenuItems:(NSArray *)defaultMenuItems
+{
+    NSMutableArray *items = [NSMutableArray array];
+    NSURL *link = [element objectForKey:WebElementLinkURLKey];
+    NSURL *image = [element objectForKey:WebElementImageURLKey];
+    unsigned index;
+
+    for (index = 0; index < [defaultMenuItems count]; index++) {
+        NSMenuItem *item = [defaultMenuItems objectAtIndex:index];
+        NSString *itemTitle = nil;
+        SEL action = NULL;
+        NSURL *target = nil;
+
+        switch ([item tag]) {
+        case WebMenuItemTagOpenLinkInNewWindow:
+            itemTitle = @"Open Link in New Tab"; action = @selector(openInNewTab:); target = link;
+            break;
+        case WebMenuItemTagDownloadLinkToDisk:
+            itemTitle = @"Download Linked File"; action = @selector(downloadURL:); target = link;
+            break;
+        case WebMenuItemTagOpenImageInNewWindow:
+            itemTitle = @"Open Image in New Tab"; action = @selector(openInNewTab:); target = image;
+            break;
+        case WebMenuItemTagDownloadImageToDisk:
+            itemTitle = @"Download Image"; action = @selector(downloadURL:); target = image;
+            break;
+        default:
+            break;
+        }
+        if (action != NULL && target != nil) {
+            NSMenuItem *replacement = [[[NSMenuItem alloc] initWithTitle:itemTitle action:action keyEquivalent:@""] autorelease];
+            [replacement setTarget:self];
+            [replacement setRepresentedObject:target];
+            [items addObject:replacement];
+        } else {
+            [items addObject:item];
+        }
+    }
+    return items;
+}
+
+- (void)openInNewTab:(id)sender
+{
+    if ([owner respondsToSelector:@selector(tab:openTabWithRequest:inBackground:)])
+        [owner tab:self openTabWithRequest:[NSURLRequest requestWithURL:[sender representedObject]]
+      inBackground:YES];
+}
+
+- (void)downloadURL:(id)sender
+{
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[sender representedObject]];
+
+    // Some servers only hand files to visitors who came from their own pages.
+    if (URL != nil && ![URL isFileURL])
+        [request setValue:[URL absoluteString] forHTTPHeaderField:@"Referer"];
+    [[CPDownloadsController sharedController] startDownloadWithRequest:request
+                                                     suggestedFilename:[[[sender representedObject] path] lastPathComponent]];
+}
 
 // Script-opened windows (window.open) become tabs too.
 - (WebView *)webView:(WebView *)sender createWebViewWithRequest:(NSURLRequest *)request
