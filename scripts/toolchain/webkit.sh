@@ -28,8 +28,8 @@ case $VARIANT in
 esac
 # WebCore is about 30MB of code, past the reach of PowerPC's branch
 # instruction; ld64 bridges that with branch islands, but only within one
-# section. GCC otherwise moves cold code and startup code into sections of
-# their own, placed after all 30MB, where calls into them cannot be bridged.
+# section. Fewer cold and hot sections for the linker to fold back into
+# __text (see ppc-darwin.cmake), and better locality on small caches.
 CPU="$CPU -fno-reorder-blocks-and-partition -fno-reorder-functions"
 
 # rsync -c compares contents, so a synced file's timestamp changes only when

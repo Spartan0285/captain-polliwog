@@ -1,0 +1,49 @@
+From c9b751b7d7de4391c9d67b0fb56caee3c333a8bb Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 04:09:03 -0400
+Subject: [PATCH 24/25] Frameworks re-export as on Leopard: WebKit re-exports
+ WebCore, JavaScriptCore re-exports libobjc
+
+Applications linked against the system WebKit bind Objective-C runtime
+functions through WebKit, which finds them via WebCore's re-export of
+libobjc.
+---
+ Source/JavaScriptCore/PlatformMac.cmake | 2 ++
+ Source/WebKitLegacy/CMakeLists.txt      | 8 +++++++-
+ 2 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/Source/JavaScriptCore/PlatformMac.cmake b/Source/JavaScriptCore/PlatformMac.cmake
+index 725d5926..9f38fbde 100644
+--- a/Source/JavaScriptCore/PlatformMac.cmake
++++ b/Source/JavaScriptCore/PlatformMac.cmake
+@@ -31,6 +31,8 @@ list(APPEND JavaScriptCore_INCLUDE_DIRECTORIES
+     ${JAVASCRIPTCORE_DIR}/inspector/remote/cocoa
+ )
+ 
++# As JavaScriptCore.xcconfig: re-export libobjc to clients.
++set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -sub_library libobjc -lobjc")
+ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -compatibility_version 1 -current_version ${WEBKIT_MAC_VERSION}")
+ 
+ # FIXME: Make including these files consistent in the source so these forwarding headers are not needed.
+diff --git a/Source/WebKitLegacy/CMakeLists.txt b/Source/WebKitLegacy/CMakeLists.txt
+index dedef7de..41d9c2ad 100644
+--- a/Source/WebKitLegacy/CMakeLists.txt
++++ b/Source/WebKitLegacy/CMakeLists.txt
+@@ -52,7 +52,13 @@ if (TARGET WebKitGUID)
+ endif ()
+ 
+ if (APPLE)
+-    set_target_properties(WebKit PROPERTIES LINK_FLAGS "-umbrella WebKit")
++    if (POLLIWOG_LEGACY_MAC)
++        # As on Mac OS X 10.5, this is WebKit.framework itself, and re-exports
++        # WebCore (and through it libobjc) to the applications linked to it.
++        set_target_properties(WebKit PROPERTIES LINK_FLAGS "-sub_umbrella WebCore")
++    else ()
++        set_target_properties(WebKit PROPERTIES LINK_FLAGS "-umbrella WebKit")
++    endif ()
+ endif ()
+ 
+ if (MSVC)
+-- 
+2.50.1 (Apple Git-155)
+

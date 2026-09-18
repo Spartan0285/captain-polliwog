@@ -1,0 +1,67 @@
+From c03810b8cd1fff8e9cffa054f14b02068157c0ce Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 03:53:10 -0400
+Subject: [PATCH 20/25] WebKitLegacy: build .cpp files as C++ with GCC, whose
+ Objective-C++ rejects lambda init-captures
+
+Reverts the capture renames, which were not the cause.
+---
+ Source/WebKitLegacy/Storage/StorageAreaSync.cpp |  4 ++--
+ Source/WebKitLegacy/Storage/StorageTracker.cpp  | 12 ++++++------
+ 2 files changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/Source/WebKitLegacy/Storage/StorageAreaSync.cpp b/Source/WebKitLegacy/Storage/StorageAreaSync.cpp
+index 18c2da6f..ba15e4a4 100644
+--- a/Source/WebKitLegacy/Storage/StorageAreaSync.cpp
++++ b/Source/WebKitLegacy/Storage/StorageAreaSync.cpp
+@@ -516,8 +516,8 @@ void StorageAreaSync::deleteEmptyDatabase()
+         query.finalize();
+         m_database.close();
+         if (StorageTracker::tracker().isActive()) {
+-            callOnMainThread([identifier = m_databaseIdentifier.isolatedCopy()] {
+-                StorageTracker::tracker().deleteOriginWithIdentifier(identifier);
++            callOnMainThread([databaseIdentifier = m_databaseIdentifier.isolatedCopy()] {
++                StorageTracker::tracker().deleteOriginWithIdentifier(databaseIdentifier);
+             });
+         } else {
+             String databaseFilename = m_syncManager->fullDatabaseFilename(m_databaseIdentifier);
+diff --git a/Source/WebKitLegacy/Storage/StorageTracker.cpp b/Source/WebKitLegacy/Storage/StorageTracker.cpp
+index 7d53e7c2..55780611 100644
+--- a/Source/WebKitLegacy/Storage/StorageTracker.cpp
++++ b/Source/WebKitLegacy/Storage/StorageTracker.cpp
+@@ -271,8 +271,8 @@ void StorageTracker::syncFileSystemAndTrackerDatabase()
+         if (foundOrigins.contains(originIdentifier))
+             continue;
+ 
+-        callOnMainThread([this, identifier = originIdentifier.isolatedCopy()] {
+-            deleteOriginWithIdentifier(identifier);
++        callOnMainThread([this, originIdentifier = originIdentifier.isolatedCopy()] {
++            deleteOriginWithIdentifier(originIdentifier);
+         });
+     }
+ }
+@@ -291,8 +291,8 @@ void StorageTracker::setOriginDetails(const String& originIdentifier, const Stri
+         m_originSet.add(originIdentifier);
+     }
+ 
+-    auto function = [this, identifier = originIdentifier.isolatedCopy(), file = databaseFile.isolatedCopy()] {
+-        syncSetOriginDetails(identifier, file);
++    auto function = [this, originIdentifier = originIdentifier.isolatedCopy(), databaseFile = databaseFile.isolatedCopy()] {
++        syncSetOriginDetails(originIdentifier, databaseFile);
+     };
+ 
+     if (isMainThread()) {
+@@ -300,8 +300,8 @@ void StorageTracker::setOriginDetails(const String& originIdentifier, const Stri
+         m_thread->dispatch(WTFMove(function));
+     } else {
+         // FIXME: This weird ping-ponging was done to fix a deadlock. We should figure out a cleaner way to avoid it instead.
+-        callOnMainThread([this, setDetails = WTFMove(function)]() mutable {
+-            m_thread->dispatch(WTFMove(setDetails));
++        callOnMainThread([this, function = WTFMove(function)]() mutable {
++            m_thread->dispatch(WTFMove(function));
+         });
+     }
+ }
+-- 
+2.50.1 (Apple Git-155)
+

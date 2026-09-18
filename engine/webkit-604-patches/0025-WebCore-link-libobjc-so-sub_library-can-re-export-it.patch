@@ -1,0 +1,26 @@
+From 53c79415065e2f66d4a03180f969dd5acfc25ffd Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 04:12:18 -0400
+Subject: [PATCH 25/25] WebCore: link libobjc, so -sub_library can re-export it
+ (as WebCore.xcconfig)
+
+---
+ Source/WebCore/CMakeLists.txt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Source/WebCore/CMakeLists.txt b/Source/WebCore/CMakeLists.txt
+index ab7a5c53..0147e37b 100644
+--- a/Source/WebCore/CMakeLists.txt
++++ b/Source/WebCore/CMakeLists.txt
+@@ -3954,7 +3954,7 @@ endif ()
+ WEBKIT_FRAMEWORK(WebCore)
+ 
+ if (APPLE)
+-    set_target_properties(WebCore PROPERTIES LINK_FLAGS "-sub_library libobjc -umbrella WebKit -allowable_client WebCoreTestSupport -allowable_client WebKit2 -allowable_client WebKitLegacy")
++    set_target_properties(WebCore PROPERTIES LINK_FLAGS "-lobjc -sub_library libobjc -umbrella WebKit -allowable_client WebCoreTestSupport -allowable_client WebKit2 -allowable_client WebKitLegacy")
+ endif ()
+ 
+ if (WIN32)
+-- 
+2.50.1 (Apple Git-155)
+

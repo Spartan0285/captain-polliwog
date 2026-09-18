@@ -213,8 +213,49 @@ What reproducing the Xcode build through CMake took:
   case-sensitive framework names, stale source lists, a list-valued linker
   flag.
 
-Next: WebCore and WebKitLegacy for the G4, then Captain Polliwog on the new
-frameworks, then the G3 and Tiger builds.
+**The whole engine runs in Captain Polliwog on the iBook** (18 September
+2026). JavaScriptCore, WebCore and WebKitLegacy build from source on the Mac
+(about 40 minutes from clean) and are packaged as Leopard WebKit packages them
+(`scripts/toolchain/package-webkit.sh`: the three frameworks with their system
+install names and re-exports, their resources, and the bundled libraries).
+Captain Polliwog loads them unchanged through `DYLD_FRAMEWORK_PATH`
+(`scripts/engine-run.sh`). Modern Wikipedia renders correctly, fetched
+entirely through Captain Polliwog's own networking: page load 5.9s, 73MB.
+
+What WebCore and WebKitLegacy took, beyond the JavaScriptCore work above:
+
+- **The libraries Leopard WebKit bundles**, built for the G3 and Tiger so every
+  variant can share them: SQLite 3.53.4 (Leopard's 3.4 is too old),
+  libxml2 2.15.4 and libxslt 1.1.45 (Leopard's 2.6 is too old; one WebCore
+  callback needed libxml2 2.12's const signature), and OTS 6.1.1, the web-font
+  sanitizer, with Leopard WebKit's unique-font-name change; it also decodes
+  WOFF2. OTS's Makefile hard-codes the Linux `ar`, whose archives ld64 reads
+  only partly, so it is archived with Apple's.
+- **WebGL** as in Leopard WebKit, with ANGLE's shader translator.
+- **A Growl stand-in.** Leopard WebKit shows web notifications through Growl,
+  which it bundles; ours reports Growl as absent, as Leopard WebKit behaves
+  on a Mac without it.
+- **Compiler modes Xcode implies.** WebKitLegacy's CMake built every file as
+  Objective-C++; GCC 6's Objective-C++ rejects C++14 lambda init-captures and
+  its `.m` files declare C functions without `extern "C"`, so `.cpp` stays
+  C++ and `.m` Objective-C, as Xcode builds them.
+- **Re-exports.** Applications linked against the system WebKit bind some
+  Objective-C runtime functions through WebKit, which re-exports WebCore,
+  which re-exports libobjc. Without them the app stopped at launch.
+- **WebCore is bigger than PowerPC's branch reach.** Its 30MB of code needs
+  branch islands. GCC puts cold code and static initializers in sections of
+  their own, which the linker now folds into `__text`, where islands work.
+  And cctools-port's ld64 got islands wrong for branches with an offset
+  (GCC's epilogues branch to `restGPRx+60`, libgcc's restore of r28-r31):
+  the branch kept its offset past the island, and the island dropped it.
+  The first made a function loop forever at launch, the second silently
+  restored registers a function had never saved. Fixed in the linker
+  (`scripts/toolchain/ld64-branch-island-addend.patch`).
+
+Next: move the engine from a test copy into the app proper (loaded only on
+Leopard with a G4, with the system engine as a fallback), re-verify every
+shell feature on it and measure it against the system engine; then the G3
+build and the Tiger port.
 
 ## Options
 

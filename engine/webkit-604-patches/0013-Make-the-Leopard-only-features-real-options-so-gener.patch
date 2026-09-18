@@ -1,0 +1,33 @@
+From b8fcf93baf24cfda3126f2c1113dfc8933259a5e Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 00:52:47 -0400
+Subject: [PATCH 13/25] Make the Leopard-only features real options, so
+ generators see them
+
+---
+ Source/cmake/OptionsMac.cmake | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/Source/cmake/OptionsMac.cmake b/Source/cmake/OptionsMac.cmake
+index 136bdb10..7220db21 100644
+--- a/Source/cmake/OptionsMac.cmake
++++ b/Source/cmake/OptionsMac.cmake
+@@ -160,10 +160,13 @@ if (POLLIWOG_LEGACY_MAC)
+     )
+         WEBKIT_OPTION_DEFAULT_PORT_VALUE(${_feature} PRIVATE ON)
+     endforeach ()
+-    # Not CMake options, but on in the Leopard build.
++    # On in the Leopard build but not CMake options upstream. Made options so
++    # the code generators (CSS keywords, IDL) see them too.
++    WEBKIT_OPTION_DEFINE(ENABLE_CSS_TRAILING_WORD "Toggle -apple-trailing-word" PRIVATE ON)
++    WEBKIT_OPTION_DEFINE(ENABLE_KEYBOARD_CODE_ATTRIBUTE "Toggle KeyboardEvent.code" PRIVATE ON)
++    WEBKIT_OPTION_DEFINE(ENABLE_KEYBOARD_KEY_ATTRIBUTE "Toggle KeyboardEvent.key" PRIVATE ON)
+     # As in the Xcode build, ICU is an unrenamed libicucore.
+     add_definitions(-DU_DISABLE_RENAMING=1 -DU_SHOW_CPLUSPLUS_API=0)
+-    add_definitions(-DENABLE_CSS_TRAILING_WORD=1 -DENABLE_KEYBOARD_CODE_ATTRIBUTE=1 -DENABLE_KEYBOARD_KEY_ATTRIBUTE=1)
+ endif ()
+ 
+ WEBKIT_OPTION_END()
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,72 @@
+From ce93e4f06da7a2a10f8bd1f0e25268a306663156 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 02:19:08 -0400
+Subject: [PATCH 16/25] Link WebCore for Leopard: WebGL's GraphicsContext3D,
+ missing sources, IOPMAssertionCreate
+
+GraphicsContext3D and ANGLE follow ENABLE_WEBGL, as in Leopard WebKit.
+OpenTypeSanitizer.cpp and CookieStorageObserver.mm were missing from
+the CMake lists. IOPMAssertionCreateWithName is not in the 10.5 SDK.
+---
+ Source/WebCore/PlatformMac.cmake                     | 2 ++
+ Source/WebCore/platform/cocoa/SleepDisablerCocoa.cpp | 4 +++-
+ Source/cmake/OptionsMac.cmake                        | 8 +++++++-
+ 3 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/Source/WebCore/PlatformMac.cmake b/Source/WebCore/PlatformMac.cmake
+index fad4c906..1c93e29d 100644
+--- a/Source/WebCore/PlatformMac.cmake
++++ b/Source/WebCore/PlatformMac.cmake
+@@ -542,6 +542,7 @@ list(APPEND WebCore_SOURCES
+ 
+     platform/graphics/opentype/OpenTypeCG.cpp
+     platform/graphics/opentype/OpenTypeMathData.cpp
++    platform/graphics/opentype/OpenTypeSanitizer.cpp
+ 
+     platform/mac/BlacklistUpdater.mm
+     platform/mac/CursorMac.mm
+@@ -612,6 +613,7 @@ list(APPEND WebCore_SOURCES
+     platform/network/cf/SynchronousResourceHandleCFURLConnectionDelegate.cpp
+ 
+     platform/network/cocoa/CookieCocoa.mm
++    platform/network/cocoa/CookieStorageObserver.mm
+     platform/network/cocoa/CredentialCocoa.mm
+     platform/network/cocoa/NetworkLoadMetrics.mm
+     platform/network/cocoa/NetworkStorageSessionCocoa.mm
+diff --git a/Source/WebCore/platform/cocoa/SleepDisablerCocoa.cpp b/Source/WebCore/platform/cocoa/SleepDisablerCocoa.cpp
+index fa111625..60b326d9 100644
+--- a/Source/WebCore/platform/cocoa/SleepDisablerCocoa.cpp
++++ b/Source/WebCore/platform/cocoa/SleepDisablerCocoa.cpp
+@@ -71,7 +71,9 @@ SleepDisablerCocoa::SleepDisablerCocoa(const char* reason, Type type)
+ #if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
+     IOPMAssertionCreateWithDescription(assertionType, reasonCF.get(), nullptr, nullptr, nullptr, 0, nullptr, &m_sleepAssertion);
+ #else
+-    IOPMAssertionCreateWithName(assertionType, kIOPMAssertionLevelOn, reasonCF.get(), &m_sleepAssertion);
++    // IOPMAssertionCreateWithName is not in the 10.5 SDK (later Leopard
++    // updates added it); IOPMAssertionCreate is in every Leopard.
++    IOPMAssertionCreate(assertionType, kIOPMAssertionLevelOn, &m_sleepAssertion);
+     m_systemActivityTimer.startRepeating(2_min);
+ #endif
+ }
+diff --git a/Source/cmake/OptionsMac.cmake b/Source/cmake/OptionsMac.cmake
+index 7220db21..038551e8 100644
+--- a/Source/cmake/OptionsMac.cmake
++++ b/Source/cmake/OptionsMac.cmake
+@@ -185,7 +185,13 @@ endif ()
+ if (NOT DEFINED POLLIWOG_ENABLE_WEBKIT2)
+     set(POLLIWOG_ENABLE_WEBKIT2 ON)
+ endif ()
+-set(ENABLE_GRAPHICS_CONTEXT_3D ${POLLIWOG_ENABLE_WEBKIT2})
++# WebGL needs GraphicsContext3D and ANGLE's shader translator, which is plain
++# C++; Leopard WebKit has WebGL.
++if (POLLIWOG_ENABLE_WEBKIT2 OR ENABLE_WEBGL)
++    set(ENABLE_GRAPHICS_CONTEXT_3D ON)
++else ()
++    set(ENABLE_GRAPHICS_CONTEXT_3D OFF)
++endif ()
+ set(ENABLE_WEBKIT_LEGACY ON)
+ set(ENABLE_WEBKIT ${POLLIWOG_ENABLE_WEBKIT2})
+ 
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,79 @@
+From 4de0053a8b4575cf73bee9b03f9759f724714766 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 04:01:41 -0400
+Subject: [PATCH 23/25] WebKitLegacy for PowerPC: .m files as Objective-C, the
+ Growl provider, and no plug-in host process
+
+---
+ Source/WebKitLegacy/PlatformMac.cmake | 28 +++++++++++++++++++--------
+ 1 file changed, 20 insertions(+), 8 deletions(-)
+
+diff --git a/Source/WebKitLegacy/PlatformMac.cmake b/Source/WebKitLegacy/PlatformMac.cmake
+index b288aaed..8949a346 100644
+--- a/Source/WebKitLegacy/PlatformMac.cmake
++++ b/Source/WebKitLegacy/PlatformMac.cmake
+@@ -399,22 +399,29 @@ set(C99_FILES
+ 
+ # Everything but the C99 files is built as Objective-C++. GCC spells that
+ # -x objective-c++, and needs GNU modes: in strict modes Leopard's headers
+-# hide functions libstdc++ and WebKit use. With GCC, .cpp files stay C++, as
+-# Xcode builds them: GCC 6's Objective-C++ rejects C++14 lambda init-captures.
++# hide functions libstdc++ and WebKit use. With GCC, .cpp files stay C++ and
++# .m files Objective-C, as Xcode builds them: GCC 6's Objective-C++ rejects
++# C++14 lambda init-captures, and the .m files declare C functions without
++# extern "C".
+ if (CMAKE_COMPILER_IS_GNUCXX)
+     set(WEBKITLEGACY_OBJCXX_FLAGS "-x objective-c++ -std=gnu++14")
+     set(WEBKITLEGACY_CXX_FLAGS "-std=gnu++14")
++    set(WEBKITLEGACY_OBJC_FLAGS "-x objective-c -std=gnu99")
+     set(WEBKITLEGACY_C99_FLAGS "-std=gnu99")
+ else ()
+     set(WEBKITLEGACY_OBJCXX_FLAGS "-ObjC++ -std=c++14")
+     set(WEBKITLEGACY_CXX_FLAGS "${WEBKITLEGACY_OBJCXX_FLAGS}")
++    set(WEBKITLEGACY_OBJC_FLAGS "${WEBKITLEGACY_OBJCXX_FLAGS}")
+     set(WEBKITLEGACY_C99_FLAGS "-std=c99")
+ endif ()
+ # Leopard WebKit shows web notifications through Growl, which it bundles.
+ # Captain Polliwog builds against a stand-in that reports Growl as absent.
+ if (POLLIWOG_LEGACY_MAC)
+     list(APPEND WebKit_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/WebKitLibraries/polliwog/Growl")
+-    list(APPEND WebKit_SOURCES "${CMAKE_SOURCE_DIR}/WebKitLibraries/polliwog/Growl/GrowlApplicationBridgeStub.m")
++    list(APPEND WebKit_SOURCES
++        "${CMAKE_SOURCE_DIR}/WebKitLibraries/polliwog/Growl/GrowlApplicationBridgeStub.m"
++        mac/WebView/WebNotificationProviderGrowl.mm
++    )
+ endif ()
+ 
+ foreach (_file ${WebKit_SOURCES})
+@@ -423,6 +430,8 @@ foreach (_file ${WebKit_SOURCES})
+         set_source_files_properties(${_file} PROPERTIES COMPILE_FLAGS "${WEBKITLEGACY_C99_FLAGS}")
+     elseif (_file MATCHES "\\.cpp$" AND NOT _file MATCHES "WebViewGroup\\.cpp$")  # that one uses Objective-C
+         set_source_files_properties(${_file} PROPERTIES COMPILE_FLAGS "${WEBKITLEGACY_CXX_FLAGS}")
++    elseif (_file MATCHES "\\.m$")
++        set_source_files_properties(${_file} PROPERTIES COMPILE_FLAGS "${WEBKITLEGACY_OBJC_FLAGS}")
+     else ()
+         set_source_files_properties(${_file} PROPERTIES COMPILE_FLAGS "${WEBKITLEGACY_OBJCXX_FLAGS}")
+     endif ()
+@@ -479,11 +488,14 @@ add_custom_command(
+     WORKING_DIRECTORY ${DERIVED_SOURCES_WEBKITLEGACY_DIR}
+     COMMAND ${WEBKITLEGACY_MIG_CLIENT}
+     VERBATIM)
+-list(APPEND WebKit_SOURCES
+-    ${DERIVED_SOURCES_WEBKITLEGACY_DIR}/WebKitPluginAgentUser.c
+-    ${DERIVED_SOURCES_WEBKITLEGACY_DIR}/WebKitPluginClientServer.c
+-    ${DERIVED_SOURCES_WEBKITLEGACY_DIR}/WebKitPluginHostUser.c
+-)
++# The plug-in host process is only used on x86_64 (USE(PLUGIN_HOST_PROCESS)).
++if (NOT WTF_CPU_PPC)
++    list(APPEND WebKit_SOURCES
++        ${DERIVED_SOURCES_WEBKITLEGACY_DIR}/WebKitPluginAgentUser.c
++        ${DERIVED_SOURCES_WEBKITLEGACY_DIR}/WebKitPluginClientServer.c
++        ${DERIVED_SOURCES_WEBKITLEGACY_DIR}/WebKitPluginHostUser.c
++    )
++endif ()
+ 
+ WEBKIT_CREATE_FORWARDING_HEADERS(WebKitLegacy DIRECTORIES ${WebKitLegacy_FORWARDING_HEADERS_DIRECTORIES} FILES ${WebKitLegacy_FORWARDING_HEADERS_FILES})
+ WEBKIT_CREATE_FORWARDING_HEADERS(WebKit DIRECTORIES ${FORWARDING_HEADERS_DIR}/WebKitLegacy)
+-- 
+2.50.1 (Apple Git-155)
+

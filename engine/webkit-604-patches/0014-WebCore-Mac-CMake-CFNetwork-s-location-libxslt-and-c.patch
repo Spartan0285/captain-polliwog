@@ -1,0 +1,81 @@
+From f1d953ba9b0d88d5592064508dbe711e5a097458 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 01:35:55 -0400
+Subject: [PATCH 14/25] WebCore Mac CMake: CFNetwork's location, libxslt, and
+ configurable SQLite, libxml2, libxslt and OTS
+
+Leopard's SQLite and libxml2 are too old for WebCore 604, so a legacy
+build points these at bundled copies, as Leopard WebKit does. libxslt
+was never linked by the CMake Mac port.
+---
+ Source/WebCore/PlatformMac.cmake | 25 +++++++++++++++++++++++--
+ 1 file changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/Source/WebCore/PlatformMac.cmake b/Source/WebCore/PlatformMac.cmake
+index 827867db..fad4c906 100644
+--- a/Source/WebCore/PlatformMac.cmake
++++ b/Source/WebCore/PlatformMac.cmake
+@@ -19,6 +19,7 @@ find_library(AUDIOUNIT_LIBRARY AudioUnit)
+ find_library(CARBON_LIBRARY Carbon)
+ find_library(COCOA_LIBRARY Cocoa)
+ find_library(COREAUDIO_LIBRARY CoreAudio)
++find_library(CORESERVICES_LIBRARY CoreServices)
+ find_library(DISKARBITRATION_LIBRARY DiskArbitration)
+ find_library(IOKIT_LIBRARY IOKit)
+ find_library(IOSURFACE_LIBRARY IOSurface)
+@@ -30,6 +31,17 @@ find_library(SECURITY_LIBRARY Security)
+ find_library(SYSTEMCONFIGURATION_LIBRARY SystemConfiguration)
+ find_library(SQLITE3_LIBRARY sqlite3)
+ find_library(XML2_LIBRARY xml2)
++find_library(XSLT_LIBRARY xslt)
++# Where the headers of those two and SQLite are. The defaults are the SDK's;
++# a build for 10.5 and earlier points them at newer copies it bundles, since
++# Leopard's are too old for WebCore.
++set(LIBXML2_INCLUDE_DIR "${CMAKE_OSX_SYSROOT}/usr/include/libxml2" CACHE PATH "libxml2 headers")
++set(LIBXSLT_INCLUDE_DIR "${CMAKE_OSX_SYSROOT}/usr/include/libxslt" CACHE PATH "libxslt headers")
++set(SQLITE3_INCLUDE_DIR "" CACHE PATH "SQLite headers, if not the SDK's")
++# OpenType Sanitizer (USE_OPENTYPE_SANITIZER): Apple links its own copy;
++# other builds say where theirs is.
++set(OTS_INCLUDE_DIR "" CACHE PATH "Directory holding ots/opentype-sanitiser.h")
++set(OTS_LIBRARIES "" CACHE STRING "OTS and the WOFF2, Brotli and lz4 libraries it needs")
+ find_package(ZLIB REQUIRED)
+ 
+ # Frameworks that Mac OS X 10.4/10.5 do not have are left out rather than
+@@ -60,6 +72,8 @@ list(APPEND WebCore_LIBRARIES
+     ${SYSTEMCONFIGURATION_LIBRARY}
+     ${WEBKITSYSTEMINTERFACE_LIBRARY}
+     ${XML2_LIBRARY}
++    ${XSLT_LIBRARY}
++    ${OTS_LIBRARIES}
+     ${ZLIB_LIBRARIES}
+ )
+ 
+@@ -68,6 +82,8 @@ if (AVFOUNDATION_LIBRARY)
+     add_definitions(-iframework ${AVFOUNDATION_LIBRARY}/Versions/Current/Frameworks)
+ endif ()
+ add_definitions(-iframework ${CARBON_LIBRARY}/Versions/Current/Frameworks)
++# CFNetwork is inside CoreServices up to 10.7.
++add_definitions(-iframework ${CORESERVICES_LIBRARY}/Versions/Current/Frameworks)
+ add_definitions(-iframework ${QUARTZ_LIBRARY}/Frameworks)
+ 
+ find_library(DATADETECTORSCORE_FRAMEWORK DataDetectorsCore HINTS /System/Library/PrivateFrameworks)
+@@ -165,9 +181,14 @@ list(APPEND WebCore_DERIVED_SOURCES
+ )
+ 
+ list(APPEND WebCore_SYSTEM_INCLUDE_DIRECTORIES
+-    "${CMAKE_OSX_SYSROOT}/usr/include/libxslt"
+-    "${CMAKE_OSX_SYSROOT}/usr/include/libxml2"
++    "${LIBXSLT_INCLUDE_DIR}"
++    "${LIBXML2_INCLUDE_DIR}"
+ )
++foreach (_dir SQLITE3_INCLUDE_DIR OTS_INCLUDE_DIR)
++    if (${_dir})
++        list(APPEND WebCore_SYSTEM_INCLUDE_DIRECTORIES "${${_dir}}")
++    endif ()
++endforeach ()
+ 
+ list(APPEND WebCore_SOURCES
+     Modules/plugins/QuickTimePluginReplacement.mm
+-- 
+2.50.1 (Apple Git-155)
+

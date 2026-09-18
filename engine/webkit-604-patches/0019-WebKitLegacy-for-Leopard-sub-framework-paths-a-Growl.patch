@@ -1,0 +1,203 @@
+From 773f591233493314856fd4b5fa48e5bb5b6a4542 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 03:49:14 -0400
+Subject: [PATCH 19/25] WebKitLegacy for Leopard: sub-framework paths, a Growl
+ stand-in, and lambda captures GCC 6 misreads
+
+Captures that reuse the name of the variable in their own initializer
+are renamed; GCC 6 resolves the name to the capture being declared.
+---
+ Source/WebKitLegacy/PlatformMac.cmake         | 12 +++++
+ .../WebKitLegacy/Storage/StorageAreaSync.cpp  |  4 +-
+ .../WebKitLegacy/Storage/StorageTracker.cpp   | 12 ++---
+ .../Growl/Growl/GrowlApplicationBridge.h      | 37 ++++++++++++++
+ .../Growl/GrowlApplicationBridgeStub.m        | 51 +++++++++++++++++++
+ 5 files changed, 108 insertions(+), 8 deletions(-)
+ create mode 100644 WebKitLibraries/polliwog/Growl/Growl/GrowlApplicationBridge.h
+ create mode 100644 WebKitLibraries/polliwog/Growl/GrowlApplicationBridgeStub.m
+
+diff --git a/Source/WebKitLegacy/PlatformMac.cmake b/Source/WebKitLegacy/PlatformMac.cmake
+index f2dc4608..b56bfaf4 100644
+--- a/Source/WebKitLegacy/PlatformMac.cmake
++++ b/Source/WebKitLegacy/PlatformMac.cmake
+@@ -2,6 +2,11 @@ find_library(APPLICATIONSERVICES_LIBRARY ApplicationServices)
+ find_library(QUARTZ_LIBRARY Quartz)
+ add_definitions(-iframework ${QUARTZ_LIBRARY}/Frameworks)
+ add_definitions(-iframework ${APPLICATIONSERVICES_LIBRARY}/Versions/Current/Frameworks)
++# CFNetwork (in CoreServices up to 10.7) and HIToolbox (in Carbon).
++find_library(CARBON_LIBRARY Carbon)
++find_library(CORESERVICES_LIBRARY CoreServices)
++add_definitions(-iframework ${CARBON_LIBRARY}/Versions/Current/Frameworks)
++add_definitions(-iframework ${CORESERVICES_LIBRARY}/Versions/Current/Frameworks)
+ link_directories(../../WebKitLibraries)
+ 
+ list(APPEND WebKit_INCLUDE_DIRECTORIES
+@@ -402,6 +407,13 @@ else ()
+     set(WEBKITLEGACY_OBJCXX_FLAGS "-ObjC++ -std=c++14")
+     set(WEBKITLEGACY_C99_FLAGS "-std=c99")
+ endif ()
++# Leopard WebKit shows web notifications through Growl, which it bundles.
++# Captain Polliwog builds against a stand-in that reports Growl as absent.
++if (POLLIWOG_LEGACY_MAC)
++    list(APPEND WebKit_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/WebKitLibraries/polliwog/Growl")
++    list(APPEND WebKit_SOURCES "${CMAKE_SOURCE_DIR}/WebKitLibraries/polliwog/Growl/GrowlApplicationBridgeStub.m")
++endif ()
++
+ foreach (_file ${WebKit_SOURCES})
+     list(FIND C99_FILES ${_file} _c99_index)
+     if (${_c99_index} EQUAL -1)
+diff --git a/Source/WebKitLegacy/Storage/StorageAreaSync.cpp b/Source/WebKitLegacy/Storage/StorageAreaSync.cpp
+index ba15e4a4..18c2da6f 100644
+--- a/Source/WebKitLegacy/Storage/StorageAreaSync.cpp
++++ b/Source/WebKitLegacy/Storage/StorageAreaSync.cpp
+@@ -516,8 +516,8 @@ void StorageAreaSync::deleteEmptyDatabase()
+         query.finalize();
+         m_database.close();
+         if (StorageTracker::tracker().isActive()) {
+-            callOnMainThread([databaseIdentifier = m_databaseIdentifier.isolatedCopy()] {
+-                StorageTracker::tracker().deleteOriginWithIdentifier(databaseIdentifier);
++            callOnMainThread([identifier = m_databaseIdentifier.isolatedCopy()] {
++                StorageTracker::tracker().deleteOriginWithIdentifier(identifier);
+             });
+         } else {
+             String databaseFilename = m_syncManager->fullDatabaseFilename(m_databaseIdentifier);
+diff --git a/Source/WebKitLegacy/Storage/StorageTracker.cpp b/Source/WebKitLegacy/Storage/StorageTracker.cpp
+index 55780611..7d53e7c2 100644
+--- a/Source/WebKitLegacy/Storage/StorageTracker.cpp
++++ b/Source/WebKitLegacy/Storage/StorageTracker.cpp
+@@ -271,8 +271,8 @@ void StorageTracker::syncFileSystemAndTrackerDatabase()
+         if (foundOrigins.contains(originIdentifier))
+             continue;
+ 
+-        callOnMainThread([this, originIdentifier = originIdentifier.isolatedCopy()] {
+-            deleteOriginWithIdentifier(originIdentifier);
++        callOnMainThread([this, identifier = originIdentifier.isolatedCopy()] {
++            deleteOriginWithIdentifier(identifier);
+         });
+     }
+ }
+@@ -291,8 +291,8 @@ void StorageTracker::setOriginDetails(const String& originIdentifier, const Stri
+         m_originSet.add(originIdentifier);
+     }
+ 
+-    auto function = [this, originIdentifier = originIdentifier.isolatedCopy(), databaseFile = databaseFile.isolatedCopy()] {
+-        syncSetOriginDetails(originIdentifier, databaseFile);
++    auto function = [this, identifier = originIdentifier.isolatedCopy(), file = databaseFile.isolatedCopy()] {
++        syncSetOriginDetails(identifier, file);
+     };
+ 
+     if (isMainThread()) {
+@@ -300,8 +300,8 @@ void StorageTracker::setOriginDetails(const String& originIdentifier, const Stri
+         m_thread->dispatch(WTFMove(function));
+     } else {
+         // FIXME: This weird ping-ponging was done to fix a deadlock. We should figure out a cleaner way to avoid it instead.
+-        callOnMainThread([this, function = WTFMove(function)]() mutable {
+-            m_thread->dispatch(WTFMove(function));
++        callOnMainThread([this, setDetails = WTFMove(function)]() mutable {
++            m_thread->dispatch(WTFMove(setDetails));
+         });
+     }
+ }
+diff --git a/WebKitLibraries/polliwog/Growl/Growl/GrowlApplicationBridge.h b/WebKitLibraries/polliwog/Growl/Growl/GrowlApplicationBridge.h
+new file mode 100644
+index 00000000..c48f3330
+--- /dev/null
++++ b/WebKitLibraries/polliwog/Growl/Growl/GrowlApplicationBridge.h
+@@ -0,0 +1,37 @@
++/*
++ * A stand-in for Growl 1.2's GrowlApplicationBridge, the part of the Growl
++ * SDK that Leopard WebKit's WebNotificationProviderGrowl uses to show web
++ * notifications. Captain Polliwog builds against this instead of bundling
++ * Growl: it reports Growl as not running and shows nothing, which is how
++ * Leopard WebKit behaves on a Mac without Growl installed.
++ *
++ * The class is renamed so it never clashes with a real Growl framework that
++ * a host application might load.
++ */
++
++#import <Foundation/Foundation.h>
++
++#define GrowlApplicationBridge PolliwogGrowlApplicationBridgeStub
++
++@protocol GrowlApplicationBridgeDelegate
++@optional
++- (NSDictionary *)registrationDictionaryForGrowl;
++- (NSString *)applicationNameForGrowl;
++- (NSData *)applicationIconDataForGrowl;
++- (void)growlNotificationWasClicked:(id)clickContext;
++- (void)growlNotificationTimedOut:(id)clickContext;
++@end
++
++@interface GrowlApplicationBridge : NSObject
+++ (BOOL)isGrowlRunning;
+++ (void)setGrowlDelegate:(NSObject<GrowlApplicationBridgeDelegate> *)delegate;
+++ (NSObject<GrowlApplicationBridgeDelegate> *)growlDelegate;
+++ (BOOL)registerWithDictionary:(NSDictionary *)regDict;
+++ (NSDictionary *)bestRegistrationDictionary;
+++ (NSDictionary *)registrationDictionaryFromBundle:(NSBundle *)bundle;
+++ (void)notifyWithTitle:(NSString *)title description:(NSString *)description notificationName:(NSString *)notifName
++    iconData:(NSData *)iconData priority:(signed int)priority isSticky:(BOOL)isSticky clickContext:(id)clickContext;
+++ (void)notifyWithTitle:(NSString *)title description:(NSString *)description notificationName:(NSString *)notifName
++    iconData:(NSData *)iconData priority:(signed int)priority isSticky:(BOOL)isSticky clickContext:(id)clickContext
++    identifier:(NSString *)identifier;
++@end
+diff --git a/WebKitLibraries/polliwog/Growl/GrowlApplicationBridgeStub.m b/WebKitLibraries/polliwog/Growl/GrowlApplicationBridgeStub.m
+new file mode 100644
+index 00000000..e3e63752
+--- /dev/null
++++ b/WebKitLibraries/polliwog/Growl/GrowlApplicationBridgeStub.m
+@@ -0,0 +1,51 @@
++/* See Growl/GrowlApplicationBridge.h. */
++
++#import "Growl/GrowlApplicationBridge.h"
++
++static NSObject<GrowlApplicationBridgeDelegate> *growlDelegate;
++
++@implementation GrowlApplicationBridge
++
+++ (BOOL)isGrowlRunning
++{
++    return NO;
++}
++
+++ (void)setGrowlDelegate:(NSObject<GrowlApplicationBridgeDelegate> *)delegate
++{
++    growlDelegate = delegate;
++}
++
+++ (NSObject<GrowlApplicationBridgeDelegate> *)growlDelegate
++{
++    return growlDelegate;
++}
++
+++ (BOOL)registerWithDictionary:(NSDictionary *)regDict
++{
++    return NO;
++}
++
+++ (NSDictionary *)bestRegistrationDictionary
++{
++    return [NSDictionary dictionaryWithObjectsAndKeys:
++        [NSArray array], @"AllNotifications", [NSArray array], @"DefaultNotifications", nil];
++}
++
+++ (NSDictionary *)registrationDictionaryFromBundle:(NSBundle *)bundle
++{
++    return nil;
++}
++
+++ (void)notifyWithTitle:(NSString *)title description:(NSString *)description notificationName:(NSString *)notifName
++    iconData:(NSData *)iconData priority:(signed int)priority isSticky:(BOOL)isSticky clickContext:(id)clickContext
++{
++}
++
+++ (void)notifyWithTitle:(NSString *)title description:(NSString *)description notificationName:(NSString *)notifName
++    iconData:(NSData *)iconData priority:(signed int)priority isSticky:(BOOL)isSticky clickContext:(id)clickContext
++    identifier:(NSString *)identifier
++{
++}
++
++@end
+-- 
+2.50.1 (Apple Git-155)
+

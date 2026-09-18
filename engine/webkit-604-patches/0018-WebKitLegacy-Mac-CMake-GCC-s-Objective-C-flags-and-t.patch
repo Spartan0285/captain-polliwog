@@ -1,0 +1,51 @@
+From 65ee9b42422ba39443e067b36266099bb0242a24 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 03:44:10 -0400
+Subject: [PATCH 18/25] WebKitLegacy Mac CMake: GCC's Objective-C++ flags, and
+ the plug-in host types header
+
+---
+ Source/WebKitLegacy/PlatformMac.cmake | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/Source/WebKitLegacy/PlatformMac.cmake b/Source/WebKitLegacy/PlatformMac.cmake
+index 61f0efd0..f2dc4608 100644
+--- a/Source/WebKitLegacy/PlatformMac.cmake
++++ b/Source/WebKitLegacy/PlatformMac.cmake
+@@ -392,12 +392,22 @@ set(C99_FILES
+     mac/WebView/WebFormDelegate.m
+ )
+ 
++# Everything but the C99 files is built as Objective-C++. GCC spells that
++# -x objective-c++, and needs GNU modes: in strict modes Leopard's headers
++# hide functions libstdc++ and WebKit use.
++if (CMAKE_COMPILER_IS_GNUCXX)
++    set(WEBKITLEGACY_OBJCXX_FLAGS "-x objective-c++ -std=gnu++14")
++    set(WEBKITLEGACY_C99_FLAGS "-std=gnu99")
++else ()
++    set(WEBKITLEGACY_OBJCXX_FLAGS "-ObjC++ -std=c++14")
++    set(WEBKITLEGACY_C99_FLAGS "-std=c99")
++endif ()
+ foreach (_file ${WebKit_SOURCES})
+     list(FIND C99_FILES ${_file} _c99_index)
+     if (${_c99_index} EQUAL -1)
+-        set_source_files_properties(${_file} PROPERTIES COMPILE_FLAGS "-ObjC++ -std=c++14")
++        set_source_files_properties(${_file} PROPERTIES COMPILE_FLAGS "${WEBKITLEGACY_OBJCXX_FLAGS}")
+     else ()
+-        set_source_files_properties(${_file} PROPERTIES COMPILE_FLAGS -std=c99)
++        set_source_files_properties(${_file} PROPERTIES COMPILE_FLAGS "${WEBKITLEGACY_C99_FLAGS}")
+     endif ()
+ endforeach ()
+ 
+@@ -409,6 +419,8 @@ file(COPY
+     mac/Plugins/Hosted/WebKitPluginHostTypes.defs
+     mac/Plugins/Hosted/WebKitPluginHostTypes.h
+ DESTINATION ${DERIVED_SOURCES_WEBKITLEGACY_DIR})
++# The generated code imports <WebKit/WebKitPluginHostTypes.h>.
++file(COPY mac/Plugins/Hosted/WebKitPluginHostTypes.h DESTINATION ${DERIVED_SOURCES_WEBKITLEGACY_DIR}/WebKit)
+ 
+ # A cross build has no mig; use the output of Leopard's mig kept in the tree.
+ find_program(MIG_EXECUTABLE mig)
+-- 
+2.50.1 (Apple Git-155)
+

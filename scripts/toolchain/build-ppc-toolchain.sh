@@ -14,7 +14,9 @@
 # - Debian 11 does not boot under Apple's virtualization in Lima; Ubuntu 20.04
 #   does, still packages Python 2.7 (WebKit 604's scripts need it), and its
 #   GCC 9 builds GCC 6.5 cleanly with -std=gnu++98.
-# - cctools-port's PowerPC branch is 877.8-ld64-253.9-ppc.
+# - cctools-port's PowerPC branch is 877.8-ld64-253.9-ppc. Its ld64 applied a
+#   branch's addend twice when routing it through a branch island, which broke
+#   WebCore (bigger than PowerPC's branch reach); fixed by a patch here.
 # - collect2 runs dsymutil after linking, which does not exist on Linux; a
 #   no-op stand-in is enough, since no debug-symbol bundles are wanted.
 # - The default CPU for powerpc-apple-darwin9 is the G4, which marks every
@@ -55,6 +57,7 @@ done
 if [ ! -x /opt/ppc/bin/powerpc-apple-darwin9-ld ]; then
     rm -rf cctools-port
     git clone -q --depth 1 -b 877.8-ld64-253.9-ppc https://github.com/tpoechtrager/cctools-port.git
+    ( cd cctools-port && patch -p1 < "$REPO/scripts/toolchain/ld64-branch-island-addend.patch" )
     cd cctools-port/cctools
     ./autogen.sh
     CC=clang CXX=clang++ ./configure --prefix=/opt/ppc --target=powerpc-apple-darwin9

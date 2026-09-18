@@ -1,0 +1,25 @@
+From 56c02ce50eacc8adbcd6d003006d796a9fb5be7e Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 03:57:22 -0400
+Subject: [PATCH 22/25] WebKitLegacy: WebViewGroup.cpp needs Objective-C++
+
+---
+ Source/WebKitLegacy/PlatformMac.cmake | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Source/WebKitLegacy/PlatformMac.cmake b/Source/WebKitLegacy/PlatformMac.cmake
+index 5e834b98..b288aaed 100644
+--- a/Source/WebKitLegacy/PlatformMac.cmake
++++ b/Source/WebKitLegacy/PlatformMac.cmake
+@@ -421,7 +421,7 @@ foreach (_file ${WebKit_SOURCES})
+     list(FIND C99_FILES ${_file} _c99_index)
+     if (NOT ${_c99_index} EQUAL -1)
+         set_source_files_properties(${_file} PROPERTIES COMPILE_FLAGS "${WEBKITLEGACY_C99_FLAGS}")
+-    elseif (_file MATCHES "\\.cpp$")
++    elseif (_file MATCHES "\\.cpp$" AND NOT _file MATCHES "WebViewGroup\\.cpp$")  # that one uses Objective-C
+         set_source_files_properties(${_file} PROPERTIES COMPILE_FLAGS "${WEBKITLEGACY_CXX_FLAGS}")
+     else ()
+         set_source_files_properties(${_file} PROPERTIES COMPILE_FLAGS "${WEBKITLEGACY_OBJCXX_FLAGS}")
+-- 
+2.50.1 (Apple Git-155)
+

@@ -40,8 +40,17 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 # The load commands modern ld64 adds by default (function starts, data in
 # code, version minimum, source version) are dropped: Leopard's gdb, otool
 # and install_name_tool cannot parse binaries that carry them.
+#
+# Code bigger than PowerPC's branch reach (WebCore is about 30MB) links only
+# because ld64 inserts branch islands, and it does so within one section.
+# GCC puts cold code and static initializers in sections of their own
+# (__text_cold, __text_startup), whatever the optimization flags say, so
+# those are folded into __text.
 set(PPC_RUNTIME /opt/ppc/runtime)
 set(PPC_LINK_FLAGS "-nodefaultlibs -static-libgcc -Wl,-no_function_starts,-no_data_in_code_info,-no_version_load_command,-no_source_version")
+foreach (_section __text_cold __text_startup __text_exit __text_hot)
+    set(PPC_LINK_FLAGS "${PPC_LINK_FLAGS} -Wl,-rename_section,__TEXT,${_section},__TEXT,__text")
+endforeach ()
 set(CMAKE_EXE_LINKER_FLAGS_INIT    "${PPC_LINK_FLAGS}")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "${PPC_LINK_FLAGS}")
 set(CMAKE_MODULE_LINKER_FLAGS_INIT "${PPC_LINK_FLAGS}")
