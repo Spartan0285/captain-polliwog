@@ -1,0 +1,48 @@
+From 6246ba72bf0bf02e59ae62c829688efd07eb8aa1 Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Thu, 17 Sep 2026 23:53:51 -0400
+Subject: [PATCH 05/12] CMake Mac port: bring source lists in line with the
+ tree
+
+WebLayer.mm moved to platform/graphics/mac, WebDefaultUIDelegate became
+Objective-C++, and WebKitSystemBits.m and WebNSArrayExtras.m are gone.
+---
+ Source/WebCore/PlatformMac.cmake      | 2 +-
+ Source/WebKitLegacy/PlatformMac.cmake | 4 +---
+ 2 files changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/Source/WebCore/PlatformMac.cmake b/Source/WebCore/PlatformMac.cmake
+index 3262bf23..cf2f3688 100644
+--- a/Source/WebCore/PlatformMac.cmake
++++ b/Source/WebCore/PlatformMac.cmake
+@@ -485,7 +485,7 @@ list(APPEND WebCore_SOURCES
+     platform/graphics/cocoa/WebCoreDecompressionSession.mm
+     platform/graphics/cocoa/WebGLLayer.mm
+     platform/graphics/cocoa/WebGPULayer.mm
+-    platform/graphics/cocoa/WebLayer.mm
++    platform/graphics/mac/WebLayer.mm
+ 
+     platform/graphics/cv/PixelBufferConformerCV.cpp
+     platform/graphics/cv/TextureCacheCV.mm
+diff --git a/Source/WebKitLegacy/PlatformMac.cmake b/Source/WebKitLegacy/PlatformMac.cmake
+index cc4acc5c..5d987910 100644
+--- a/Source/WebKitLegacy/PlatformMac.cmake
++++ b/Source/WebKitLegacy/PlatformMac.cmake
+@@ -364,13 +364,11 @@ set(C99_FILES
+ 
+     mac/DefaultDelegates/WebDefaultEditingDelegate.m
+     mac/DefaultDelegates/WebDefaultPolicyDelegate.m
+-    mac/DefaultDelegates/WebDefaultUIDelegate.m
++    mac/DefaultDelegates/WebDefaultUIDelegate.mm
+ 
+     mac/Misc/WebKitErrors.m
+     mac/Misc/WebKitLogging.m
+     mac/Misc/WebKitStatistics.m
+-    mac/Misc/WebKitSystemBits.m
+-    mac/Misc/WebNSArrayExtras.m
+     mac/Misc/WebNSControlExtras.m
+     mac/Misc/WebNSDataExtras.m
+     mac/Misc/WebNSDictionaryExtras.m
+-- 
+2.50.1 (Apple Git-155)
+

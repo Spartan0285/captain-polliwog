@@ -1,0 +1,63 @@
+From 961b409ec07cb35ab8c0f9796844831d80459942 Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Thu, 17 Sep 2026 23:52:33 -0400
+Subject: [PATCH 03/12] CMake Mac port: build for Leopard's frameworks and
+ WebKitSystemInterface
+
+Use libWebKitSystemInterfaceLeopard.a for 10.4/10.5 deployment targets,
+leave out frameworks those systems lack (AVFoundation, IOSurface, Metal),
+and find libxml2 by its real, lowercase name.
+---
+ Source/WebCore/PlatformMac.cmake | 22 ++++++++++++++++++----
+ 1 file changed, 18 insertions(+), 4 deletions(-)
+
+diff --git a/Source/WebCore/PlatformMac.cmake b/Source/WebCore/PlatformMac.cmake
+index 87923737..8b72ecfe 100644
+--- a/Source/WebCore/PlatformMac.cmake
++++ b/Source/WebCore/PlatformMac.cmake
+@@ -1,6 +1,10 @@
+-if ("${CURRENT_OSX_VERSION}" MATCHES "10.9")
++# Cross-compiling for PowerPC, the target comes from the deployment target;
++# Leopard WebKit restored Apple's Leopard WebKitSystemInterface.
++if ("${CMAKE_OSX_DEPLOYMENT_TARGET}" MATCHES "^10\\.[45]$")
++set(WEBKITSYSTEMINTERFACE_LIBRARY ${CMAKE_SOURCE_DIR}/WebKitLibraries/libWebKitSystemInterfaceLeopard.a)
++elseif ("${CURRENT_OSX_VERSION}" MATCHES "10.9")
+ set(WEBKITSYSTEMINTERFACE_LIBRARY libWebKitSystemInterfaceMavericks.a)
+-elif ("${CURRENT_OSX_VERSION}" MATCHES "10.10")
++elseif ("${CURRENT_OSX_VERSION}" MATCHES "10.10")
+ set(WEBKITSYSTEMINTERFACE_LIBRARY libWebKitSystemInterfaceYosemite.a)
+ else ()
+ set(WEBKITSYSTEMINTERFACE_LIBRARY libWebKitSystemInterfaceElCapitan.a)
+@@ -25,9 +29,17 @@ find_library(QUARTZCORE_LIBRARY QuartzCore)
+ find_library(SECURITY_LIBRARY Security)
+ find_library(SYSTEMCONFIGURATION_LIBRARY SystemConfiguration)
+ find_library(SQLITE3_LIBRARY sqlite3)
+-find_library(XML2_LIBRARY XML2)
++find_library(XML2_LIBRARY xml2)
+ find_package(ZLIB REQUIRED)
+ 
++# Frameworks that Mac OS X 10.4/10.5 do not have are left out rather than
++# failing the build; Leopard WebKit does without them.
++foreach (_optional_framework AVFOUNDATION_LIBRARY IOSURFACE_LIBRARY METAL_LIBRARY)
++    if (NOT ${_optional_framework})
++        set(${_optional_framework} "")
++    endif ()
++endforeach ()
++
+ list(APPEND WebCore_LIBRARIES
+     ${ACCELERATE_LIBRARY}
+     ${AUDIOTOOLBOX_LIBRARY}
+@@ -52,7 +64,9 @@ list(APPEND WebCore_LIBRARIES
+ )
+ 
+ add_definitions(-iframework ${APPLICATIONSERVICES_LIBRARY}/Versions/Current/Frameworks)
+-add_definitions(-iframework ${AVFOUNDATION_LIBRARY}/Versions/Current/Frameworks)
++if (AVFOUNDATION_LIBRARY)
++    add_definitions(-iframework ${AVFOUNDATION_LIBRARY}/Versions/Current/Frameworks)
++endif ()
+ add_definitions(-iframework ${CARBON_LIBRARY}/Versions/Current/Frameworks)
+ add_definitions(-iframework ${QUARTZ_LIBRARY}/Frameworks)
+ 
+-- 
+2.50.1 (Apple Git-155)
+

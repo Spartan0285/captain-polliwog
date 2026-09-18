@@ -33,7 +33,11 @@ limactl list -q | grep -qx $VM || \
     limactl start --name=$VM --tty=false --vm-type=vz --cpus 8 --memory 12 --disk 40 \
         --set '.portForwards += [{"guestPort":3632,"hostIP":"0.0.0.0"}]' template:ubuntu-20.04
 
-limactl shell $VM -- bash -s <<'VMSCRIPT'
+# The repository, which Lima's read-only mount of the home folder makes
+# visible inside the VM at the same path.
+REPO=$(cd "$(dirname "$0")/../.." && pwd)
+
+limactl shell $VM -- env REPO="$REPO" bash -s <<'VMSCRIPT'
 set -e
 sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential clang llvm-dev \
@@ -83,4 +87,56 @@ rm -rf build-gcc && mkdir build-gcc && cd build-gcc
 make -j8
 sudo env PATH=$PATH make install
 /opt/ppc/bin/powerpc-apple-darwin9-g++ --version | head -1
+cd ~/src
+
+# Unprefixed tool names, which collect2 and some configure scripts look for.
+sudo mkdir -p /opt/ppc/powerpc-apple-darwin9/bin
+for tool in ar as dsymutil install_name_tool ld libtool lipo nm otool ranlib strip; do
+    sudo ln -sf /opt/ppc/bin/powerpc-apple-darwin9-$tool /opt/ppc/powerpc-apple-darwin9/bin/$tool
+done
+
+# GCC's shared runtime, renamed to load from an app's Frameworks folder
+# (see ppc-darwin.cmake for why it is shared).
+L=/opt/ppc/powerpc-apple-darwin9/lib
+R=/opt/ppc/runtime
+F=@executable_path/../Frameworks
+INT=/opt/ppc/bin/powerpc-apple-darwin9-install_name_tool
+sudo mkdir -p $R
+sudo cp $L/libstdc++.6.dylib $L/libgcc_s.1.dylib $R/
+sudo $INT -id $F/libgcc_s.1.dylib $R/libgcc_s.1.dylib
+sudo $INT -id $F/libstdc++.6.dylib -change $L/libgcc_s.1.dylib $F/libgcc_s.1.dylib $R/libstdc++.6.dylib
+
+sudo mkdir -p /opt/ppc/share
+sudo cp "$REPO/scripts/toolchain/ppc-darwin.cmake" /opt/ppc/share/
+
+# ICU 55.2, the version Leopard WebKit 604 bundles, as one libicucore.dylib
+# with unrenamed symbols. Cross-building ICU needs a native build for its tools.
+if [ ! -f /opt/ppc/icu/lib/libicucore.dylib ]; then
+    [ -f icu4c-55_2-src.tgz ] || wget -q https://github.com/unicode-org/icu/releases/download/release-55-2/icu4c-55_2-src.tgz
+    echo "eda2aa9f9c787748a2e2d310590720ca8bcc6252adf6b4cfb03b65bef9d66759  icu4c-55_2-src.tgz" | sha256sum -c
+    rm -rf icu icu-host icu-ppc && tar -xzf icu4c-55_2-src.tgz
+    mkdir icu-host && ( cd icu-host && ../icu/source/configure --disable-tests --disable-samples && make -j8 )
+    mkdir icu-ppc && cd icu-ppc
+    CC=powerpc-apple-darwin9-gcc CXX=powerpc-apple-darwin9-g++ \
+    CFLAGS="-O2 -mmacosx-version-min=10.4" CXXFLAGS="-O2 -mmacosx-version-min=10.4" \
+    LDFLAGS="-mmacosx-version-min=10.4 -static-libgcc" \
+        ../icu/source/configure --host=powerpc-apple-darwin9 --with-cross-build=$HOME/src/icu-host \
+        --prefix=/opt/ppc/icu --disable-renaming --enable-static --disable-shared \
+        --with-data-packaging=static --disable-tests --disable-samples --disable-extras --disable-tools
+    make -j8
+    sudo env PATH=$PATH make install
+    # ICU's genccode reverses the big-endian data when run on little-endian
+    # Linux; write the data object ourselves.
+    python3 "$REPO/scripts/toolchain/icu-data-asm.py" data/out/icudt55b.dat icudt55 > /tmp/icudt55b_dat.S
+    powerpc-apple-darwin9-gcc -c /tmp/icudt55b_dat.S -o /tmp/icudt55b_dat.o
+    rm -f /tmp/libicudata.a && powerpc-apple-darwin9-ar rcs /tmp/libicudata.a /tmp/icudt55b_dat.o
+    sudo cp /tmp/libicudata.a /opt/ppc/icu/lib/libicudata.a
+    cd /opt/ppc/icu/lib
+    powerpc-apple-darwin9-g++ -dynamiclib -nodefaultlibs -static-libgcc \
+        -isysroot /opt/ppc/SDKs/MacOSX10.5.sdk -mmacosx-version-min=10.4 \
+        -install_name $F/libicucore.dylib -compatibility_version 1.0.0 -current_version 55.2.0 \
+        -Wl,-force_load,libicuuc.a -Wl,-force_load,libicui18n.a -Wl,-force_load,libicudata.a \
+        $R/libstdc++.6.dylib $R/libgcc_s.1.dylib -lgcc -lSystem -o /tmp/libicucore.dylib
+    sudo mv /tmp/libicucore.dylib /opt/ppc/icu/lib/
+fi
 VMSCRIPT

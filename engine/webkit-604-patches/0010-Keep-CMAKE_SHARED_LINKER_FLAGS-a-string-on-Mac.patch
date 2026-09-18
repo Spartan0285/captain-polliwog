@@ -1,0 +1,62 @@
+From dd78ccfdc718c9147c65de48318ce5d34f439537 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 00:06:48 -0400
+Subject: [PATCH 10/12] Keep CMAKE_SHARED_LINKER_FLAGS a string on Mac
+
+Appending unquoted made it a list, so any existing flags put a ';'
+into the link command.
+---
+ Source/JavaScriptCore/PlatformMac.cmake | 2 +-
+ Source/WebCore/PlatformMac.cmake        | 2 +-
+ Source/WebKit/PlatformMac.cmake         | 2 +-
+ Source/WebKitLegacy/PlatformMac.cmake   | 2 +-
+ 4 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/Source/JavaScriptCore/PlatformMac.cmake b/Source/JavaScriptCore/PlatformMac.cmake
+index e528b800..725d5926 100644
+--- a/Source/JavaScriptCore/PlatformMac.cmake
++++ b/Source/JavaScriptCore/PlatformMac.cmake
+@@ -31,7 +31,7 @@ list(APPEND JavaScriptCore_INCLUDE_DIRECTORIES
+     ${JAVASCRIPTCORE_DIR}/inspector/remote/cocoa
+ )
+ 
+-set(CMAKE_SHARED_LINKER_FLAGS ${CMAKE_SHARED_LINKER_FLAGS} "-compatibility_version 1 -current_version ${WEBKIT_MAC_VERSION}")
++set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -compatibility_version 1 -current_version ${WEBKIT_MAC_VERSION}")
+ 
+ # FIXME: Make including these files consistent in the source so these forwarding headers are not needed.
+ if (NOT EXISTS ${DERIVED_SOURCES_JAVASCRIPTCORE_DIR}/InspectorBackendDispatchers.h)
+diff --git a/Source/WebCore/PlatformMac.cmake b/Source/WebCore/PlatformMac.cmake
+index cf2f3688..827867db 100644
+--- a/Source/WebCore/PlatformMac.cmake
++++ b/Source/WebCore/PlatformMac.cmake
+@@ -824,4 +824,4 @@ list(APPEND WebCoreTestSupport_SOURCES
+     testing/cocoa/WebArchiveDumpSupport.mm
+ )
+ 
+-set(CMAKE_SHARED_LINKER_FLAGS ${CMAKE_SHARED_LINKER_FLAGS} "-compatibility_version 1 -current_version ${WEBKIT_MAC_VERSION}")
++set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -compatibility_version 1 -current_version ${WEBKIT_MAC_VERSION}")
+diff --git a/Source/WebKit/PlatformMac.cmake b/Source/WebKit/PlatformMac.cmake
+index 52c6d547..d3837d76 100644
+--- a/Source/WebKit/PlatformMac.cmake
++++ b/Source/WebKit/PlatformMac.cmake
+@@ -741,6 +741,6 @@ file(WRITE ${FORWARDING_HEADERS_DIR}/WebKit/WKImageCG.h "#import <WebKit2/Shared
+ file(WRITE ${FORWARDING_HEADERS_DIR}/WebKit/WebStorageManagerPrivate.h "#import <WebKit/mac/Storage/WebStorageManagerPrivate.h>")
+ file(WRITE ${FORWARDING_HEADERS_DIR}/WebKit/WebDatabaseManagerPrivate.h "#import <WebKit/mac/Storage/WebDatabaseManagerPrivate.h>")
+ 
+-set(CMAKE_SHARED_LINKER_FLAGS ${CMAKE_SHARED_LINKER_FLAGS} "-compatibility_version 1 -current_version ${WEBKIT_MAC_VERSION}")
++set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -compatibility_version 1 -current_version ${WEBKIT_MAC_VERSION}")
+ 
+ set(WebKit2_OUTPUT_NAME WebKit)
+diff --git a/Source/WebKitLegacy/PlatformMac.cmake b/Source/WebKitLegacy/PlatformMac.cmake
+index 5d987910..d95272c4 100644
+--- a/Source/WebKitLegacy/PlatformMac.cmake
++++ b/Source/WebKitLegacy/PlatformMac.cmake
+@@ -454,4 +454,4 @@ endforeach ()
+ 
+ set(WebKit_OUTPUT_NAME WebKitLegacy)
+ 
+-set(CMAKE_SHARED_LINKER_FLAGS ${CMAKE_SHARED_LINKER_FLAGS} "-compatibility_version 1 -current_version ${WEBKIT_MAC_VERSION}")
++set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -compatibility_version 1 -current_version ${WEBKIT_MAC_VERSION}")
+-- 
+2.50.1 (Apple Git-155)
+

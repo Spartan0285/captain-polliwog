@@ -153,6 +153,66 @@ What Leopard WebKit's own sources show (SourceForge, `604/Sources/Patches_604.5.
   compile with distcc (which the instructions mention) to a cross compiler on
   a modern Mac would cut that sharply.
 
+## Progress: cross-building 604 on the Mac
+
+All compiling happens on the Apple Silicon Mac, in a Linux VM with a PowerPC
+cross toolchain (`scripts/toolchain/`); the old Macs only run the results. The
+WebKit tree is `Safari-604.5.6` plus Leopard WebKit's patch, built with
+WebKit's CMake "Mac" port instead of Xcode, one commit per change on a
+`polliwog` branch. Order: reproduce Leopard's G4 build first, then the G3 CPU,
+then Tiger.
+
+**JavaScriptCore runs on the iBook** (17-18 September 2026). A full build takes
+under 4 minutes on the Mac. It passes a modern-JavaScript smoke test
+(classes, async/await, generators, typed arrays, template strings, Intl with
+all 683 ICU locales). Speed against Leopard WebKit's own JavaScriptCore,
+same `jsc` program, iBook G4 1.42GHz:
+
+| Test | Our build (GCC 6.5) | Leopard WebKit |
+|---|---|---|
+| fib(25) | 78 ms | 69 ms |
+| sort 100k numbers | 1445 ms | 1303 ms |
+| build a 200k string | 354 ms | 324 ms |
+| 20k regex matches (PowerPC regex JIT) | 75 ms | 75 ms |
+| JSON round trips | 130 ms | 112 ms |
+| 200k small objects | 138 ms | 124 ms |
+
+About 10% behind, with G4 tuning (`-mtune=7450`) not yet tried.
+
+What reproducing the Xcode build through CMake took:
+
+- **Feature set.** The Xcode build passes `-DENABLE_X` only for what
+  `FeatureDefines.xcconfig` turns on and lets `wtf/FeatureDefines.h` decide
+  the rest; CMake forces every feature. `Tools/polliwog/probe-leopard-features.sh`
+  asks the preprocessor what Leopard's build ends up with, and
+  `OptionsMac.cmake` matches it for 10.4/10.5 targets (28 features off,
+  13 on). This also turns off the remote Web Inspector, which needs
+  libdispatch (10.6+).
+- **Leopard's source choices.** The generic, thread-based `WorkQueue` instead
+  of the libdispatch one; `libauto` on 10.5; the PowerPC assembler, which
+  powers the regular-expression JIT (the JavaScript JIT stays off, so
+  JavaScript runs in the C interpreter, as in Leopard WebKit).
+- **Compiler settings Xcode implies.** `gnu++14` rather than `c++14`
+  (Leopard's `math.h` hides `llround` in strict mode), `-fobjc-exceptions`,
+  and ICU without symbol renaming.
+- **`mig`.** Linux has no Mach interface generator; the four files it makes
+  were generated once with Leopard's own `mig` on the iBook and are kept in
+  the tree.
+- **One shared C++ runtime.** Like Leopard WebKit, every image uses one
+  bundled `libstdc++.6.dylib` and `libgcc_s.1.dylib`. With a static runtime
+  in each library, `std::call_once` crashed: its state lives in emulated
+  thread-local storage, which is per copy of libgcc.
+- **ICU 55.2** is one `libicucore.dylib`, as in Leopard WebKit. ICU's
+  cross build reversed every 4 bytes of its data (its `genccode` writes words
+  in the build machine's byte order); `scripts/toolchain/icu-data-asm.py`
+  writes the data correctly.
+- **Bugs in WebKit's Mac CMake files**, which Apple never used for shipping:
+  case-sensitive framework names, stale source lists, a list-valued linker
+  flag.
+
+Next: WebCore and WebKitLegacy for the G4, then Captain Polliwog on the new
+frameworks, then the G3 and Tiger builds.
+
 ## Options
 
 | | What | Tiger | Leopard | Effort | Engine age | Main risk |

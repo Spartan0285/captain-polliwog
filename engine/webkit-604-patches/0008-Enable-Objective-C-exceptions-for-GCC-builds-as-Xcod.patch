@@ -1,0 +1,31 @@
+From 2ecdcbf63d4d3394f4129ed5ce681320eb19beb3 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Thu, 17 Sep 2026 23:57:47 -0400
+Subject: [PATCH 08/12] Enable Objective-C exceptions for GCC builds, as Xcode
+ does
+
+---
+ Source/cmake/OptionsMac.cmake | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/Source/cmake/OptionsMac.cmake b/Source/cmake/OptionsMac.cmake
+index 17f2d3ff..eeba321e 100644
+--- a/Source/cmake/OptionsMac.cmake
++++ b/Source/cmake/OptionsMac.cmake
+@@ -114,6 +114,13 @@ WEBKIT_OPTION_END()
+ # WebKitLegacy is wanted (WebKit2 needs XPC, AVFoundation and other frameworks
+ # 10.4/10.5 lack), and WebGL is off. Both can be forced back on from the
+ # command line.
++# Xcode enables @try/@catch by default (GCC_ENABLE_OBJC_EXCEPTIONS). GCC only
++# warns when it sees this on plain C and C++ files.
++if (CMAKE_COMPILER_IS_GNUCXX)
++    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fobjc-exceptions")
++    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fobjc-exceptions")
++endif ()
++
+ if (NOT DEFINED POLLIWOG_ENABLE_WEBKIT2)
+     set(POLLIWOG_ENABLE_WEBKIT2 ON)
+ endif ()
+-- 
+2.50.1 (Apple Git-155)
+

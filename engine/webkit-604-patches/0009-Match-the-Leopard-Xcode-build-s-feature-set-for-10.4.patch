@@ -1,0 +1,149 @@
+From 82045658a64927cdd158fea917370133459d19bf Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 00:02:11 -0400
+Subject: [PATCH 09/12] Match the Leopard Xcode build's feature set for
+ 10.4/10.5 targets
+
+Found by preprocessing wtf/Platform.h with the -D flags the Leopard
+FeatureDefines.xcconfig produces. Among other things this turns off the
+remote inspector, which needs libdispatch (10.6+).
+---
+ Source/cmake/OptionsMac.cmake            | 52 ++++++++++++++++++++++++
+ Tools/polliwog/probe-leopard-features.sh | 28 +++++++++++++
+ Tools/polliwog/xcconfig-features.py      | 26 ++++++++++++
+ 3 files changed, 106 insertions(+)
+ create mode 100755 Tools/polliwog/probe-leopard-features.sh
+ create mode 100644 Tools/polliwog/xcconfig-features.py
+
+diff --git a/Source/cmake/OptionsMac.cmake b/Source/cmake/OptionsMac.cmake
+index eeba321e..22947fa9 100644
+--- a/Source/cmake/OptionsMac.cmake
++++ b/Source/cmake/OptionsMac.cmake
+@@ -108,6 +108,58 @@ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_IOS_AIRPLAY PRIVATE OFF)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_DATABASE_PROCESS PRIVATE ON)
+ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_MEMORY_SAMPLER PRIVATE ON)
+ 
++# Leopard WebKit's Xcode build decides features from FeatureDefines.xcconfig
++# (with the Leopard patches) and leaves the rest to wtf/FeatureDefines.h. These
++# lists are where that differs from the Mac defaults above, found by running
++# the preprocessor on both (Tools/polliwog/probe-leopard-features.sh).
++if (CMAKE_OSX_DEPLOYMENT_TARGET MATCHES "^10\\.[45]")
++    foreach (_feature
++        ENABLE_ACCELERATED_OVERFLOW_SCROLLING
++        ENABLE_ASYNC_SCROLLING
++        ENABLE_AVF_CAPTIONS
++        ENABLE_CACHE_PARTITIONING
++        ENABLE_DATABASE_PROCESS
++        ENABLE_FILTERS_LEVEL_2
++        ENABLE_INDIE_UI
++        ENABLE_INPUT_TYPE_COLOR
++        ENABLE_INPUT_TYPE_COLOR_POPOVER
++        ENABLE_INPUT_TYPE_DATE
++        ENABLE_INPUT_TYPE_DATETIMELOCAL
++        ENABLE_INPUT_TYPE_MONTH
++        ENABLE_INPUT_TYPE_TIME
++        ENABLE_LEGACY_ENCRYPTED_MEDIA
++        ENABLE_LETTERPRESS
++        ENABLE_MAC_LONG_PRESS
++        ENABLE_MEDIA_SOURCE
++        ENABLE_MEMORY_SAMPLER
++        ENABLE_PUBLIC_SUFFIX_LIST
++        ENABLE_REMOTE_INSPECTOR
++        ENABLE_RUBBER_BANDING
++        ENABLE_SERVICE_CONTROLS
++        ENABLE_SMOOTH_SCROLLING
++        ENABLE_TELEPHONE_NUMBER_DETECTION
++        ENABLE_WEBGL2
++        ENABLE_WEBGPU
++        ENABLE_WEBVTT_REGIONS
++        ENABLE_WEB_TIMING
++    )
++        WEBKIT_OPTION_DEFAULT_PORT_VALUE(${_feature} PRIVATE OFF)
++    endforeach ()
++    foreach (_feature
++        ENABLE_CSS_SELECTORS_LEVEL4
++        ENABLE_DOWNLOAD_ATTRIBUTE
++        ENABLE_GAMEPAD
++        ENABLE_INDEXED_DATABASE_IN_WORKERS
++        ENABLE_POINTER_LOCK
++        ENABLE_TEXT_AUTOSIZING
++        ENABLE_WEB_ANIMATIONS
++    )
++        WEBKIT_OPTION_DEFAULT_PORT_VALUE(${_feature} PRIVATE ON)
++    endforeach ()
++    # Not CMake options, but on in the Leopard build.
++    add_definitions(-DENABLE_CSS_TRAILING_WORD=1 -DENABLE_KEYBOARD_CODE_ATTRIBUTE=1 -DENABLE_KEYBOARD_KEY_ATTRIBUTE=1)
++endif ()
++
+ WEBKIT_OPTION_END()
+ 
+ # Captain Polliwog builds for PowerPC Mac OS X, where only the single-process
+diff --git a/Tools/polliwog/probe-leopard-features.sh b/Tools/polliwog/probe-leopard-features.sh
+new file mode 100755
+index 00000000..328da1bb
+--- /dev/null
++++ b/Tools/polliwog/probe-leopard-features.sh
+@@ -0,0 +1,28 @@
++#!/bin/bash
++# Prints the features Leopard WebKit's Xcode build turns on, and how that
++# differs from a CMake build's cmakeconfig.h. Run in the cross-build VM:
++#   probe-leopard-features.sh ~/build/mac-leopard [1050]
++# The Xcode build passes -DENABLE_X for what FeatureDefines.xcconfig enables
++# and leaves every other feature to wtf/FeatureDefines.h, so this does the same
++# and asks the preprocessor for the result.
++set -e
++BUILD=$1; MAJOR=${2:-1050}
++SRC=$(cd "$(dirname "$0")/../.." && pwd)
++CXX=${CXX:-/opt/ppc/bin/powerpc-apple-darwin9-g++}
++SDK=${SDK:-/opt/ppc/SDKs/MacOSX10.5.sdk}
++T=$(mktemp -d)
++XC=$SRC/Source/JavaScriptCore/Configurations/FeatureDefines.xcconfig
++python3 "$SRC/Tools/polliwog/xcconfig-features.py" "$XC" "$MAJOR" > $T/xc-on
++grep -o '\$(ENABLE_[A-Z0-9_]*)' "$XC" | tr -d '$()' > $T/names
++grep -o "#define ENABLE_[A-Z0-9_]* [01]" "$BUILD/cmakeconfig.h" | awk '{print $2}' >> $T/names
++grep -o "#define ENABLE_[A-Z0-9_]* 1" "$BUILD/cmakeconfig.h" | awk '{print $2}' | sort > $T/cmake-on
++{ echo "#include <wtf/Platform.h>"
++  for f in $(sort -u $T/names); do
++    printf '#if defined(%s) && %s\nFEATURE "%s" 1\n#else\nFEATURE "%s" 0\n#endif\n' $f $f $f $f
++  done; } > $T/probe.mm
++"$CXX" -E -x objective-c++ -isysroot "$SDK" -mmacosx-version-min=10.5 -std=gnu++1y \
++    -I"$SRC/Source/WTF" $(sed 's/^/-D/' $T/xc-on) $T/probe.mm \
++    | grep '^FEATURE' | tr -d '"' | awk '$3==1{print $2}' | sort > $T/leopard-on
++echo "== On in Leopard's build, off in CMake:"; comm -23 $T/leopard-on $T/cmake-on
++echo "== On in CMake, off in Leopard's build:"; comm -13 $T/leopard-on $T/cmake-on
++rm -rf $T
+diff --git a/Tools/polliwog/xcconfig-features.py b/Tools/polliwog/xcconfig-features.py
+new file mode 100644
+index 00000000..e6fb6cb6
+--- /dev/null
++++ b/Tools/polliwog/xcconfig-features.py
+@@ -0,0 +1,26 @@
++import re,sys
++path=sys.argv[1]; major=sys.argv[2]
++d={}
++cond={}
++for line in open(path):
++    line=line.split('//')[0].strip()
++    m=re.match(r'^(\w+)(\[sdk=([^\]]+)\])?\s*=\s*(.*?);?\s*$',line)
++    if not m: continue
++    name,_,sdk,val=m.groups()
++    if sdk is None: d.setdefault(name,val)
++    elif sdk.startswith('macosx'): cond[name]=val
++    elif name not in d: pass
++v={'TARGET_MAC_OS_X_VERSION_MAJOR':major}
++v.update(d); v.update(cond)
++def ev(s,depth=0):
++    for _ in range(10):
++        n=re.sub(r'\$\((\w+)\)',lambda m: v.get(m.group(1),''),s)
++        if n==s: break
++        s=n
++    return s.strip()
++feats=re.findall(r'\$\((ENABLE_\w+)\)',d.get('FEATURE_DEFINES',''))
++on=set()
++for f in feats:
++    r=ev('$(%s)'%f)
++    if r: on.add(f)
++print('\n'.join(sorted(on)))
+-- 
+2.50.1 (Apple Git-155)
+

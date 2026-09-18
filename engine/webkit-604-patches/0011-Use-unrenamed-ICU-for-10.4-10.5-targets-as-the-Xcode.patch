@@ -1,0 +1,26 @@
+From b83a79403ea28fcd970392596e600ab067c5ebcc Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 00:07:43 -0400
+Subject: [PATCH 11/12] Use unrenamed ICU for 10.4/10.5 targets, as the Xcode
+ build does
+
+---
+ Source/cmake/OptionsMac.cmake | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Source/cmake/OptionsMac.cmake b/Source/cmake/OptionsMac.cmake
+index 22947fa9..f409a54e 100644
+--- a/Source/cmake/OptionsMac.cmake
++++ b/Source/cmake/OptionsMac.cmake
+@@ -157,6 +157,8 @@ if (CMAKE_OSX_DEPLOYMENT_TARGET MATCHES "^10\\.[45]")
+         WEBKIT_OPTION_DEFAULT_PORT_VALUE(${_feature} PRIVATE ON)
+     endforeach ()
+     # Not CMake options, but on in the Leopard build.
++    # As in the Xcode build, ICU is an unrenamed libicucore.
++    add_definitions(-DU_DISABLE_RENAMING=1 -DU_SHOW_CPLUSPLUS_API=0)
+     add_definitions(-DENABLE_CSS_TRAILING_WORD=1 -DENABLE_KEYBOARD_CODE_ATTRIBUTE=1 -DENABLE_KEYBOARD_KEY_ATTRIBUTE=1)
+ endif ()
+ 
+-- 
+2.50.1 (Apple Git-155)
+

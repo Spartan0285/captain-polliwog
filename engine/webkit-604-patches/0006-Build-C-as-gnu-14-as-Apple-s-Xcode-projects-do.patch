@@ -1,0 +1,27 @@
+From 787f17e377e2791e79168dcd9bae58dc1f4adc98 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Thu, 17 Sep 2026 23:55:59 -0400
+Subject: [PATCH 06/12] Build C++ as gnu++14, as Apple's Xcode projects do
+
+Leopard's math.h hides llround/llrint under __STRICT_ANSI__, which
+-std=c++1y defines, so libstdc++'s <cmath> cannot find them.
+---
+ Source/cmake/OptionsCommon.cmake | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Source/cmake/OptionsCommon.cmake b/Source/cmake/OptionsCommon.cmake
+index 813d0eef..6de5b971 100644
+--- a/Source/cmake/OptionsCommon.cmake
++++ b/Source/cmake/OptionsCommon.cmake
+@@ -60,7 +60,7 @@ if (COMPILER_IS_GCC_OR_CLANG)
+         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-undef -Wno-macro-redefined -Wno-unknown-pragmas -Wno-nonportable-include-path -Wno-unknown-argument")
+     else ()
+         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-exceptions")
+-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1y -fno-exceptions -fno-rtti")
++        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++1y -fno-exceptions -fno-rtti")
+ 
+         if (WIN32)
+             set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mno-ms-bitfields -Wno-unknown-pragmas")
+-- 
+2.50.1 (Apple Git-155)
+

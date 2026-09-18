@@ -1,0 +1,90 @@
+From f91e172ce0dea14ae72c98bbcf814a4f4a5205ca Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 18 Sep 2026 00:13:49 -0400
+Subject: [PATCH 12/12] Build JavaScriptCore for Leopard as the Xcode project
+ does
+
+Link the configured ICU instead of the system libicucore, use the
+generic WorkQueue (no libdispatch), link libauto on 10.5, and add
+PPCAssembler.cpp (the regular expression JIT) and JSCPoisonedPtr.cpp
+to the source lists.
+---
+ Source/JavaScriptCore/CMakeLists.txt |  2 ++
+ Source/WTF/wtf/PlatformMac.cmake     | 17 ++++++++++++++++-
+ Source/cmake/OptionsMac.cmake        |  4 ++++
+ 3 files changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/Source/JavaScriptCore/CMakeLists.txt b/Source/JavaScriptCore/CMakeLists.txt
+index b4b205e0..96e51386 100644
+--- a/Source/JavaScriptCore/CMakeLists.txt
++++ b/Source/JavaScriptCore/CMakeLists.txt
+@@ -73,6 +73,7 @@ set(JavaScriptCore_SOURCES
+     assembler/MacroAssemblerARMv7.cpp
+     assembler/MacroAssemblerCodeRef.cpp
+     assembler/MacroAssemblerPrinter.cpp
++    assembler/PPCAssembler.cpp
+     assembler/MacroAssemblerX86Common.cpp
+     assembler/Printer.cpp
+ 
+@@ -774,6 +775,7 @@ set(JavaScriptCore_SOURCES
+     runtime/JSAsyncFunction.cpp
+     runtime/JSBoundFunction.cpp
+     runtime/JSCJSValue.cpp
++    runtime/JSCPoisonedPtr.cpp
+     runtime/JSCallee.cpp
+     runtime/JSCell.cpp
+     runtime/JSCustomGetterSetterFunction.cpp
+diff --git a/Source/WTF/wtf/PlatformMac.cmake b/Source/WTF/wtf/PlatformMac.cmake
+index a186536e..6896f56b 100644
+--- a/Source/WTF/wtf/PlatformMac.cmake
++++ b/Source/WTF/wtf/PlatformMac.cmake
+@@ -5,8 +5,12 @@ list(APPEND WTF_LIBRARIES
+     ${COREFOUNDATION_LIBRARY}
+     ${COCOA_LIBRARY}
+     ${READLINE_LIBRARY}
+-    libicucore.dylib
+ )
++if (ICU_LIBRARY)
++    list(APPEND WTF_LIBRARIES ${ICU_LIBRARY})
++else ()
++    list(APPEND WTF_LIBRARIES libicucore.dylib)
++endif ()
+ 
+ list(APPEND WTF_SOURCES
+     AutodrainedPoolMac.mm
+@@ -38,6 +42,17 @@ list(APPEND WTF_SOURCES
+     text/mac/StringViewObjC.mm
+ )
+ 
++# Leopard and Tiger have no libdispatch; the Leopard port runs WorkQueue on
++# threads (generic/WorkQueueGeneric.cpp), and registers threads with the
++# Objective-C garbage collector through libauto (10.5).
++if (POLLIWOG_LEGACY_MAC)
++    list(REMOVE_ITEM WTF_SOURCES cocoa/WorkQueueCocoa.cpp)
++    list(APPEND WTF_SOURCES generic/WorkQueueGeneric.cpp)
++    if (CMAKE_OSX_DEPLOYMENT_TARGET MATCHES "^10\\.5")
++        list(APPEND WTF_LIBRARIES auto)
++    endif ()
++endif ()
++
+ list(APPEND WTF_INCLUDE_DIRECTORIES
+     "${WTF_DIR}/icu"
+     "${WTF_DIR}/wtf/spi/darwin"
+diff --git a/Source/cmake/OptionsMac.cmake b/Source/cmake/OptionsMac.cmake
+index f409a54e..136bdb10 100644
+--- a/Source/cmake/OptionsMac.cmake
++++ b/Source/cmake/OptionsMac.cmake
+@@ -113,6 +113,10 @@ WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_MEMORY_SAMPLER PRIVATE ON)
+ # lists are where that differs from the Mac defaults above, found by running
+ # the preprocessor on both (Tools/polliwog/probe-leopard-features.sh).
+ if (CMAKE_OSX_DEPLOYMENT_TARGET MATCHES "^10\\.[45]")
++    set(POLLIWOG_LEGACY_MAC ON)
++endif ()
++
++if (POLLIWOG_LEGACY_MAC)
+     foreach (_feature
+         ENABLE_ACCELERATED_OVERFLOW_SCROLLING
+         ENABLE_ASYNC_SCROLLING
+-- 
+2.50.1 (Apple Git-155)
+
