@@ -89,12 +89,52 @@ iBook:
 This is eight years of engine progress (flexbox, grid, ES2017, fetch,
 modern SVG and CSS), available now, on Leopard. It does not run on Tiger.
 
+## Can the 2018 engine run on the PowerBook and Tiger?
+
+Measured on the machines themselves, September 2026.
+
+**The binaries: no, on any OS.** Leopard WebKit's frameworks are built only
+for G4 (`ppc7400`, which uses AltiVec) and G5 (`ppc970`). The Pismo's G3 has
+no AltiVec, so these exact files cannot run on it even under Leopard. Any
+route to the 2018 engine on the Pismo starts with building it from source for
+the G3 (`-mcpu=750`).
+
+**The OS: 207 missing functions.** Every function the three frameworks
+import from the system (about 1,700, excluding the libraries Leopard WebKit
+bundles itself: ICU, SQLite, libxml2, libstdc++, Security) was checked
+against everything Tiger 10.4.11 exports on the Pismo. 142 more looked missing at
+first but only moved between frameworks from 10.4 to 10.5; a build against the
+10.4 SDK resolves those by itself. What remains:
+
+| Kind | Count | What it takes |
+|---|---|---|
+| `$UNIX2003` / `$INODE64` variants | 18 | Nothing: building for 10.4 picks the old names. |
+| Game controllers (IOHID) | 26 | Stubs; gamepad support off. |
+| Constants and small calls (accessibility names, window notifications, speech, grammar, input sources, backup exclusion, power assertions, `backtrace`, WebGL extensions) | about 45 | Stubs or constant strings. |
+| Objective-C 2.0 runtime (`class_addMethod`, `method_exchangeImplementations`...) | 23 | A shim over Tiger's Objective-C 1 runtime. A known technique. |
+| Quartz additions (`CGGradient`, generic colors, font smoothing switches) | 28 | Shims: gradients via Tiger's `CGShading`, the rest mostly no-ops. |
+| CommonCrypto | 9 | Implement with the OpenSSL Captain Polliwog already bundles. |
+| `CFError`, `CFLocale` preferred languages, proxy keys | about 15 | Small shims. |
+| Private CFNetwork (cookie storage, URL cache, request/response accessors) | about 30 | Shims onto the public cookie and URL APIs; Captain Polliwog's own networking already replaces most of the path. |
+| CoreText | 17 | Tiger has a private CoreText that exports most of what WebKit calls; only 17 functions are absent. Behaviour may differ: the main risk. |
+| Core Animation (`CALayer` and friends) | 22 | Run with accelerated compositing off (a WebKit preference) and supply stub classes so the frameworks load. 3D transforms and some effects fall back or are lost. |
+
+The standard way to do this is to build against the 10.5 SDK with a 10.4
+deployment target, so that 10.5-only functions are weakly linked and simply
+absent on Tiger, plus a small "Tiger shim" library for the ones WebKit
+actually calls. Objective-C class references cannot be weak on Tiger's
+runtime, so the Core Animation classes need real (empty) stand-ins.
+
+**Verdict:** plausible, not trivial. There is no sign of a wall. The
+two risks worth testing first are text layout on Tiger's private CoreText and
+rendering with accelerated compositing turned off.
+
 ## Options
 
 | | What | Tiger | Leopard | Effort | Engine age | Main risk |
 |---|---|---|---|---|---|---|
 | **1** | **Bundle Leopard WebKit 604** | no | **yes** | weeks | 2018 | Unpatched since 2018 |
-| 2 | Port Leopard WebKit 604 to Tiger | yes | yes | months, uncertain | 2018 | Uses 10.5 APIs (CoreText, others) Tiger lacks |
+| 2 | Port Leopard WebKit 604 to Tiger | yes | yes | weeks to months | 2018 | 207 missing functions; text layout and compositing are the risks |
 | **3** | **Fork WebKit 2.52 as a new port** (HaikuWebKit model) | goal | yes | many months | 2026 | Toolchain, size of the port, security upkeep |
 | 4 | Stay on the system engine | yes | yes | none | 2010-11 | Sites keep breaking |
 | - | Gecko (Aquafox/TenFourFox) | - | - | - | - | A different browser, not an engine we can embed. Useful as a speed yardstick: it has the only PowerPC JavaScript JIT. |
