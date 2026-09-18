@@ -176,6 +176,17 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
     }
 }
 
+// Tabs beyond this many give up their pages (keeping address, title and
+// scroll position) until they are selected again.
+- (unsigned)maximumLiveTabs
+{
+    switch ([self effectiveMemoryProfile]) {
+    case CPMemoryProfileSmall:  return 2;
+    case CPMemoryProfileMedium: return 4;
+    default:                    return 8;
+    }
+}
+
 // Responses larger than this stream straight to the page without being kept
 // for the cache, so one big download cannot push the browser into swap.
 - (unsigned)maximumCachedResponseBytes

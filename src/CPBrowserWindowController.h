@@ -4,24 +4,34 @@
 
 #import <Cocoa/Cocoa.h>
 
-@class WebView;
+@class CPTab;
+@class CPTabBarView;
 
+// A browser window: the toolbar, a tab bar, the selected tab's page, and a
+// status bar. Everything about an individual page lives in CPTab.
 @interface CPBrowserWindowController : NSWindowController
 {
-    WebView             *webView;
+    NSMutableArray      *tabs;
+    CPTab               *selectedTab;
+    CPTabBarView        *tabBar;
+    NSView              *pageArea;
     NSButton            *backButton;
     NSButton            *forwardButton;
     NSButton            *reloadButton;
     NSTextField         *addressField;
     NSTextField         *statusField;
     NSProgressIndicator *progressBar;
-    NSDate              *loadStarted;
-    BOOL                 loading;
+    BOOL                 selectedWasLoading;
 }
 
 - (id)init;
 
-- (WebView *)webView;
+- (NSArray *)tabs;
+- (CPTab *)selectedTab;
+- (CPTab *)addTabWithURL:(NSURL *)url select:(BOOL)select;
+- (void)selectTab:(CPTab *)tab;
+- (void)closeTab:(CPTab *)tab;
+
 - (void)loadURL:(NSURL *)url;
 - (void)loadAddressString:(NSString *)address;
 
@@ -35,5 +45,9 @@
 - (IBAction)addressEntered:(id)sender;
 - (IBAction)makeTextLarger:(id)sender;
 - (IBAction)makeTextSmaller:(id)sender;
+- (IBAction)newTab:(id)sender;
+- (IBAction)closeCurrentTab:(id)sender;
+- (IBAction)selectNextTab:(id)sender;
+- (IBAction)selectPreviousTab:(id)sender;
 
 @end

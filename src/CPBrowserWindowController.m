@@ -4,36 +4,28 @@
 
 #import "CPBrowserWindowController.h"
 #import "CPAppDelegate.h"
+#import "CPTab.h"
+#import "CPTabBarView.h"
 #import "CPIcons.h"
 #import "CPDebugSnapshot.h"
 #import <WebKit/WebKit.h>
 
 #define CPBarHeight     34.0f
+#define CPTabBarHeight  22.0f
 #define CPStatusHeight  20.0f
 
 static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?q=%@";
-
-static NSString *CPEscapeHTML(NSString *text)
-{
-    NSMutableString *result = [NSMutableString stringWithString:(text != nil ? text : @"")];
-    [result replaceOccurrencesOfString:@"&" withString:@"&amp;" options:0 range:NSMakeRange(0, [result length])];
-    [result replaceOccurrencesOfString:@"<" withString:@"&lt;" options:0 range:NSMakeRange(0, [result length])];
-    [result replaceOccurrencesOfString:@">" withString:@"&gt;" options:0 range:NSMakeRange(0, [result length])];
-    [result replaceOccurrencesOfString:@"\"" withString:@"&quot;" options:0 range:NSMakeRange(0, [result length])];
-    return result;
-}
 
 @interface CPBrowserWindowController (Private)
 - (NSButton *)addButtonWithImage:(NSImage *)image frame:(NSRect)frame action:(SEL)action toolTip:(NSString *)toolTip;
 - (NSBox *)addSeparatorWithFrame:(NSRect)frame autoresizingMask:(unsigned int)mask;
 - (void)buildInterface;
-- (void)updateNavigationButtons;
-- (void)setLoading:(BOOL)flag;
+- (void)showSelectedTab;
+- (void)updateChromeForSelectedTab;
 - (void)setStatusText:(NSString *)text;
 - (void)setAddressFromURL:(NSURL *)url;
 - (BOOL)isEditingAddress;
 - (NSURL *)URLFromUserInput:(NSString *)input;
-- (void)showErrorPage:(NSError *)error forFrame:(WebFrame *)frame;
 - (void)writeDebugSnapshot;
 @end
 
@@ -70,6 +62,7 @@ static NSString *CPEscapeHTML(NSString *text)
     NSRect bounds = [content bounds];
     float width = NSWidth(bounds);
     float height = NSHeight(bounds);
+    float tabBarTop = height - CPBarHeight - 1.0f;
     NSFont *smallFont = [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
 
     backButton = [self addButtonWithImage:[CPIcons backImage]
@@ -94,18 +87,21 @@ static NSString *CPEscapeHTML(NSString *text)
     [content addSubview:addressField];
     [addressField release];
 
-    [self addSeparatorWithFrame:NSMakeRect(0.0f, height - CPBarHeight - 1.0f, width, 1.0f)
+    [self addSeparatorWithFrame:NSMakeRect(0.0f, tabBarTop, width, 1.0f)
                autoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
 
-    webView = [[WebView alloc] initWithFrame:NSMakeRect(0.0f, CPStatusHeight + 1.0f, width,
-                                                        height - CPBarHeight - CPStatusHeight - 2.0f)
-                                   frameName:nil
-                                   groupName:@"CaptainPolliwog"];
-    [webView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-    [webView setFrameLoadDelegate:self];
-    [webView setUIDelegate:self];
-    [webView setApplicationNameForUserAgent:[CPAppDelegate userAgentApplicationName]];
-    [content addSubview:webView];
+    tabBar = [[CPTabBarView alloc] initWithFrame:NSMakeRect(0.0f, tabBarTop - CPTabBarHeight,
+                                                            width, CPTabBarHeight)];
+    [tabBar setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
+    [tabBar setController:self];
+    [content addSubview:tabBar];
+    [tabBar release];
+
+    pageArea = [[NSView alloc] initWithFrame:NSMakeRect(0.0f, CPStatusHeight + 1.0f, width,
+                                                        tabBarTop - CPTabBarHeight - CPStatusHeight - 1.0f)];
+    [pageArea setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+    [content addSubview:pageArea];
+    [pageArea release];
 
     [self addSeparatorWithFrame:NSMakeRect(0.0f, CPStatusHeight, width, 1.0f)
                autoresizingMask:(NSViewWidthSizable | NSViewMaxYMargin)];
@@ -132,30 +128,47 @@ static NSString *CPEscapeHTML(NSString *text)
     [progressBar setHidden:YES];
     [content addSubview:progressBar];
     [progressBar release];
-
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(progressChanged:)
-                                                 name:WebViewProgressStartedNotification object:webView];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(progressChanged:)
-                                                 name:WebViewProgressEstimateChangedNotification object:webView];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(progressChanged:)
-                                                 name:WebViewProgressFinishedNotification object:webView];
-
-    [self updateNavigationButtons];
 }
 
-- (void)updateNavigationButtons
+// Swaps the selected tab's page into view. The other tabs' WebViews stay
+// alive off-screen until the memory budget says otherwise.
+- (void)showSelectedTab
 {
-    [backButton setEnabled:[webView canGoBack]];
-    [forwardButton setEnabled:[webView canGoForward]];
+    NSArray *shown = [[[pageArea subviews] copy] autorelease];
+    WebView *page = [selectedTab webView];
+    unsigned index;
+
+    for (index = 0; index < [shown count]; index++) {
+        if ([shown objectAtIndex:index] != page)
+            [[shown objectAtIndex:index] removeFromSuperview];
+    }
+    if ([page superview] != pageArea) {
+        [page setFrame:[pageArea bounds]];
+        [pageArea addSubview:page];
+    }
+    selectedWasLoading = [selectedTab isLoading];
+    [self updateChromeForSelectedTab];
+    [tabBar setNeedsDisplay:YES];
 }
 
-- (void)setLoading:(BOOL)flag
+- (void)updateChromeForSelectedTab
 {
-    if (loading == flag)
-        return;
-    loading = flag;
-    [reloadButton setImage:(flag ? [CPIcons stopImage] : [CPIcons reloadImage])];
-    [reloadButton setToolTip:(flag ? @"Stop" : @"Reload")];
+    BOOL isLoading = [selectedTab isLoading];
+    double progress = [selectedTab progress];
+
+    [[self window] setTitle:(selectedTab != nil ? [selectedTab displayTitle] : @"Captain Polliwog")];
+    [self setAddressFromURL:[selectedTab URL]];
+    [backButton setEnabled:[selectedTab canGoBack]];
+    [forwardButton setEnabled:[selectedTab canGoForward]];
+    [reloadButton setImage:(isLoading ? [CPIcons stopImage] : [CPIcons reloadImage])];
+    [reloadButton setToolTip:(isLoading ? @"Stop" : @"Reload")];
+
+    if (isLoading && progress > 0.0) {
+        [progressBar setHidden:NO];
+        [progressBar setDoubleValue:progress];
+    } else {
+        [progressBar setHidden:YES];
+    }
 }
 
 // Mouse-over fires constantly; only redraw the status bar when the text changes.
@@ -169,12 +182,16 @@ static NSString *CPEscapeHTML(NSString *text)
 
 - (void)setAddressFromURL:(NSURL *)url
 {
+    NSString *text;
+
     if ([self isEditingAddress])
         return;
     if (url == nil || [url isEqual:[CPAppDelegate startPageURL]])
-        [addressField setStringValue:@""];
+        text = @"";
     else
-        [addressField setStringValue:[url absoluteString]];
+        text = [url absoluteString];
+    if (![[addressField stringValue] isEqualToString:text])
+        [addressField setStringValue:text];
 }
 
 - (BOOL)isEditingAddress
@@ -187,6 +204,7 @@ static NSString *CPEscapeHTML(NSString *text)
 - (NSURL *)URLFromUserInput:(NSString *)input
 {
     NSString *text = [input stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *query;
     NSURL *url = nil;
 
     if ([text length] == 0)
@@ -202,37 +220,12 @@ static NSString *CPEscapeHTML(NSString *text)
             return url;
     }
 
-    NSString *query = (NSString *)CFURLCreateStringByAddingPercentEscapes(NULL, (CFStringRef)text, NULL,
-                                                                          CFSTR("!*'();:@&=+$,/?%#[]"),
-                                                                          kCFStringEncodingUTF8);
+    query = (NSString *)CFURLCreateStringByAddingPercentEscapes(NULL, (CFStringRef)text, NULL,
+                                                                CFSTR("!*'();:@&=+$,/?%#[]"),
+                                                                kCFStringEncodingUTF8);
     url = [NSURL URLWithString:[NSString stringWithFormat:CPSearchURLFormat, query]];
     [query release];
     return url;
-}
-
-- (void)showErrorPage:(NSError *)error forFrame:(WebFrame *)frame
-{
-    NSURL *failingURL = [[[frame provisionalDataSource] request] URL];
-    NSString *hint = @"";
-
-    // Tiger's built-in SSL predates TLS 1.2, which nearly every site now requires.
-    if ([[error domain] isEqualToString:NSURLErrorDomain] &&
-        [error code] <= -1200 && [error code] >= -1206)
-        hint = @"<p class=\"hint\">This Mac's built-in encryption is too old for this site. "
-               @"Modern encryption is coming in the next Captain Polliwog build.</p>";
-
-    NSString *html = [NSString stringWithFormat:
-        @"<html><head><title>Can't open page</title><style>"
-        @"body{font:13px 'Lucida Grande',sans-serif;background:#f4f7f4;color:#223;margin:0}"
-        @"div{max-width:520px;margin:80px auto;padding:24px 28px;background:#fff;border:1px solid #cdd}"
-        @"h1{font-size:18px;margin:0 0 12px}code{word-wrap:break-word;color:#555}.hint{color:#735}"
-        @"</style></head><body><div><h1>Captain Polliwog can't open this page</h1>"
-        @"<p>%@</p><p><code>%@</code></p>%@</div></body></html>",
-        CPEscapeHTML([error localizedDescription]),
-        CPEscapeHTML([failingURL absoluteString]),
-        hint];
-
-    [frame loadAlternateHTMLString:html baseURL:nil forUnreachableURL:failingURL];
 }
 
 - (void)writeDebugSnapshot
@@ -268,6 +261,7 @@ static NSString *CPEscapeHTML(NSString *text)
     if (self == nil)
         return nil;
 
+    tabs = [[NSMutableArray alloc] init];
     [window setDelegate:self];
     [self buildInterface];
     return self;
@@ -275,26 +269,91 @@ static NSString *CPEscapeHTML(NSString *text)
 
 - (void)dealloc
 {
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
-    [loadStarted release];
-    [webView release];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
+    [tabs release];
     [super dealloc];
 }
 
-- (WebView *)webView
+- (NSArray *)tabs
 {
-    return webView;
+    return tabs;
+}
+
+- (CPTab *)selectedTab
+{
+    return selectedTab;
+}
+
+- (CPTab *)addTabWithURL:(NSURL *)url select:(BOOL)select
+{
+    CPTab *tab = [[CPTab alloc] initWithOwner:self];
+    unsigned position = [tabs count];
+
+    // New tabs go just after the current one, as in Safari.
+    if (selectedTab != nil)
+        position = [tabs indexOfObject:selectedTab] + 1;
+    [tabs insertObject:tab atIndex:position];
+    [tab release];
+
+    if (url != nil)
+        [tab loadURL:url];
+    if (select || selectedTab == nil)
+        [self selectTab:tab];
+    else
+        [tabBar setNeedsDisplay:YES];
+
+    [(CPAppDelegate *)[NSApp delegate] enforceLiveTabLimit];
+    return tab;
+}
+
+- (void)selectTab:(CPTab *)tab
+{
+    if (tab == nil || ![tabs containsObject:tab])
+        return;
+    selectedTab = tab;
+    [tab noteSelected];
+    // Focus goes to the page, ending any half-typed address, as in Safari;
+    // New Tab puts it back in the address field straight afterwards.
+    [[self window] makeFirstResponder:[tab webView]];
+    [self showSelectedTab];
+    [(CPAppDelegate *)[NSApp delegate] enforceLiveTabLimit];
+}
+
+- (void)closeTab:(CPTab *)tab
+{
+    unsigned index = [tabs indexOfObject:tab];
+
+    if (index == NSNotFound)
+        return;
+    if ([tabs count] == 1) {
+        [[self window] performClose:self];
+        return;
+    }
+
+    [[tab retain] autorelease];
+    [tab close];
+    [tabs removeObjectAtIndex:index];
+    if (tab == selectedTab) {
+        selectedTab = nil;
+        [self selectTab:[tabs objectAtIndex:(index < [tabs count] ? index : [tabs count] - 1)]];
+    } else {
+        [tabBar setNeedsDisplay:YES];
+    }
 }
 
 - (void)loadURL:(NSURL *)url
 {
     if (url == nil)
         return;
+    if (selectedTab == nil) {
+        [self addTabWithURL:url select:YES];
+        return;
+    }
     // Leave the address field so it can show where we are going.
     if ([self isEditingAddress])
-        [[self window] makeFirstResponder:webView];
-    [self setAddressFromURL:url];
-    [[webView mainFrame] loadRequest:[NSURLRequest requestWithURL:url]];
+        [[self window] makeFirstResponder:[selectedTab webView]];
+    [selectedTab loadURL:url];
+    [self showSelectedTab];
 }
 
 - (void)loadAddressString:(NSString *)address
@@ -302,16 +361,86 @@ static NSString *CPEscapeHTML(NSString *text)
     [self loadURL:[self URLFromUserInput:address]];
 }
 
+#pragma mark CPTab owner
+
+- (void)tabDidChange:(CPTab *)tab
+{
+    [tabBar setNeedsDisplay:YES];
+    // A background tab that has just finished loading becomes eligible to be
+    // discarded. Deferred: its WebView is still on the stack right now.
+    if (![tab isLoading] && ![tab isDiscarded])
+        [(CPAppDelegate *)[NSApp delegate] scheduleLiveTabLimit];
+    if (tab != selectedTab)
+        return;
+    [self updateChromeForSelectedTab];
+
+    // The test scripts photograph the window once the selected page is in.
+    if (selectedWasLoading && ![tab isLoading] && ![tab isDiscarded]) {
+        if (CPDebugSnapshotPath() != nil) {
+            NSLog(@"Captain Polliwog: finished %@", [tab URL]);
+            [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(writeDebugSnapshot) object:nil];
+            [self performSelector:@selector(writeDebugSnapshot) withObject:nil afterDelay:2.0];
+        }
+    }
+    selectedWasLoading = [tab isLoading];
+}
+
+- (void)tab:(CPTab *)tab showStatusText:(NSString *)text
+{
+    if (tab == selectedTab)
+        [self setStatusText:text];
+}
+
+- (CPTab *)tab:(CPTab *)tab openTabWithRequest:(NSURLRequest *)request inBackground:(BOOL)background
+{
+    CPTab *opened = [self addTabWithURL:nil select:!background];
+    if (request != nil)
+        [opened loadRequest:request];
+    return opened;
+}
+
+- (void)tabWantsToClose:(CPTab *)tab
+{
+    [self closeTab:tab];
+}
+
+#pragma mark CPTabBarView data source
+
+- (NSArray *)tabsForTabBar
+{
+    return tabs;
+}
+
+- (CPTab *)selectedTabForTabBar
+{
+    return selectedTab;
+}
+
+- (void)tabBarSelectTab:(CPTab *)tab
+{
+    [self selectTab:tab];
+}
+
+- (void)tabBarCloseTab:(CPTab *)tab
+{
+    [self closeTab:tab];
+}
+
+- (void)tabBarNewTab
+{
+    [self newTab:self];
+}
+
 #pragma mark Actions
 
 - (IBAction)goBack:(id)sender
 {
-    [webView goBack];
+    [selectedTab goBack];
 }
 
 - (IBAction)goForward:(id)sender
 {
-    [webView goForward];
+    [selectedTab goForward];
 }
 
 - (IBAction)goHome:(id)sender
@@ -321,17 +450,18 @@ static NSString *CPEscapeHTML(NSString *text)
 
 - (IBAction)reload:(id)sender
 {
-    [webView reload:sender];
+    [selectedTab reload];
+    [self showSelectedTab];
 }
 
 - (IBAction)stopLoading:(id)sender
 {
-    [webView stopLoading:sender];
+    [selectedTab stopLoading];
 }
 
 - (IBAction)reloadOrStop:(id)sender
 {
-    if (loading)
+    if ([selectedTab isLoading])
         [self stopLoading:sender];
     else
         [self reload:sender];
@@ -348,181 +478,77 @@ static NSString *CPEscapeHTML(NSString *text)
     NSString *address = [addressField stringValue];
     if ([[address stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] length] == 0)
         return;
-    [[self window] makeFirstResponder:webView];
+    [[self window] makeFirstResponder:[selectedTab webView]];
     [self loadAddressString:address];
 }
 
 - (IBAction)makeTextLarger:(id)sender
 {
-    [webView makeTextLarger:sender];
+    [[selectedTab webView] makeTextLarger:sender];
 }
 
 - (IBAction)makeTextSmaller:(id)sender
 {
-    [webView makeTextSmaller:sender];
+    [[selectedTab webView] makeTextSmaller:sender];
+}
+
+- (IBAction)newTab:(id)sender
+{
+    [self addTabWithURL:[CPAppDelegate startPageURL] select:YES];
+    [self openLocation:sender];
+}
+
+- (IBAction)closeCurrentTab:(id)sender
+{
+    if (selectedTab != nil)
+        [self closeTab:selectedTab];
+}
+
+- (IBAction)selectNextTab:(id)sender
+{
+    unsigned index = [tabs indexOfObject:selectedTab];
+    if ([tabs count] > 1 && index != NSNotFound)
+        [self selectTab:[tabs objectAtIndex:(index + 1) % [tabs count]]];
+}
+
+- (IBAction)selectPreviousTab:(id)sender
+{
+    unsigned index = [tabs indexOfObject:selectedTab];
+    if ([tabs count] > 1 && index != NSNotFound)
+        [self selectTab:[tabs objectAtIndex:(index + [tabs count] - 1) % [tabs count]]];
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem *)item
 {
     SEL action = [item action];
+    WebView *page = [selectedTab isDiscarded] ? nil : [selectedTab webView];
+
     if (action == @selector(goBack:))
-        return [webView canGoBack];
+        return [selectedTab canGoBack];
     if (action == @selector(goForward:))
-        return [webView canGoForward];
+        return [selectedTab canGoForward];
     if (action == @selector(stopLoading:))
-        return loading;
+        return [selectedTab isLoading];
     if (action == @selector(makeTextLarger:))
-        return [webView canMakeTextLarger];
+        return (page != nil && [page canMakeTextLarger]);
     if (action == @selector(makeTextSmaller:))
-        return [webView canMakeTextSmaller];
+        return (page != nil && [page canMakeTextSmaller]);
+    if (action == @selector(selectNextTab:) || action == @selector(selectPreviousTab:))
+        return ([tabs count] > 1);
     return YES;
-}
-
-#pragma mark Progress
-
-- (void)progressChanged:(NSNotification *)notification
-{
-    if ([[notification name] isEqualToString:WebViewProgressFinishedNotification]) {
-        [progressBar setHidden:YES];
-        [progressBar setDoubleValue:0.0];
-    } else {
-        [progressBar setHidden:NO];
-        [progressBar setDoubleValue:[webView estimatedProgress]];
-    }
-}
-
-#pragma mark WebFrameLoadDelegate
-
-- (void)webView:(WebView *)sender didStartProvisionalLoadForFrame:(WebFrame *)frame
-{
-    if (frame != [sender mainFrame])
-        return;
-    [loadStarted release];
-    loadStarted = [[NSDate date] retain];
-    [self setAddressFromURL:[[[frame provisionalDataSource] request] URL]];
-    [self setLoading:YES];
-}
-
-- (void)webView:(WebView *)sender didCommitLoadForFrame:(WebFrame *)frame
-{
-    NSURL *unreachableURL;
-
-    if (frame != [sender mainFrame])
-        return;
-    unreachableURL = [[frame dataSource] unreachableURL];
-    [self setAddressFromURL:(unreachableURL != nil ? unreachableURL : [[[frame dataSource] request] URL])];
-    [[self window] setTitle:@"Captain Polliwog"];
-    [self setStatusText:nil];
-    [self updateNavigationButtons];
-}
-
-- (void)webView:(WebView *)sender didReceiveTitle:(NSString *)title forFrame:(WebFrame *)frame
-{
-    if (frame == [sender mainFrame] && [title length] > 0)
-        [[self window] setTitle:title];
-}
-
-- (void)webView:(WebView *)sender didFinishLoadForFrame:(WebFrame *)frame
-{
-    if (frame != [sender mainFrame])
-        return;
-    [self setLoading:NO];
-    [self updateNavigationButtons];
-    if (CPDebugSnapshotPath() != nil && loadStarted != nil)
-        NSLog(@"Captain Polliwog: page-load %.1fs %@",
-              -[loadStarted timeIntervalSinceNow], [[[frame dataSource] request] URL]);
-
-    if (CPDebugSnapshotPath() != nil &&
-        ![[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugShowPreferences"]) {
-        NSLog(@"Captain Polliwog: finished %@", [[[frame dataSource] request] URL]);
-        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(writeDebugSnapshot) object:nil];
-        [self performSelector:@selector(writeDebugSnapshot) withObject:nil afterDelay:2.0];
-    }
-}
-
-- (void)webView:(WebView *)sender didFailProvisionalLoadWithError:(NSError *)error forFrame:(WebFrame *)frame
-{
-    if (frame != [sender mainFrame])
-        return;
-    [self setLoading:NO];
-    [self updateNavigationButtons];
-
-    if ([[error domain] isEqualToString:NSURLErrorDomain] && [error code] == NSURLErrorCancelled)
-        return;
-    if ([[error domain] isEqualToString:WebKitErrorDomain] &&
-        [error code] == WebKitErrorFrameLoadInterruptedByPolicyChange)
-        return;
-    NSLog(@"Captain Polliwog: failed %@ (%@ %d: %@)", [[[frame provisionalDataSource] request] URL],
-          [error domain], [error code], [error localizedDescription]);
-    [self showErrorPage:error forFrame:frame];
-}
-
-- (void)webView:(WebView *)sender didFailLoadWithError:(NSError *)error forFrame:(WebFrame *)frame
-{
-    if (frame != [sender mainFrame])
-        return;
-    [self setLoading:NO];
-    [self updateNavigationButtons];
-}
-
-#pragma mark WebUIDelegate
-
-- (WebView *)webView:(WebView *)sender createWebViewWithRequest:(NSURLRequest *)request
-{
-    CPBrowserWindowController *controller = [(CPAppDelegate *)[NSApp delegate] openBrowserWindow];
-    if (request != nil)
-        [[[controller webView] mainFrame] loadRequest:request];
-    return [controller webView];
-}
-
-- (void)webViewShow:(WebView *)sender
-{
-    [self showWindow:self];
-}
-
-- (void)webViewClose:(WebView *)sender
-{
-    [[self window] close];
-}
-
-- (void)webView:(WebView *)sender mouseDidMoveOverElement:(NSDictionary *)elementInformation
-  modifierFlags:(unsigned int)modifierFlags
-{
-    NSURL *link = [elementInformation objectForKey:WebElementLinkURLKey];
-    [self setStatusText:[link absoluteString]];
-}
-
-- (void)webView:(WebView *)sender runJavaScriptAlertPanelWithMessage:(NSString *)message
-{
-    NSRunInformationalAlertPanel([[self window] title], @"%@", @"OK", nil, nil, message);
-}
-
-- (BOOL)webView:(WebView *)sender runJavaScriptConfirmPanelWithMessage:(NSString *)message
-{
-    return NSRunAlertPanel([[self window] title], @"%@", @"OK", @"Cancel", nil, message) == NSAlertDefaultReturn;
-}
-
-- (void)webView:(WebView *)sender runOpenPanelForFileButtonWithResultListener:(id<WebOpenPanelResultListener>)resultListener
-{
-    NSOpenPanel *panel = [NSOpenPanel openPanel];
-    if ([panel runModalForTypes:nil] == NSOKButton)
-        [resultListener chooseFilename:[panel filename]];
-    else
-        [resultListener cancel];
 }
 
 #pragma mark NSWindow delegate
 
 - (void)windowWillClose:(NSNotification *)notification
 {
+    unsigned index;
+
     [NSObject cancelPreviousPerformRequestsWithTarget:self];
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
-    [webView stopLoading:nil];
-    [webView setFrameLoadDelegate:nil];
-    [webView setUIDelegate:nil];
-    // -[WebView close] arrived with WebKit 3; Tiger's original WebKit lacks it.
-    if ([webView respondsToSelector:@selector(close)])
-        [webView performSelector:@selector(close)];
+    for (index = 0; index < [tabs count]; index++)
+        [[tabs objectAtIndex:index] close];
+    [tabs removeAllObjects];
+    selectedTab = nil;
     [(CPAppDelegate *)[NSApp delegate] browserWindowWillClose:self];
 }
 

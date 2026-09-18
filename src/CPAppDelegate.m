@@ -8,6 +8,7 @@
 #import "CPSettings.h"
 #import "CPPreferencesController.h"
 #import "CPDebugSnapshot.h"
+#import "CPTab.h"
 #import <WebKit/WebKit.h>
 
 static NSMenuItem *CPAddItem(NSMenu *menu, NSString *title, SEL action, NSString *key)
@@ -95,9 +96,11 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
 
     menu = CPAddSubmenu(mainMenu, @"File");
     CPAddItem(menu, @"New Window", @selector(newWindow:), @"n");
+    CPAddItem(menu, @"New Tab", @selector(newTab:), @"t");
     CPAddItem(menu, @"Open Location...", @selector(openLocation:), @"l");
     [menu addItem:[NSMenuItem separatorItem]];
-    CPAddItem(menu, @"Close Window", @selector(performClose:), @"w");
+    CPAddItem(menu, @"Close Tab", @selector(closeCurrentTab:), @"w");
+    CPAddItem(menu, @"Close Window", @selector(performClose:), @"W");
 
     menu = CPAddSubmenu(mainMenu, @"Edit");
     CPAddItem(menu, @"Undo", @selector(undo:), @"z");
@@ -123,6 +126,10 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     menu = CPAddSubmenu(mainMenu, @"Window");
     CPAddItem(menu, @"Minimize", @selector(performMiniaturize:), @"m");
     CPAddItem(menu, @"Zoom", @selector(performZoom:), nil);
+    [menu addItem:[NSMenuItem separatorItem]];
+    // Command-Shift-] and [, as in Safari.
+    CPAddItem(menu, @"Select Next Tab", @selector(selectNextTab:), @"}");
+    CPAddItem(menu, @"Select Previous Tab", @selector(selectPreviousTab:), @"{");
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Bring All to Front", @selector(arrangeInFront:), nil);
     [NSApp setWindowsMenu:menu];
@@ -160,19 +167,90 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
 {
     CPBrowserWindowController *controller = [self openBrowserWindow];
     [controller showWindow:self];
-    [controller loadURL:[CPAppDelegate startPageURL]];
+    [controller addTabWithURL:[CPAppDelegate startPageURL] select:YES];
     [controller openLocation:self];
+}
+
+// Command-W closes a tab in a browser window; anywhere else (Preferences, an
+// About box) it should still just close the window.
+- (IBAction)closeCurrentTab:(id)sender
+{
+    [[NSApp keyWindow] performClose:sender];
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item
+{
+    if ([item action] == @selector(closeCurrentTab:))
+        return ([NSApp keyWindow] != nil);
+    return YES;
+}
+
+// With no window open, Command-T still has to do something useful.
+- (IBAction)newTab:(id)sender
+{
+    [self newWindow:sender];
+}
+
+- (void)scheduleLiveTabLimit
+{
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(enforceLiveTabLimit) object:nil];
+    [self performSelector:@selector(enforceLiveTabLimit) withObject:nil afterDelay:1.0];
+}
+
+// The memory budget covers every tab in every window. The tab showing in each
+// window is never discarded, nor one still loading; beyond that, the tabs
+// looked at least recently give up their pages first.
+- (void)enforceLiveTabLimit
+{
+    NSMutableArray *candidates = [NSMutableArray array];
+    unsigned limit = [[CPSettings sharedSettings] maximumLiveTabs];
+    unsigned live = 0;
+    unsigned windowIndex;
+    unsigned index;
+
+    for (windowIndex = 0; windowIndex < [browserWindows count]; windowIndex++) {
+        CPBrowserWindowController *window = [browserWindows objectAtIndex:windowIndex];
+        NSArray *windowTabs = [window tabs];
+        for (index = 0; index < [windowTabs count]; index++) {
+            CPTab *tab = [windowTabs objectAtIndex:index];
+            if ([tab isDiscarded])
+                continue;
+            live++;
+            if (tab != [window selectedTab] && ![tab isLoading])
+                [candidates addObject:tab];
+        }
+    }
+
+    while (live > limit && [candidates count] > 0) {
+        CPTab *oldest = [candidates objectAtIndex:0];
+        for (index = 1; index < [candidates count]; index++) {
+            CPTab *tab = [candidates objectAtIndex:index];
+            if ([[tab lastSelected] compare:[oldest lastSelected]] == NSOrderedAscending)
+                oldest = tab;
+        }
+        [oldest discard];
+        [candidates removeObject:oldest];
+        live--;
+    }
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
     NSString *debugURL = [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugURL"];
+    NSArray *debugTabs;
+    unsigned index;
 
     [[CPSettings sharedSettings] apply];
     if ([browserWindows count] == 0)
         [self newWindow:self];
     if (debugURL != nil)
         [[browserWindows lastObject] loadAddressString:debugURL];
+    // Testing aid: CPDebugTabs, an array of addresses, opens one tab each.
+    debugTabs = [[NSUserDefaults standardUserDefaults] arrayForKey:@"CPDebugTabs"];
+    for (index = 0; index < [debugTabs count]; index++) {
+        [[browserWindows lastObject] addTabWithURL:[NSURL URLWithString:[debugTabs objectAtIndex:index]]
+                                            select:YES];
+    }
     // Lets the test scripts photograph the Preferences window too.
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugShowPreferences"]) {
         [self showPreferences:self];

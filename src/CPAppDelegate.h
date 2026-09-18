@@ -18,7 +18,11 @@
 - (CPBrowserWindowController *)openBrowserWindow;
 - (void)browserWindowWillClose:(CPBrowserWindowController *)controller;
 
+- (void)enforceLiveTabLimit;
+- (void)scheduleLiveTabLimit;
+
 - (IBAction)newWindow:(id)sender;
+- (IBAction)newTab:(id)sender;
 - (IBAction)showPreferences:(id)sender;
 
 @end

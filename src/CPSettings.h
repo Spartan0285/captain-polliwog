@@ -40,6 +40,7 @@ extern NSString * const CPSettingsDidChangeNotification;
 - (void)setLoadsImages:(BOOL)flag;
 
 - (unsigned)memoryCacheBytes;
+- (unsigned)maximumLiveTabs;
 - (unsigned)maximumCachedResponseBytes;
 
 - (void)apply;
