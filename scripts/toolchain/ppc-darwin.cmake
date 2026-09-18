@@ -36,10 +36,15 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 # read for 10.4 -- so the libraries are named explicitly. Static libgcc comes
 # last, for the few helpers the shared one leaves out. -static-libgcc stays
 # only to stop g++ adding crt3.o for 10.4 targets, which crashes ld64.
+#
+# The load commands modern ld64 adds by default (function starts, data in
+# code, version minimum, source version) are dropped: Leopard's gdb, otool
+# and install_name_tool cannot parse binaries that carry them.
 set(PPC_RUNTIME /opt/ppc/runtime)
-set(CMAKE_EXE_LINKER_FLAGS_INIT    "-nodefaultlibs -static-libgcc")
-set(CMAKE_SHARED_LINKER_FLAGS_INIT "-nodefaultlibs -static-libgcc")
-set(CMAKE_MODULE_LINKER_FLAGS_INIT "-nodefaultlibs -static-libgcc")
+set(PPC_LINK_FLAGS "-nodefaultlibs -static-libgcc -Wl,-no_function_starts,-no_data_in_code_info,-no_version_load_command,-no_source_version")
+set(CMAKE_EXE_LINKER_FLAGS_INIT    "${PPC_LINK_FLAGS}")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "${PPC_LINK_FLAGS}")
+set(CMAKE_MODULE_LINKER_FLAGS_INIT "${PPC_LINK_FLAGS}")
 set(CMAKE_C_STANDARD_LIBRARIES_INIT "${PPC_RUNTIME}/libgcc_s.1.dylib -lgcc -lSystem")
 set(CMAKE_CXX_STANDARD_LIBRARIES_INIT "${PPC_RUNTIME}/libstdc++.6.dylib ${PPC_RUNTIME}/libgcc_s.1.dylib -lgcc -lSystem")
 
