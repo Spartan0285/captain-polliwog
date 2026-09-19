@@ -1,7 +1,7 @@
 From 787f17e377e2791e79168dcd9bae58dc1f4adc98 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Thu, 17 Sep 2026 23:55:59 -0400
-Subject: [PATCH 06/41] Build C++ as gnu++14, as Apple's Xcode projects do
+Subject: [PATCH 06/42] Build C++ as gnu++14, as Apple's Xcode projects do
 
 Leopard's math.h hides llround/llrint under __STRICT_ANSI__, which
 -std=c++1y defines, so libstdc++'s <cmath> cannot find them.

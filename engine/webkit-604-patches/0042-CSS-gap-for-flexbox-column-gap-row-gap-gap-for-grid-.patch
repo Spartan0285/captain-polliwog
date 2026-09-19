@@ -1,0 +1,1434 @@
+From d3b272fb8be99717eab65834f68e76cf19580aab Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Fri, 18 Sep 2026 23:57:46 -0400
+Subject: [PATCH 42/42] CSS: gap for flexbox, column-gap/row-gap/gap for grid,
+ logical properties, inset, :has(), overflow: clip
+
+- Flexbox lays out column-gap and row-gap between items and lines.
+- column-gap also sets grid's gap; row-gap and gap are grid-row-gap and
+  grid-gap; 'normal' is accepted.
+- padding-/margin-inline and -block (shorthands and longhands), border-
+  inline/block sides, inline-size, block-size and their min/max, inset,
+  inset-inline, inset-block. var() in the logical shorthands resolves after
+  the cascade turns them physical.
+- :has() with relative selectors; elements it matched are restyled when
+  their contents, attributes or checked state change, and don't share style.
+- overflow: clip (drawn as hidden, without making the other axis scroll)
+  and two-value overflow.
+- The pseudo-class name table is regenerated when its .in file changes.
+---
+ Source/WebCore/CMakeLists.txt                 |   1 +
+ .../css/CSSComputedStyleDeclaration.cpp       |   8 +
+ .../WebCore/css/CSSPrimitiveValueMappings.h   |   5 +
+ Source/WebCore/css/CSSProperties.json         | 182 ++++++++++++++++++
+ Source/WebCore/css/CSSSelector.cpp            |  12 +-
+ Source/WebCore/css/CSSSelector.h              |   2 +
+ Source/WebCore/css/SelectorChecker.cpp        |  72 +++++++
+ Source/WebCore/css/SelectorChecker.h          |   5 +
+ ...orPseudoClassAndCompatibilityElementMap.in |   1 +
+ Source/WebCore/css/StyleBuilderCustom.h       |  15 +-
+ Source/WebCore/css/StyleResolver.cpp          |   8 +
+ Source/WebCore/css/parser/CSSParser.cpp       |   5 +
+ .../WebCore/css/parser/CSSParserFastPaths.cpp |   9 +-
+ Source/WebCore/css/parser/CSSParserSelector.h |   1 +
+ .../WebCore/css/parser/CSSPropertyParser.cpp  |  67 ++++++-
+ Source/WebCore/css/parser/CSSPropertyParser.h |   1 +
+ .../WebCore/css/parser/CSSSelectorParser.cpp  |  61 ++++++
+ Source/WebCore/css/parser/CSSSelectorParser.h |   2 +
+ Source/WebCore/dom/Element.cpp                |  40 ++++
+ Source/WebCore/dom/Element.h                  |   6 +
+ Source/WebCore/dom/ElementRareData.h          |   9 +
+ Source/WebCore/html/HTMLInputElement.cpp      |   4 +
+ .../rendering/FlexibleBoxAlgorithm.cpp        |   9 +-
+ .../WebCore/rendering/FlexibleBoxAlgorithm.h  |   3 +-
+ .../WebCore/rendering/RenderFlexibleBox.cpp   |  47 ++++-
+ Source/WebCore/rendering/RenderFlexibleBox.h  |   3 +
+ .../rendering/style/RenderStyleConstants.h    |   4 +-
+ Source/WebCore/style/StyleRelations.cpp       |   8 +
+ Source/WebCore/style/StyleRelations.h         |   2 +
+ Source/WebCore/style/StyleSharingResolver.cpp |   3 +
+ 30 files changed, 577 insertions(+), 18 deletions(-)
+
+diff --git a/Source/WebCore/CMakeLists.txt b/Source/WebCore/CMakeLists.txt
+index 0147e37b..9a4be46f 100644
+--- a/Source/WebCore/CMakeLists.txt
++++ b/Source/WebCore/CMakeLists.txt
+@@ -3697,6 +3697,7 @@ ADD_SOURCE_WEBCORE_DERIVED_DEPENDENCIES(${WEBCORE_DIR}/css/CSSPrimitiveValueMapp
+ add_custom_command(
+     OUTPUT ${DERIVED_SOURCES_WEBCORE_DIR}/SelectorPseudoClassAndCompatibilityElementMap.gperf ${DERIVED_SOURCES_WEBCORE_DIR}/SelectorPseudoClassAndCompatibilityElementMap.cpp
+     MAIN_DEPENDENCY ${WEBCORE_DIR}/css/makeSelectorPseudoClassAndCompatibilityElementMap.py
++    DEPENDS ${WEBCORE_DIR}/css/SelectorPseudoClassAndCompatibilityElementMap.in
+     WORKING_DIRECTORY ${DERIVED_SOURCES_WEBCORE_DIR}
+     COMMAND ${PYTHON_EXECUTABLE} ${WEBCORE_DIR}/css/makeSelectorPseudoClassAndCompatibilityElementMap.py ${WEBCORE_DIR}/css/SelectorPseudoClassAndCompatibilityElementMap.in "${GPERF_EXECUTABLE}" "${FEATURE_DEFINES_WITH_SPACE_SEPARATOR}"
+     VERBATIM)
+diff --git a/Source/WebCore/css/CSSComputedStyleDeclaration.cpp b/Source/WebCore/css/CSSComputedStyleDeclaration.cpp
+index 63ab4268..963cbc42 100644
+--- a/Source/WebCore/css/CSSComputedStyleDeclaration.cpp
++++ b/Source/WebCore/css/CSSComputedStyleDeclaration.cpp
+@@ -3976,7 +3976,15 @@ RefPtr<CSSValue> ComputedStyleExtractor::propertyValue(CSSPropertyID propertyID,
+         case CSSPropertyAll:
+         case CSSPropertyAnimation:
+         case CSSPropertyWebkitTextEmphasis:
++        case CSSPropertyPaddingInline:
++        case CSSPropertyPaddingBlock:
++        case CSSPropertyMarginInline:
++        case CSSPropertyMarginBlock:
++        case CSSPropertyInsetInline:
++        case CSSPropertyInsetBlock:
+             break;
++        case CSSPropertyInset:
++            return getCSSPropertyValuesForSidesShorthand(insetShorthand());
+ 
+         /* Directional properties are resolved by resolveDirectionAwareProperty() before the switch. */
+         case CSSPropertyWebkitBorderEnd:
+diff --git a/Source/WebCore/css/CSSPrimitiveValueMappings.h b/Source/WebCore/css/CSSPrimitiveValueMappings.h
+index 647b8553..e87b0470 100644
+--- a/Source/WebCore/css/CSSPrimitiveValueMappings.h
++++ b/Source/WebCore/css/CSSPrimitiveValueMappings.h
+@@ -2198,6 +2198,9 @@ template<> inline CSSPrimitiveValue::CSSPrimitiveValue(EOverflow e)
+     case OPAGEDY:
+         m_value.valueID = CSSValueWebkitPagedY;
+         break;
++    case OCLIP:
++        m_value.valueID = CSSValueClip;
++        break;
+     }
+ }
+ 
+@@ -2210,6 +2213,8 @@ template<> inline CSSPrimitiveValue::operator EOverflow() const
+         return OVISIBLE;
+     case CSSValueHidden:
+         return OHIDDEN;
++    case CSSValueClip:
++        return OCLIP;
+     case CSSValueScroll:
+         return OSCROLL;
+     case CSSValueAuto:
+diff --git a/Source/WebCore/css/CSSProperties.json b/Source/WebCore/css/CSSProperties.json
+index 011a9597..8d7f1af4 100644
+--- a/Source/WebCore/css/CSSProperties.json
++++ b/Source/WebCore/css/CSSProperties.json
+@@ -3854,6 +3854,9 @@
+         },
+         "-webkit-border-after": {
+             "codegen-properties": {
++                "aliases": [
++                    "border-block-end"
++                ],
+                 "longhands": [
+                     "-webkit-border-after-width",
+                     "-webkit-border-after-style",
+@@ -3866,6 +3869,9 @@
+         },
+         "-webkit-border-after-color": {
+             "codegen-properties": {
++                "aliases": [
++                    "border-block-end-color"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -3886,6 +3892,9 @@
+                 "double"
+             ],
+             "codegen-properties": {
++                "aliases": [
++                    "border-block-end-style"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -3894,6 +3903,9 @@
+         },
+         "-webkit-border-after-width": {
+             "codegen-properties": {
++                "aliases": [
++                    "border-block-end-width"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -3902,6 +3914,9 @@
+         },
+         "-webkit-border-before": {
+             "codegen-properties": {
++                "aliases": [
++                    "border-block-start"
++                ],
+                 "longhands": [
+                     "-webkit-border-before-width",
+                     "-webkit-border-before-style",
+@@ -3914,6 +3929,9 @@
+         },
+         "-webkit-border-before-color": {
+             "codegen-properties": {
++                "aliases": [
++                    "border-block-start-color"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -3934,6 +3952,9 @@
+                 "double"
+             ],
+             "codegen-properties": {
++                "aliases": [
++                    "border-block-start-style"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -3942,6 +3963,9 @@
+         },
+         "-webkit-border-before-width": {
+             "codegen-properties": {
++                "aliases": [
++                    "border-block-start-width"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -3950,6 +3974,9 @@
+         },
+         "-webkit-border-end": {
+             "codegen-properties": {
++                "aliases": [
++                    "border-inline-end"
++                ],
+                 "longhands": [
+                     "-webkit-border-end-width",
+                     "-webkit-border-end-style",
+@@ -3962,6 +3989,9 @@
+         },
+         "-webkit-border-end-color": {
+             "codegen-properties": {
++                "aliases": [
++                    "border-inline-end-color"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -3982,6 +4012,9 @@
+                 "double"
+             ],
+             "codegen-properties": {
++                "aliases": [
++                    "border-inline-end-style"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -3990,6 +4023,9 @@
+         },
+         "-webkit-border-end-width": {
+             "codegen-properties": {
++                "aliases": [
++                    "border-inline-end-width"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -4032,6 +4068,9 @@
+         },
+         "-webkit-border-start": {
+             "codegen-properties": {
++                "aliases": [
++                    "border-inline-start"
++                ],
+                 "longhands": [
+                     "-webkit-border-start-width",
+                     "-webkit-border-start-style",
+@@ -4044,6 +4083,9 @@
+         },
+         "-webkit-border-start-color": {
+             "codegen-properties": {
++                "aliases": [
++                    "border-inline-start-color"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -4064,6 +4106,9 @@
+                 "double"
+             ],
+             "codegen-properties": {
++                "aliases": [
++                    "border-inline-start-style"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -4072,6 +4117,9 @@
+         },
+         "-webkit-border-start-width": {
+             "codegen-properties": {
++                "aliases": [
++                    "border-inline-start-width"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -4860,6 +4908,9 @@
+         },
+         "grid-row-gap": {
+             "codegen-properties": {
++                "aliases": [
++                    "row-gap"
++                ],
+                 "initial": "initialZeroLength",
+                 "converter": "Length"
+             },
+@@ -4892,6 +4943,9 @@
+         },
+         "grid-gap": {
+             "codegen-properties": {
++                "aliases": [
++                    "gap"
++                ],
+                 "longhands": [
+                     "grid-row-gap",
+                     "grid-column-gap"
+@@ -5118,6 +5172,9 @@
+         },
+         "-webkit-logical-width": {
+             "codegen-properties": {
++                "aliases": [
++                    "inline-size"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -5126,6 +5183,9 @@
+         },
+         "-webkit-logical-height": {
+             "codegen-properties": {
++                "aliases": [
++                    "block-size"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -5191,6 +5251,9 @@
+         },
+         "-webkit-margin-after": {
+             "codegen-properties": {
++                "aliases": [
++                    "margin-block-end"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -5199,6 +5262,9 @@
+         },
+         "-webkit-margin-before": {
+             "codegen-properties": {
++                "aliases": [
++                    "margin-block-start"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -5207,6 +5273,9 @@
+         },
+         "-webkit-margin-end": {
+             "codegen-properties": {
++                "aliases": [
++                    "margin-inline-end"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -5215,6 +5284,9 @@
+         },
+         "-webkit-margin-start": {
+             "codegen-properties": {
++                "aliases": [
++                    "margin-inline-start"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -5509,6 +5581,9 @@
+         },
+         "-webkit-max-logical-width": {
+             "codegen-properties": {
++                "aliases": [
++                    "max-inline-size"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -5517,6 +5592,9 @@
+         },
+         "-webkit-max-logical-height": {
+             "codegen-properties": {
++                "aliases": [
++                    "max-block-size"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -5525,6 +5603,9 @@
+         },
+         "-webkit-min-logical-width": {
+             "codegen-properties": {
++                "aliases": [
++                    "min-inline-size"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -5533,6 +5614,9 @@
+         },
+         "-webkit-min-logical-height": {
+             "codegen-properties": {
++                "aliases": [
++                    "min-block-size"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -5564,6 +5648,9 @@
+         },
+         "-webkit-padding-after": {
+             "codegen-properties": {
++                "aliases": [
++                    "padding-block-end"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -5572,6 +5659,9 @@
+         },
+         "-webkit-padding-before": {
+             "codegen-properties": {
++                "aliases": [
++                    "padding-block-start"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+@@ -5580,14 +5670,106 @@
+         },
+         "-webkit-padding-end": {
+             "codegen-properties": {
++                "aliases": [
++                    "padding-inline-end"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+                 "category": "css-logical-props"
+             }
+         },
++        "padding-inline": {
++            "codegen-properties": {
++                "longhands": [
++                    "-webkit-padding-start",
++                    "-webkit-padding-end"
++                ]
++            },
++            "specification": {
++                "category": "css-logical-props",
++                "url": "https://www.w3.org/TR/css-logical-1/#propdef-padding-inline"
++            }
++        },
++        "padding-block": {
++            "codegen-properties": {
++                "longhands": [
++                    "-webkit-padding-before",
++                    "-webkit-padding-after"
++                ]
++            },
++            "specification": {
++                "category": "css-logical-props",
++                "url": "https://www.w3.org/TR/css-logical-1/#propdef-padding-block"
++            }
++        },
++        "margin-inline": {
++            "codegen-properties": {
++                "longhands": [
++                    "-webkit-margin-start",
++                    "-webkit-margin-end"
++                ]
++            },
++            "specification": {
++                "category": "css-logical-props",
++                "url": "https://www.w3.org/TR/css-logical-1/#propdef-margin-inline"
++            }
++        },
++        "margin-block": {
++            "codegen-properties": {
++                "longhands": [
++                    "-webkit-margin-before",
++                    "-webkit-margin-after"
++                ]
++            },
++            "specification": {
++                "category": "css-logical-props",
++                "url": "https://www.w3.org/TR/css-logical-1/#propdef-margin-block"
++            }
++        },
++        "inset": {
++            "codegen-properties": {
++                "longhands": [
++                    "top",
++                    "right",
++                    "bottom",
++                    "left"
++                ]
++            },
++            "specification": {
++                "category": "css-logical-props",
++                "url": "https://www.w3.org/TR/css-logical-1/#propdef-inset"
++            }
++        },
++        "inset-inline": {
++            "codegen-properties": {
++                "longhands": [
++                    "left",
++                    "right"
++                ]
++            },
++            "specification": {
++                "category": "css-logical-props",
++                "url": "https://www.w3.org/TR/css-logical-1/#propdef-inset-inline"
++            }
++        },
++        "inset-block": {
++            "codegen-properties": {
++                "longhands": [
++                    "top",
++                    "bottom"
++                ]
++            },
++            "specification": {
++                "category": "css-logical-props",
++                "url": "https://www.w3.org/TR/css-logical-1/#propdef-inset-block"
++            }
++        },
+         "-webkit-padding-start": {
+             "codegen-properties": {
++                "aliases": [
++                    "padding-inline-start"
++                ],
+                 "skip-builder": true
+             },
+             "specification": {
+diff --git a/Source/WebCore/css/CSSSelector.cpp b/Source/WebCore/css/CSSSelector.cpp
+index 2eb0d04b..91bbe830 100644
+--- a/Source/WebCore/css/CSSSelector.cpp
++++ b/Source/WebCore/css/CSSSelector.cpp
+@@ -125,10 +125,12 @@ static unsigned simpleSelectorSpecificityInternal(const CSSSelector& simpleSelec
+             return maxSpecificity(*simpleSelector.selectorList());
+         }
+ 
+-        if (simpleSelector.pseudoClassType() == CSSSelector::PseudoClassNot) {
++        if (simpleSelector.pseudoClassType() == CSSSelector::PseudoClassNot || simpleSelector.pseudoClassType() == CSSSelector::PseudoClassHas) {
+             ASSERT_WITH_MESSAGE(simpleSelector.selectorList() && simpleSelector.selectorList()->first(), "The parser should never generate a valid selector for an empty :not().");
+             return maxSpecificity(*simpleSelector.selectorList());
+         }
++        if (simpleSelector.pseudoClassType() == CSSSelector::PseudoClassHasScope)
++            return 0;
+         FALLTHROUGH;
+     case CSSSelector::Exact:
+     case CSSSelector::Class:
+@@ -578,6 +580,14 @@ String CSSSelector::selectorText(const String& rightSide) const
+             case CSSSelector::PseudoClassOptional:
+                 str.appendLiteral(":optional");
+                 break;
++            case CSSSelector::PseudoClassHas: {
++                str.appendLiteral(":has(");
++                cs->selectorList()->buildSelectorsText(str);
++                str.append(')');
++                break;
++            }
++            case CSSSelector::PseudoClassHasScope:
++                break;
+             case CSSSelector::PseudoClassMatches: {
+                 str.appendLiteral(":matches(");
+                 cs->selectorList()->buildSelectorsText(str);
+diff --git a/Source/WebCore/css/CSSSelector.h b/Source/WebCore/css/CSSSelector.h
+index 4bfc2465..c25798f8 100644
+--- a/Source/WebCore/css/CSSSelector.h
++++ b/Source/WebCore/css/CSSSelector.h
+@@ -121,6 +121,8 @@ namespace WebCore {
+             PseudoClassDefault,
+             PseudoClassDisabled,
+             PseudoClassMatches,
++            PseudoClassHas,
++            PseudoClassHasScope, // the :has() subject, implicit at the start of each of its arguments
+             PseudoClassOptional,
+             PseudoClassPlaceholderShown,
+             PseudoClassRequired,
+diff --git a/Source/WebCore/css/SelectorChecker.cpp b/Source/WebCore/css/SelectorChecker.cpp
+index ff04b156..584cbf9b 100644
+--- a/Source/WebCore/css/SelectorChecker.cpp
++++ b/Source/WebCore/css/SelectorChecker.cpp
+@@ -93,6 +93,71 @@ static inline void addStyleRelation(SelectorChecker::CheckingContext& checkingCo
+     checkingContext.styleRelations.append({ element, type, value });
+ }
+ 
++static bool s_hasPseudoClassInUse;
++
++void SelectorChecker::setHasPseudoClassInUse()
++{
++    s_hasPseudoClassInUse = true;
++}
++
++bool SelectorChecker::hasPseudoClassInUse()
++{
++    return s_hasPseudoClassInUse;
++}
++
++// :has(): does any element after it, or inside it, match one of the relative
++// selectors, reading back to this element as their anchor?
++bool SelectorChecker::matchHasPseudoClass(const Element& element, const CSSSelector& selector) const
++{
++    for (const CSSSelector* relative = selector.selectorList()->first(); relative; relative = CSSSelectorList::next(relative)) {
++        CSSSelector::RelationType leading = CSSSelector::DescendantSpace;
++        bool singleCompound = true;
++        for (const CSSSelector* simple = relative; simple; simple = simple->tagHistory()) {
++            const CSSSelector* next = simple->tagHistory();
++            if (next && next->match() == CSSSelector::PseudoClass && next->pseudoClassType() == CSSSelector::PseudoClassHasScope) {
++                leading = simple->relation();
++                break;
++            }
++            if (next && simple->relation() != CSSSelector::Subselector)
++                singleCompound = false;
++        }
++
++        CheckingContext hasContext(Mode::QueryingRules);
++        hasContext.hasScope = &element;
++        auto matches = [&] (const Element& candidate) {
++            unsigned specificity = 0;
++            return match(*relative, candidate, hasContext, specificity);
++        };
++
++        if (leading == CSSSelector::DirectAdjacent || leading == CSSSelector::IndirectAdjacent) {
++            for (Element* sibling = element.nextElementSibling(); sibling; sibling = sibling->nextElementSibling()) {
++                if (matches(*sibling))
++                    return true;
++                if (!singleCompound) {
++                    for (Element* descendant = ElementTraversal::firstWithin(*sibling); descendant; descendant = ElementTraversal::next(*descendant, sibling)) {
++                        if (matches(*descendant))
++                            return true;
++                    }
++                } else if (leading == CSSSelector::DirectAdjacent)
++                    break;
++            }
++            continue;
++        }
++        if (leading == CSSSelector::Child && singleCompound) {
++            for (Element* child = ElementTraversal::firstChild(element); child; child = ElementTraversal::nextSibling(*child)) {
++                if (matches(*child))
++                    return true;
++            }
++            continue;
++        }
++        for (Element* descendant = ElementTraversal::firstWithin(element); descendant; descendant = ElementTraversal::next(*descendant, &element)) {
++            if (matches(*descendant))
++                return true;
++        }
++    }
++    return false;
++}
++
+ static inline bool isFirstChildElement(const Element& element)
+ {
+     return !ElementTraversal::previousSibling(element);
+@@ -1041,6 +1106,13 @@ bool SelectorChecker::checkOne(CheckingContext& checkingContext, const LocalCont
+             return matchesPastCuePseudoClass(element);
+ #endif
+ 
++        case CSSSelector::PseudoClassHasScope:
++            return checkingContext.hasScope == &element;
++        case CSSSelector::PseudoClassHas:
++            // Remember it, so a change inside restyles this element (and, if
++            // it isn't the one being styled, what's inside it).
++            addStyleRelation(checkingContext, element, context.isMatchElement ? Style::Relation::AffectedByHas : Style::Relation::DescendantsAffectedByHas);
++            return matchHasPseudoClass(element, selector);
+         case CSSSelector::PseudoClassScope: {
+             const Node* contextualReferenceNode = !checkingContext.scope ? element.document().documentElement() : checkingContext.scope;
+             if (&element == contextualReferenceNode)
+diff --git a/Source/WebCore/css/SelectorChecker.h b/Source/WebCore/css/SelectorChecker.h
+index 60e94559..e2178406 100644
+--- a/Source/WebCore/css/SelectorChecker.h
++++ b/Source/WebCore/css/SelectorChecker.h
+@@ -83,6 +83,7 @@ public:
+         RenderScrollbar* scrollbar { nullptr };
+         ScrollbarPart scrollbarPart { NoPart };
+         const ContainerNode* scope { nullptr };
++        const Element* hasScope { nullptr }; // the element a :has() argument is matched from
+         bool isMatchingHostPseudoClass { false };
+ 
+         // FIXME: It would be nicer to have a separate object for return values. This requires some more work in the selector compiler.
+@@ -95,6 +96,9 @@ public:
+     bool matchHostPseudoClass(const CSSSelector&, const Element&, CheckingContext&, unsigned& specificity) const;
+ 
+     static bool isCommonPseudoClassSelector(const CSSSelector*);
++    // Once any style sheet uses :has(), DOM changes look for elements it styled.
++    static void setHasPseudoClassInUse();
++    static bool hasPseudoClassInUse();
+     static bool matchesFocusPseudoClass(const Element&);
+     static bool attributeSelectorMatches(const Element&, const QualifiedName&, const AtomicString& attributeValue, const CSSSelector&);
+ 
+@@ -107,6 +111,7 @@ private:
+     MatchResult matchRecursively(CheckingContext&, const LocalContext&, PseudoIdSet&, unsigned& specificity) const;
+     bool checkOne(CheckingContext&, const LocalContext&, PseudoIdSet&, MatchType&, unsigned& specificity) const;
+     bool matchSelectorList(CheckingContext&, const LocalContext&, const Element&, const CSSSelectorList&, unsigned& specificity) const;
++    bool matchHasPseudoClass(const Element&, const CSSSelector&) const;
+ 
+     bool checkScrollbarPseudoClass(const CheckingContext&, const Element&, const CSSSelector&) const;
+ 
+diff --git a/Source/WebCore/css/SelectorPseudoClassAndCompatibilityElementMap.in b/Source/WebCore/css/SelectorPseudoClassAndCompatibilityElementMap.in
+index 6fd7c2f4..b160e306 100644
+--- a/Source/WebCore/css/SelectorPseudoClassAndCompatibilityElementMap.in
++++ b/Source/WebCore/css/SelectorPseudoClassAndCompatibilityElementMap.in
+@@ -29,6 +29,7 @@ focus
+ focus-within
+ horizontal
+ host, PseudoClassHost, PseudoElementUnknown
++has
+ hover
+ in-range
+ increment
+diff --git a/Source/WebCore/css/StyleBuilderCustom.h b/Source/WebCore/css/StyleBuilderCustom.h
+index d309ab60..86edc258 100644
+--- a/Source/WebCore/css/StyleBuilderCustom.h
++++ b/Source/WebCore/css/StyleBuilderCustom.h
+@@ -1367,9 +1367,12 @@ inline void StyleBuilderCustom::applyValueWebkitSvgShadow(StyleResolver& styleRe
+     svgStyle.setShadow(std::make_unique<ShadowData>(location, blur, 0, Normal, false, color.isValid() ? color : Color::transparent));
+ }
+ 
++// column-gap serves multi-column layout, grid and flexbox alike; this engine
++// keeps grid's (and flexbox's) gap separately, so it sets both.
+ inline void StyleBuilderCustom::applyInitialColumnGap(StyleResolver& styleResolver)
+ {
+     styleResolver.style()->setHasNormalColumnGap();
++    styleResolver.style()->setGridColumnGap(Length(0, Fixed));
+ }
+ 
+ inline void StyleBuilderCustom::applyInheritColumnGap(StyleResolver& styleResolver)
+@@ -1378,14 +1381,22 @@ inline void StyleBuilderCustom::applyInheritColumnGap(StyleResolver& styleResolv
+         styleResolver.style()->setHasNormalColumnGap();
+     else
+         styleResolver.style()->setColumnGap(styleResolver.parentStyle()->columnGap());
++    styleResolver.style()->setGridColumnGap(Length(styleResolver.parentStyle()->gridColumnGap()));
+ }
+ 
+ inline void StyleBuilderCustom::applyValueColumnGap(StyleResolver& styleResolver, CSSValue& value)
+ {
+-    if (downcast<CSSPrimitiveValue>(value).valueID() == CSSValueNormal)
++    if (downcast<CSSPrimitiveValue>(value).valueID() == CSSValueNormal) {
+         styleResolver.style()->setHasNormalColumnGap();
++        styleResolver.style()->setGridColumnGap(Length(0, Fixed));
++        return;
++    }
++    Length gap = StyleBuilderConverter::convertLength(styleResolver, value);
++    if (gap.isFixed())
++        styleResolver.style()->setColumnGap(gap.value());
+     else
+-        styleResolver.style()->setColumnGap(StyleBuilderConverter::convertComputedLength<float>(styleResolver, value));
++        styleResolver.style()->setHasNormalColumnGap();
++    styleResolver.style()->setGridColumnGap(WTFMove(gap));
+ }
+ 
+ inline void StyleBuilderCustom::applyInitialContent(StyleResolver& styleResolver)
+diff --git a/Source/WebCore/css/StyleResolver.cpp b/Source/WebCore/css/StyleResolver.cpp
+index 323a2520..b01a6e26 100644
+--- a/Source/WebCore/css/StyleResolver.cpp
++++ b/Source/WebCore/css/StyleResolver.cpp
+@@ -960,6 +960,14 @@ void StyleResolver::adjustRenderStyle(RenderStyle& style, const RenderStyle& par
+     else
+         style.addToTextDecorationsInEffect(style.textDecoration());
+ 
++    // overflow: clip clips like hidden but never scrolls, so the other axis
++    // stays as it is. (It clips both ways here: this engine has one clip.)
++    if (style.overflowX() == OCLIP || style.overflowY() == OCLIP) {
++        if (style.overflowX() == OCLIP)
++            style.setOverflowX(OHIDDEN);
++        if (style.overflowY() == OCLIP)
++            style.setOverflowY(OHIDDEN);
++    } else
+     // If either overflow value is not visible, change to auto.
+     if (style.overflowX() == OVISIBLE && style.overflowY() != OVISIBLE) {
+         // FIXME: Once we implement pagination controls, overflow-x should default to hidden
+diff --git a/Source/WebCore/css/parser/CSSParser.cpp b/Source/WebCore/css/parser/CSSParser.cpp
+index bd629f9c..1a1120a2 100644
+--- a/Source/WebCore/css/parser/CSSParser.cpp
++++ b/Source/WebCore/css/parser/CSSParser.cpp
+@@ -259,6 +259,11 @@ RefPtr<CSSValue> CSSParser::parseValueWithVariableReferences(CSSPropertyID propI
+         for (auto& property : parsedProperties) {
+             if (property.id() == propID)
+                 return property.value();
++            // The cascade has already turned padding-block's longhands and
++            // the like into physical ones by now.
++            if (CSSProperty::isDirectionAwareProperty(property.id())
++                && CSSProperty::resolveDirectionAwareProperty(property.id(), direction, writingMode) == propID)
++                return property.value();
+         }
+         
+         return nullptr;
+diff --git a/Source/WebCore/css/parser/CSSParserFastPaths.cpp b/Source/WebCore/css/parser/CSSParserFastPaths.cpp
+index 47a47eb3..a75cac72 100644
+--- a/Source/WebCore/css/parser/CSSParserFastPaths.cpp
++++ b/Source/WebCore/css/parser/CSSParserFastPaths.cpp
+@@ -581,10 +581,11 @@ bool CSSParserFastPaths::isValidKeywordPropertyAndValue(CSSPropertyID propertyId
+     case CSSPropertyOverflowWrap: // normal | break-word
+     case CSSPropertyWordWrap:
+         return valueID == CSSValueNormal || valueID == CSSValueBreakWord;
+-    case CSSPropertyOverflowX: // visible | hidden | scroll | auto | overlay
+-        return valueID == CSSValueVisible || valueID == CSSValueHidden || valueID == CSSValueScroll || valueID == CSSValueAuto || valueID == CSSValueOverlay;
+-    case CSSPropertyOverflowY: // visible | hidden | scroll | auto | overlay | -webkit-paged-x | -webkit-paged-y
+-        return valueID == CSSValueVisible || valueID == CSSValueHidden || valueID == CSSValueScroll || valueID == CSSValueAuto || valueID == CSSValueOverlay || valueID == CSSValueWebkitPagedX || valueID == CSSValueWebkitPagedY;
++    // clip: drawn as hidden, which looks the same.
++    case CSSPropertyOverflowX: // visible | hidden | clip | scroll | auto | overlay
++        return valueID == CSSValueVisible || valueID == CSSValueHidden || valueID == CSSValueClip || valueID == CSSValueScroll || valueID == CSSValueAuto || valueID == CSSValueOverlay;
++    case CSSPropertyOverflowY: // visible | hidden | clip | scroll | auto | overlay | -webkit-paged-x | -webkit-paged-y
++        return valueID == CSSValueVisible || valueID == CSSValueHidden || valueID == CSSValueClip || valueID == CSSValueScroll || valueID == CSSValueAuto || valueID == CSSValueOverlay || valueID == CSSValueWebkitPagedX || valueID == CSSValueWebkitPagedY;
+     case CSSPropertyBreakAfter:
+     case CSSPropertyBreakBefore:
+         return valueID == CSSValueAuto || valueID == CSSValueAvoid || valueID == CSSValueAvoidPage || valueID == CSSValuePage || valueID == CSSValueLeft || valueID == CSSValueRight || valueID == CSSValueRecto || valueID == CSSValueVerso || valueID == CSSValueAvoidColumn || valueID == CSSValueColumn
+diff --git a/Source/WebCore/css/parser/CSSParserSelector.h b/Source/WebCore/css/parser/CSSParserSelector.h
+index c2f0dd1c..1c8f524f 100644
+--- a/Source/WebCore/css/parser/CSSParserSelector.h
++++ b/Source/WebCore/css/parser/CSSParserSelector.h
+@@ -73,6 +73,7 @@ public:
+     const CSSSelectorList* selectorList() const { return m_selector->selectorList(); }
+     
+     void setPseudoElementType(CSSSelector::PseudoElementType type) { m_selector->setPseudoElementType(type); }
++    void setPseudoClassType(CSSSelector::PseudoClassType type) { m_selector->setPseudoClassType(type); }
+ 
+     void adoptSelectorVector(Vector<std::unique_ptr<CSSParserSelector>>& selectorVector);
+     void setLangArgumentList(std::unique_ptr<Vector<AtomicString>>);
+diff --git a/Source/WebCore/css/parser/CSSPropertyParser.cpp b/Source/WebCore/css/parser/CSSPropertyParser.cpp
+index 1fa3a5ba..787bb5af 100644
+--- a/Source/WebCore/css/parser/CSSPropertyParser.cpp
++++ b/Source/WebCore/css/parser/CSSPropertyParser.cpp
+@@ -1384,7 +1384,18 @@ static RefPtr<CSSValue> consumeColumnGap(CSSParserTokenRange& range, CSSParserMo
+ {
+     if (range.peek().id() == CSSValueNormal)
+         return consumeIdent(range);
+-    return consumeLength(range, cssParserMode, ValueRangeNonNegative);
++    // Percentages are for grid and flex gaps (column-gap is theirs too now).
++    return consumeLengthOrPercent(range, cssParserMode, ValueRangeNonNegative);
++}
++
++// row-gap and gap (grid-row-gap and grid-gap here): 'normal' is no gap.
++static RefPtr<CSSValue> consumeGap(CSSParserTokenRange& range, CSSParserMode cssParserMode)
++{
++    if (range.peek().id() == CSSValueNormal) {
++        range.consumeIncludingWhitespace();
++        return CSSValuePool::singleton().createValue(0, CSSPrimitiveValue::UnitType::CSS_PX);
++    }
++    return consumeLengthOrPercent(range, cssParserMode, ValueRangeNonNegative);
+ }
+ 
+ static RefPtr<CSSValue> consumeColumnSpan(CSSParserTokenRange& range)
+@@ -3989,7 +4000,7 @@ RefPtr<CSSValue> CSSPropertyParser::parseSingleValue(CSSPropertyID property, CSS
+         return consumeAnimationPropertyList(property, m_range, m_context);
+     case CSSPropertyGridColumnGap:
+     case CSSPropertyGridRowGap:
+-        return consumeLengthOrPercent(m_range, m_context.mode, ValueRangeNonNegative);
++        return consumeGap(m_range, m_context.mode);
+     case CSSPropertyShapeMargin:
+         return consumeLengthOrPercent(m_range, m_context.mode, ValueRangeNonNegative);
+     case CSSPropertyShapeImageThreshold:
+@@ -4884,6 +4895,28 @@ bool CSSPropertyParser::consumeBorder(bool important)
+     return m_range.atEnd();
+ }
+ 
++// padding-inline, margin-block, inset-inline and the like: one value for
++// both sides, or start then end.
++bool CSSPropertyParser::consume2Values(const StylePropertyShorthand& shorthand, bool important)
++{
++    ASSERT(shorthand.length() == 2);
++    const CSSPropertyID* longhands = shorthand.properties();
++    RefPtr<CSSValue> start = parseSingleValue(longhands[0], shorthand.id());
++    if (!start)
++        return false;
++    RefPtr<CSSValue> end;
++    bool endImplicit = m_range.atEnd();
++    if (!endImplicit) {
++        end = parseSingleValue(longhands[1], shorthand.id());
++        if (!end || !m_range.atEnd())
++            return false;
++    } else
++        end = start;
++    addProperty(longhands[0], shorthand.id(), start.releaseNonNull(), important);
++    addProperty(longhands[1], shorthand.id(), end.releaseNonNull(), important, endImplicit);
++    return true;
++}
++
+ bool CSSPropertyParser::consume4Values(const StylePropertyShorthand& shorthand, bool important)
+ {
+     ASSERT(shorthand.length() == 4);
+@@ -5588,8 +5621,16 @@ bool CSSPropertyParser::parseShorthand(CSSPropertyID property, bool important)
+         CSSValueID id = m_range.consumeIncludingWhitespace().id();
+         if (!CSSParserFastPaths::isValidKeywordPropertyAndValue(CSSPropertyOverflowY, id, m_context.mode))
+             return false;
+-        if (!m_range.atEnd())
+-            return false;
++        if (!m_range.atEnd()) {
++            // overflow: <x> <y>
++            CSSValueID yID = m_range.consumeIncludingWhitespace().id();
++            if (!m_range.atEnd() || !CSSParserFastPaths::isValidKeywordPropertyAndValue(CSSPropertyOverflowX, id, m_context.mode)
++                || !CSSParserFastPaths::isValidKeywordPropertyAndValue(CSSPropertyOverflowY, yID, m_context.mode))
++                return false;
++            addProperty(CSSPropertyOverflowX, CSSPropertyOverflow, CSSValuePool::singleton().createIdentifierValue(id), important);
++            addProperty(CSSPropertyOverflowY, CSSPropertyOverflow, CSSValuePool::singleton().createIdentifierValue(yID), important);
++            return true;
++        }
+         RefPtr<CSSValue> overflowYValue = CSSValuePool::singleton().createIdentifierValue(id);
+         RefPtr<CSSValue> overflowXValue;
+ 
+@@ -5630,6 +5671,20 @@ bool CSSPropertyParser::parseShorthand(CSSPropertyID property, bool important)
+         return consume4Values(marginShorthand(), important);
+     case CSSPropertyPadding:
+         return consume4Values(paddingShorthand(), important);
++    case CSSPropertyPaddingInline:
++        return consume2Values(paddingInlineShorthand(), important);
++    case CSSPropertyPaddingBlock:
++        return consume2Values(paddingBlockShorthand(), important);
++    case CSSPropertyMarginInline:
++        return consume2Values(marginInlineShorthand(), important);
++    case CSSPropertyMarginBlock:
++        return consume2Values(marginBlockShorthand(), important);
++    case CSSPropertyInset:
++        return consume4Values(insetShorthand(), important);
++    case CSSPropertyInsetInline:
++        return consume2Values(insetInlineShorthand(), important);
++    case CSSPropertyInsetBlock:
++        return consume2Values(insetBlockShorthand(), important);
+ #if ENABLE(CSS_SCROLL_SNAP)
+     case CSSPropertyScrollSnapMargin:
+         return consume4Values(scrollSnapMarginShorthand(), important);
+@@ -5728,8 +5783,8 @@ bool CSSPropertyParser::parseShorthand(CSSPropertyID property, bool important)
+     case CSSPropertyPerspectiveOrigin:
+         return consumePerspectiveOrigin(important);
+     case CSSPropertyGridGap: {
+-        RefPtr<CSSValue> rowGap = consumeLengthOrPercent(m_range, m_context.mode, ValueRangeNonNegative);
+-        RefPtr<CSSValue> columnGap = consumeLengthOrPercent(m_range, m_context.mode, ValueRangeNonNegative);
++        RefPtr<CSSValue> rowGap = consumeGap(m_range, m_context.mode);
++        RefPtr<CSSValue> columnGap = m_range.atEnd() ? nullptr : consumeGap(m_range, m_context.mode);
+         if (!rowGap || !m_range.atEnd())
+             return false;
+         if (!columnGap)
+diff --git a/Source/WebCore/css/parser/CSSPropertyParser.h b/Source/WebCore/css/parser/CSSPropertyParser.h
+index 2ed49322..c3aaefed 100644
+--- a/Source/WebCore/css/parser/CSSPropertyParser.h
++++ b/Source/WebCore/css/parser/CSSPropertyParser.h
+@@ -66,6 +66,7 @@ private:
+ 
+     bool parseShorthand(CSSPropertyID, bool important);
+     bool consumeShorthandGreedily(const StylePropertyShorthand&, bool important);
++    bool consume2Values(const StylePropertyShorthand&, bool important);
+     bool consume4Values(const StylePropertyShorthand&, bool important);
+ 
+     // Legacy parsing allows <string>s for animation-name
+diff --git a/Source/WebCore/css/parser/CSSSelectorParser.cpp b/Source/WebCore/css/parser/CSSSelectorParser.cpp
+index 14e1c925..4adca47b 100644
+--- a/Source/WebCore/css/parser/CSSSelectorParser.cpp
++++ b/Source/WebCore/css/parser/CSSSelectorParser.cpp
+@@ -30,6 +30,8 @@
+ #include "config.h"
+ #include "CSSSelectorParser.h"
+ 
++#include "SelectorChecker.h"
++
+ #include "CSSParserMode.h"
+ #include "CSSSelectorList.h"
+ #include "StyleSheetContents.h"
+@@ -75,6 +77,55 @@ CSSSelectorList CSSSelectorParser::consumeComplexSelectorList(CSSParserTokenRang
+     return list;
+ }
+ 
++// :has() takes relative selectors: "> img", "+ p", ".a .b". Each is stored
++// as an ordinary complex selector whose leftmost compound is an anchor that
++// matches only the element :has() is asked about.
++std::unique_ptr<CSSParserSelector> CSSSelectorParser::consumeRelativeSelector(CSSParserTokenRange& range)
++{
++    CSSSelector::RelationType combinator = CSSSelector::DescendantSpace;
++    range.consumeWhitespace();
++    if (range.peek().type() == DelimiterToken) {
++        UChar delimiter = range.peek().delimiter();
++        if (delimiter == '>' || delimiter == '+' || delimiter == '~') {
++            range.consumeIncludingWhitespace();
++            combinator = delimiter == '>' ? CSSSelector::Child : delimiter == '+' ? CSSSelector::DirectAdjacent : CSSSelector::IndirectAdjacent;
++        }
++    }
++    std::unique_ptr<CSSParserSelector> selector = consumeComplexSelector(range);
++    if (!selector)
++        return nullptr;
++    auto anchor = std::make_unique<CSSParserSelector>();
++    anchor->setMatch(CSSSelector::PseudoClass);
++    anchor->setPseudoClassType(CSSSelector::PseudoClassHasScope);
++    CSSParserSelector* end = selector.get();
++    while (end->tagHistory())
++        end = end->tagHistory();
++    end->setRelation(combinator);
++    end->setTagHistory(WTFMove(anchor));
++    return selector;
++}
++
++CSSSelectorList CSSSelectorParser::consumeRelativeSelectorList(CSSParserTokenRange& range)
++{
++    Vector<std::unique_ptr<CSSParserSelector>> selectorList;
++    std::unique_ptr<CSSParserSelector> selector = consumeRelativeSelector(range);
++    if (!selector)
++        return CSSSelectorList();
++    selectorList.append(WTFMove(selector));
++    while (!range.atEnd() && range.peek().type() == CommaToken) {
++        range.consumeIncludingWhitespace();
++        selector = consumeRelativeSelector(range);
++        if (!selector)
++            return CSSSelectorList();
++        selectorList.append(WTFMove(selector));
++    }
++    CSSSelectorList list;
++    if (m_failedParsing)
++        return list;
++    list.adoptSelectorVector(selectorList);
++    return list;
++}
++
+ CSSSelectorList CSSSelectorParser::consumeCompoundSelectorList(CSSParserTokenRange& range)
+ {
+     Vector<std::unique_ptr<CSSParserSelector>> selectorList;
+@@ -451,6 +502,7 @@ static bool isOnlyPseudoClassFunction(CSSSelector::PseudoClassType pseudoClassTy
+     switch (pseudoClassType) {
+     case CSSSelector::PseudoClassNot:
+     case CSSSelector::PseudoClassMatches:
++    case CSSSelector::PseudoClassHas:
+     case CSSSelector::PseudoClassNthChild:
+     case CSSSelector::PseudoClassNthLastChild:
+     case CSSSelector::PseudoClassNthOfType:
+@@ -581,6 +633,15 @@ std::unique_ptr<CSSParserSelector> CSSSelectorParser::consumePseudo(CSSParserTok
+             selector->setLangArgumentList(WTFMove(argumentList));
+             return selector;
+         }
++        case CSSSelector::PseudoClassHas: {
++            std::unique_ptr<CSSSelectorList> selectorList = std::unique_ptr<CSSSelectorList>(new CSSSelectorList());
++            *selectorList = consumeRelativeSelectorList(block);
++            if (!selectorList->componentCount() || !block.atEnd())
++                return nullptr;
++            selector->setSelectorList(WTFMove(selectorList));
++            SelectorChecker::setHasPseudoClassInUse();
++            return selector;
++        }
+         case CSSSelector::PseudoClassMatches: {
+             std::unique_ptr<CSSSelectorList> selectorList = std::unique_ptr<CSSSelectorList>(new CSSSelectorList());
+             *selectorList = consumeComplexSelectorList(block);
+diff --git a/Source/WebCore/css/parser/CSSSelectorParser.h b/Source/WebCore/css/parser/CSSSelectorParser.h
+index 28302873..0c2d4688 100644
+--- a/Source/WebCore/css/parser/CSSSelectorParser.h
++++ b/Source/WebCore/css/parser/CSSSelectorParser.h
+@@ -53,6 +53,8 @@ private:
+     // These will all consume trailing comments if successful
+ 
+     CSSSelectorList consumeComplexSelectorList(CSSParserTokenRange&);
++    CSSSelectorList consumeRelativeSelectorList(CSSParserTokenRange&);
++    std::unique_ptr<CSSParserSelector> consumeRelativeSelector(CSSParserTokenRange&);
+     CSSSelectorList consumeCompoundSelectorList(CSSParserTokenRange&);
+ 
+     std::unique_ptr<CSSParserSelector> consumeComplexSelector(CSSParserTokenRange&);
+diff --git a/Source/WebCore/dom/Element.cpp b/Source/WebCore/dom/Element.cpp
+index 2097d724..4ccfccf2 100644
+--- a/Source/WebCore/dom/Element.cpp
++++ b/Source/WebCore/dom/Element.cpp
+@@ -89,6 +89,7 @@
+ #include "SVGNames.h"
+ #include "SVGSVGElement.h"
+ #include "ScrollLatchingState.h"
++#include "SelectorChecker.h"
+ #include "SelectorQuery.h"
+ #include "Settings.h"
+ #include "SimulatedClick.h"
+@@ -1301,6 +1302,11 @@ void Element::attributeChanged(const QualifiedName& name, const AtomicString& ol
+ {
+     bool valueIsSameAsBefore = oldValue == newValue;
+ 
++    if (!valueIsSameAsBefore && SelectorChecker::hasPseudoClassInUse()) {
++        if (auto* parent = parentElement())
++            invalidateStyleForHasPseudoClass(*parent);
++    }
++
+     if (!valueIsSameAsBefore) {
+         if (name == HTMLNames::idAttr) {
+             if (!oldValue.isEmpty())
+@@ -2027,6 +2033,8 @@ static void checkForSiblingStyleChanges(Element& parent, SiblingCheckType checkT
+ void Element::childrenChanged(const ChildChange& change)
+ {
+     ContainerNode::childrenChanged(change);
++    if (SelectorChecker::hasPseudoClassInUse())
++        invalidateStyleForHasPseudoClass(*this);
+     if (change.source == ChildChangeSourceParser)
+         checkForEmptyStyleChange(*this);
+     else {
+@@ -2745,6 +2753,38 @@ void Element::setStyleAffectedByEmpty()
+     ensureElementRareData().setStyleAffectedByEmpty(true);
+ }
+ 
++void Element::setStyleAffectedByHas()
++{
++    ensureElementRareData().setStyleAffectedByHas(true);
++}
++
++void Element::setDescendantsAffectedByHas()
++{
++    ensureElementRareData().setDescendantsAffectedByHas(true);
++}
++
++bool Element::styleAffectedByHas() const
++{
++    return hasRareData() && elementRareData()->styleAffectedByHas();
++}
++
++bool Element::descendantsAffectedByHas() const
++{
++    return hasRareData() && elementRareData()->descendantsAffectedByHas();
++}
++
++void Element::invalidateStyleForHasPseudoClass(Element& start)
++{
++    for (Element* ancestor = &start; ancestor; ancestor = ancestor->parentElement()) {
++        if (!ancestor->hasRareData())
++            continue;
++        if (ancestor->descendantsAffectedByHas())
++            ancestor->invalidateStyleForSubtree();
++        else if (ancestor->styleAffectedByHas())
++            ancestor->invalidateStyle();
++    }
++}
++
+ void Element::setStyleAffectedByFocusWithin()
+ {
+     ensureElementRareData().setStyleAffectedByFocusWithin(true);
+diff --git a/Source/WebCore/dom/Element.h b/Source/WebCore/dom/Element.h
+index f8d7b21c..667b5aa3 100644
+--- a/Source/WebCore/dom/Element.h
++++ b/Source/WebCore/dom/Element.h
+@@ -334,6 +334,12 @@ public:
+ 
+     void setStyleAffectedByEmpty();
+     void setStyleAffectedByFocusWithin();
++    void setStyleAffectedByHas();
++    void setDescendantsAffectedByHas();
++    bool styleAffectedByHas() const;
++    bool descendantsAffectedByHas() const;
++    // Something in or under start changed: restyle what :has() found there.
++    static void invalidateStyleForHasPseudoClass(Element& start);
+     void setChildrenAffectedByHover() { setFlag(ChildrenAffectedByHoverRulesFlag); }
+     void setStyleAffectedByActive();
+     void setChildrenAffectedByDrag();
+diff --git a/Source/WebCore/dom/ElementRareData.h b/Source/WebCore/dom/ElementRareData.h
+index 3b2f29d1..fb39b0e4 100644
+--- a/Source/WebCore/dom/ElementRareData.h
++++ b/Source/WebCore/dom/ElementRareData.h
+@@ -61,6 +61,11 @@ public:
+     void setStyleAffectedByEmpty(bool value) { m_styleAffectedByEmpty = value; }
+ 
+     bool styleAffectedByFocusWithin() const { return m_styleAffectedByFocusWithin; }
++    // Not reset with the other relations: a :has() elsewhere may have set them.
++    bool styleAffectedByHas() const { return m_styleAffectedByHas; }
++    void setStyleAffectedByHas(bool value) { m_styleAffectedByHas = value; }
++    bool descendantsAffectedByHas() const { return m_descendantsAffectedByHas; }
++    void setDescendantsAffectedByHas(bool value) { m_descendantsAffectedByHas = value; }
+     void setStyleAffectedByFocusWithin(bool value) { m_styleAffectedByFocusWithin = value; }
+ 
+     RegionOversetState regionOversetState() const { return m_regionOversetState; }
+@@ -124,6 +129,8 @@ private:
+     unsigned m_styleAffectedByActive : 1;
+     unsigned m_styleAffectedByEmpty : 1;
+     unsigned m_styleAffectedByFocusWithin : 1;
++    unsigned m_styleAffectedByHas : 1;
++    unsigned m_descendantsAffectedByHas : 1;
+ #if ENABLE(FULLSCREEN_API)
+     unsigned m_containsFullScreenElement : 1;
+ #endif
+@@ -170,6 +177,8 @@ inline ElementRareData::ElementRareData(RenderElement* renderer)
+     , m_styleAffectedByActive(false)
+     , m_styleAffectedByEmpty(false)
+     , m_styleAffectedByFocusWithin(false)
++    , m_styleAffectedByHas(false)
++    , m_descendantsAffectedByHas(false)
+ #if ENABLE(FULLSCREEN_API)
+     , m_containsFullScreenElement(false)
+ #endif
+diff --git a/Source/WebCore/html/HTMLInputElement.cpp b/Source/WebCore/html/HTMLInputElement.cpp
+index e33c71c9..4b66d537 100644
+--- a/Source/WebCore/html/HTMLInputElement.cpp
++++ b/Source/WebCore/html/HTMLInputElement.cpp
+@@ -58,6 +58,7 @@
+ #include "RenderTheme.h"
+ #include "ScopedEventQueue.h"
+ #include "SearchInputType.h"
++#include "SelectorChecker.h"
+ #include "Settings.h"
+ #include "StyleResolver.h"
+ #include <wtf/MathExtras.h>
+@@ -902,6 +903,9 @@ void HTMLInputElement::setChecked(bool nowChecked, TextFieldEventBehavior eventB
+     m_reflectsCheckedAttribute = false;
+     m_isChecked = nowChecked;
+     invalidateStyleForSubtree();
++    // :has(:checked) on the form around it.
++    if (SelectorChecker::hasPseudoClassInUse() && parentElement())
++        Element::invalidateStyleForHasPseudoClass(*parentElement());
+ 
+     if (RadioButtonGroups* buttons = radioButtonGroups())
+         buttons->updateCheckedState(this);
+diff --git a/Source/WebCore/rendering/FlexibleBoxAlgorithm.cpp b/Source/WebCore/rendering/FlexibleBoxAlgorithm.cpp
+index 1b848d60..94c08b90 100644
+--- a/Source/WebCore/rendering/FlexibleBoxAlgorithm.cpp
++++ b/Source/WebCore/rendering/FlexibleBoxAlgorithm.cpp
+@@ -46,10 +46,11 @@ FlexItem::FlexItem(RenderBox& box, LayoutUnit flexBaseContentSize, LayoutUnit hy
+     ASSERT(!box.isOutOfFlowPositioned());
+ }
+ 
+-FlexLayoutAlgorithm::FlexLayoutAlgorithm(const RenderStyle& style, LayoutUnit lineBreakLength, const Vector<FlexItem>& allItems)
++FlexLayoutAlgorithm::FlexLayoutAlgorithm(const RenderStyle& style, LayoutUnit lineBreakLength, const Vector<FlexItem>& allItems, LayoutUnit gapBetweenItems)
+     : m_style(style)
+     , m_lineBreakLength(lineBreakLength)
+     , m_allItems(allItems)
++    , m_gapBetweenItems(gapBetweenItems)
+ {
+ }
+ 
+@@ -65,10 +66,14 @@ bool FlexLayoutAlgorithm::computeNextFlexLine(size_t& nextIndex, Vector<FlexItem
+     for (; nextIndex < m_allItems.size(); ++nextIndex) {
+         const auto& flexItem = m_allItems[nextIndex];
+         ASSERT(!flexItem.box.isOutOfFlowPositioned());
+-        if (isMultiline() && sumHypotheticalMainSize + flexItem.hypotheticalMainAxisMarginBoxSize() > m_lineBreakLength && lineHasInFlowItem)
++        // The gap before this item, if it isn't the line's first, takes room too.
++        LayoutUnit gap = lineHasInFlowItem ? m_gapBetweenItems : LayoutUnit();
++        if (isMultiline() && sumHypotheticalMainSize + gap + flexItem.hypotheticalMainAxisMarginBoxSize() > m_lineBreakLength && lineHasInFlowItem)
+             break;
+         lineItems.append(flexItem);
+         lineHasInFlowItem = true;
++        sumFlexBaseSize += gap;
++        sumHypotheticalMainSize += gap;
+         sumFlexBaseSize += flexItem.flexBaseMarginBoxSize();
+         totalFlexGrow += flexItem.box.style().flexGrow();
+         totalFlexShrink += flexItem.box.style().flexShrink();
+diff --git a/Source/WebCore/rendering/FlexibleBoxAlgorithm.h b/Source/WebCore/rendering/FlexibleBoxAlgorithm.h
+index 8d7d6a3e..80408a8e 100644
+--- a/Source/WebCore/rendering/FlexibleBoxAlgorithm.h
++++ b/Source/WebCore/rendering/FlexibleBoxAlgorithm.h
+@@ -71,7 +71,7 @@ class FlexLayoutAlgorithm {
+     WTF_MAKE_NONCOPYABLE(FlexLayoutAlgorithm);
+ 
+ public:
+-    FlexLayoutAlgorithm(const RenderStyle&, LayoutUnit lineBreakLength, const Vector<FlexItem>& allItems);
++    FlexLayoutAlgorithm(const RenderStyle&, LayoutUnit lineBreakLength, const Vector<FlexItem>& allItems, LayoutUnit gapBetweenItems = LayoutUnit());
+ 
+     // The hypothetical main size of an item is the flex base size clamped
+     // according to its min and max main size properties
+@@ -83,6 +83,7 @@ private:
+     const RenderStyle& m_style;
+     LayoutUnit m_lineBreakLength;
+     const Vector<FlexItem>& m_allItems;
++    LayoutUnit m_gapBetweenItems;
+ };
+ 
+ } // namespace WebCore
+diff --git a/Source/WebCore/rendering/RenderFlexibleBox.cpp b/Source/WebCore/rendering/RenderFlexibleBox.cpp
+index 8885242e..203a0614 100644
+--- a/Source/WebCore/rendering/RenderFlexibleBox.cpp
++++ b/Source/WebCore/rendering/RenderFlexibleBox.cpp
+@@ -88,9 +88,14 @@ void RenderFlexibleBox::computeIntrinsicLogicalWidths(LayoutUnit& minLogicalWidt
+     // honoring it though until the flex shorthand stops setting it to 0. See
+     // https://bugs.webkit.org/show_bug.cgi?id=116117 and
+     // https://crbug.com/240765.
++    // Fixed gaps only: a percentage gap has nothing to resolve against yet.
++    const Length& itemGap = isColumnFlow() ? style().gridRowGap() : style().gridColumnGap();
++    LayoutUnit gap = itemGap.isFixed() ? LayoutUnit(itemGap.value()) : LayoutUnit();
++    unsigned itemCount = 0;
+     for (RenderBox* child = firstChildBox(); child; child = child->nextSiblingBox()) {
+         if (child->isOutOfFlowPositioned() || child->isExcludedFromNormalLayout())
+             continue;
++        ++itemCount;
+         
+         LayoutUnit margin = marginIntrinsicLogicalWidthForChild(*child);
+         
+@@ -115,6 +120,12 @@ void RenderFlexibleBox::computeIntrinsicLogicalWidths(LayoutUnit& minLogicalWidt
+         }
+     }
+     
++    if (!isColumnFlow() && itemCount > 1) {
++        maxLogicalWidth += gap * static_cast<int>(itemCount - 1);
++        if (!isMultiline())
++            minLogicalWidth += gap * static_cast<int>(itemCount - 1);
++    }
++
+     maxLogicalWidth = std::max(minLogicalWidth, maxLogicalWidth);
+     
+     // Due to negative margins, it is possible that we calculated a negative
+@@ -505,6 +516,31 @@ LayoutUnit RenderFlexibleBox::crossAxisContentExtent() const
+     return isHorizontalFlow() ? contentHeight() : contentWidth();
+ }
+ 
++static LayoutUnit resolveGap(const Length& gap, LayoutUnit percentageBase)
++{
++    if (gap.isFixed())
++        return LayoutUnit(gap.value());
++    if (gap.isPercentOrCalculated() && percentageBase > 0)
++        return valueForLength(gap, percentageBase);
++    return LayoutUnit();
++}
++
++// Percentages of the width resolve against the content box; of an auto
++// height, to nothing.
++LayoutUnit RenderFlexibleBox::gapBetweenItems() const
++{
++    if (isColumnFlow())
++        return resolveGap(style().gridRowGap(), style().logicalHeight().isFixed() ? contentLogicalHeight() : LayoutUnit());
++    return resolveGap(style().gridColumnGap(), contentLogicalWidth());
++}
++
++LayoutUnit RenderFlexibleBox::gapBetweenLines() const
++{
++    if (isColumnFlow())
++        return resolveGap(style().gridColumnGap(), contentLogicalWidth());
++    return resolveGap(style().gridRowGap(), style().logicalHeight().isFixed() ? contentLogicalHeight() : LayoutUnit());
++}
++
+ LayoutUnit RenderFlexibleBox::mainAxisContentExtent(LayoutUnit contentLogicalHeight)
+ {
+     if (isColumnFlow()) {
+@@ -870,11 +906,15 @@ void RenderFlexibleBox::layoutFlexItems(bool relayoutChildren)
+     }
+     
+     const LayoutUnit lineBreakLength = mainAxisContentExtent(LayoutUnit::max());
+-    FlexLayoutAlgorithm flexAlgorithm(style(), lineBreakLength, allItems);
++    const LayoutUnit itemGap = gapBetweenItems();
++    const LayoutUnit lineGap = gapBetweenLines();
++    FlexLayoutAlgorithm flexAlgorithm(style(), lineBreakLength, allItems, itemGap);
+     LayoutUnit crossAxisOffset = flowAwareBorderBefore() + flowAwarePaddingBefore();
+     Vector<FlexItem> lineItems;
+     size_t nextIndex = 0;
+     while (flexAlgorithm.computeNextFlexLine(nextIndex, lineItems, sumFlexBaseSize, totalFlexGrow, totalFlexShrink, totalWeightedFlexShrink, sumHypotheticalMainSize)) {
++        if (!lineContexts.isEmpty())
++            crossAxisOffset += lineGap;
+         LayoutUnit containerMainInnerSize = mainAxisContentExtent(sumHypotheticalMainSize);
+         // availableFreeSpace is the initial amount of free space in this flexbox.
+         // remainingFreeSpace starts out at the same value but as we place and lay
+@@ -894,6 +934,8 @@ void RenderFlexibleBox::layoutFlexItems(bool relayoutChildren)
+         // Recalculate the remaining free space. The adjustment for flex factors
+         // between 0..1 means we can't just use remainingFreeSpace here.
+         remainingFreeSpace = containerMainInnerSize;
++        if (lineItems.size() > 1)
++            remainingFreeSpace -= itemGap * static_cast<int>(lineItems.size() - 1);
+         for (size_t i = 0; i < lineItems.size(); ++i) {
+             FlexItem& flexItem = lineItems[i];
+             ASSERT(!flexItem.box.isOutOfFlowPositioned());
+@@ -1616,6 +1658,7 @@ void RenderFlexibleBox::layoutAndPlaceChildren(LayoutUnit& crossAxisOffset, Vect
+         if (i != children.size() - 1) {
+             // The last item does not get extra space added.
+             mainAxisOffset += justifyContentSpaceBetweenChildren(availableFreeSpace, distribution, children.size());
++            mainAxisOffset += gapBetweenItems();
+         }
+ 
+         // FIXME: Deal with pagination.
+@@ -1657,6 +1700,7 @@ void RenderFlexibleBox::layoutColumnReverse(const Vector<FlexItem>& children, La
+         setFlowAwareLocationForChild(child, LayoutPoint(mainAxisOffset, crossAxisOffset + flowAwareMarginBeforeForChild(child)));
+         mainAxisOffset -= flowAwareMarginStartForChild(child);
+         mainAxisOffset -= justifyContentSpaceBetweenChildren(availableFreeSpace, distribution, children.size());
++        mainAxisOffset -= gapBetweenItems();
+     }
+ }
+     
+@@ -1716,6 +1760,7 @@ void RenderFlexibleBox::alignFlexLines(Vector<LineContext>& lineContexts)
+     LayoutUnit availableCrossAxisSpace = crossAxisContentExtent();
+     for (size_t i = 0; i < lineContexts.size(); ++i)
+         availableCrossAxisSpace -= lineContexts[i].crossAxisExtent;
++    availableCrossAxisSpace -= gapBetweenLines() * static_cast<int>(lineContexts.size() - 1);
+     
+     LayoutUnit lineOffset = initialAlignContentOffset(availableCrossAxisSpace, position, distribution, lineContexts.size());
+     for (unsigned lineNumber = 0; lineNumber < lineContexts.size(); ++lineNumber) {
+diff --git a/Source/WebCore/rendering/RenderFlexibleBox.h b/Source/WebCore/rendering/RenderFlexibleBox.h
+index 2c6fb0c2..62458e43 100644
+--- a/Source/WebCore/rendering/RenderFlexibleBox.h
++++ b/Source/WebCore/rendering/RenderFlexibleBox.h
+@@ -120,6 +120,9 @@ private:
+     LayoutUnit crossAxisExtent() const;
+     LayoutUnit mainAxisExtent() const;
+     LayoutUnit crossAxisContentExtent() const;
++    // column-gap and row-gap: between items on a line, and between lines.
++    LayoutUnit gapBetweenItems() const;
++    LayoutUnit gapBetweenLines() const;
+     LayoutUnit mainAxisContentExtent(LayoutUnit contentLogicalHeight);
+     std::optional<LayoutUnit> computeMainAxisExtentForChild(const RenderBox& child, SizeType, const Length& size);
+     WritingMode transformedWritingMode() const;
+diff --git a/Source/WebCore/rendering/style/RenderStyleConstants.h b/Source/WebCore/rendering/style/RenderStyleConstants.h
+index 0d4c0758..c5321099 100644
+--- a/Source/WebCore/rendering/style/RenderStyleConstants.h
++++ b/Source/WebCore/rendering/style/RenderStyleConstants.h
+@@ -189,8 +189,10 @@ enum EBoxSizing { CONTENT_BOX, BORDER_BOX };
+ 
+ // Random visual rendering model attributes. Not inherited.
+ 
++// OCLIP only lives until the style is adjusted, which turns it into
++// OHIDDEN without making the other axis scroll.
+ enum EOverflow {
+-    OVISIBLE, OHIDDEN, OSCROLL, OAUTO, OOVERLAY, OPAGEDX, OPAGEDY
++    OVISIBLE, OHIDDEN, OSCROLL, OAUTO, OOVERLAY, OPAGEDX, OPAGEDY, OCLIP
+ };
+ 
+ enum EVerticalAlign {
+diff --git a/Source/WebCore/style/StyleRelations.cpp b/Source/WebCore/style/StyleRelations.cpp
+index adf16566..c8954dab 100644
+--- a/Source/WebCore/style/StyleRelations.cpp
++++ b/Source/WebCore/style/StyleRelations.cpp
+@@ -74,6 +74,8 @@ std::unique_ptr<Relations> commitRelationsToRenderStyle(RenderStyle& style, cons
+             style.setUnique();
+             break;
+         case Relation::AffectedByFocusWithin:
++        case Relation::AffectedByHas:
++        case Relation::DescendantsAffectedByHas:
+         case Relation::AffectedByPreviousSibling:
+         case Relation::AffectsNextSibling:
+         case Relation::ChildrenAffectedByBackwardPositionalRules:
+@@ -107,6 +109,12 @@ void commitRelations(std::unique_ptr<Relations> relations, Update& update)
+         case Relation::AffectedByFocusWithin:
+             element.setStyleAffectedByFocusWithin();
+             break;
++        case Relation::AffectedByHas:
++            element.setStyleAffectedByHas();
++            break;
++        case Relation::DescendantsAffectedByHas:
++            element.setDescendantsAffectedByHas();
++            break;
+         case Relation::AffectedByHover:
+             element.setChildrenAffectedByHover();
+             break;
+diff --git a/Source/WebCore/style/StyleRelations.h b/Source/WebCore/style/StyleRelations.h
+index 831099dd..0e08d0e0 100644
+--- a/Source/WebCore/style/StyleRelations.h
++++ b/Source/WebCore/style/StyleRelations.h
+@@ -43,6 +43,8 @@ struct Relation {
+         AffectedByEmpty,
+         AffectedByFocusWithin,
+         AffectedByHover,
++        AffectedByHas,
++        DescendantsAffectedByHas,
+         AffectedByPreviousSibling,
+         // For AffectsNextSibling 'value' tells how many element siblings to mark starting with 'element'.
+         AffectsNextSibling,
+diff --git a/Source/WebCore/style/StyleSharingResolver.cpp b/Source/WebCore/style/StyleSharingResolver.cpp
+index 480f4dc7..5dc6cf74 100644
+--- a/Source/WebCore/style/StyleSharingResolver.cpp
++++ b/Source/WebCore/style/StyleSharingResolver.cpp
+@@ -206,6 +206,9 @@ bool SharingResolver::canShareStyleWithElement(const Context& context, const Sty
+         return false;
+     if (style->hasUniquePseudoStyle())
+         return false;
++    // What :has() matched depends on each element's own contents.
++    if (candidateElement.styleAffectedByHas() || candidateElement.descendantsAffectedByHas())
++        return false;
+     if (candidateElement.tagQName() != element.tagQName())
+         return false;
+     if (candidateElement.inlineStyle())
+-- 
+2.50.1 (Apple Git-155)
+
