@@ -1,0 +1,64 @@
+From 8e334d17669426a42550f314b69e4d4d18b3aa1c Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Sat, 19 Sep 2026 13:29:20 -0400
+Subject: [PATCH 51/51] PowerPC JIT assembler: what WebCore's CSS selector JIT
+ needs
+
+The CSS selector JIT emits a few instructions by their PPCAssembler.h names
+(x_li32, stwux, x_mflr, x_mtlr, x_mtcr) and tests with ARM-style
+test32/branch; the JIT's assembler now provides them, so the whole engine
+builds with the JIT on.
+---
+ .../assembler/MacroAssemblerPPCJIT.h               | 14 ++++++++++++++
+ Source/JavaScriptCore/assembler/PPCAssemblerJIT.h  | 10 ++++++++++
+ 2 files changed, 24 insertions(+)
+
+diff --git a/Source/JavaScriptCore/assembler/MacroAssemblerPPCJIT.h b/Source/JavaScriptCore/assembler/MacroAssemblerPPCJIT.h
+index 08ec82f7..f20e9ed0 100644
+--- a/Source/JavaScriptCore/assembler/MacroAssemblerPPCJIT.h
++++ b/Source/JavaScriptCore/assembler/MacroAssemblerPPCJIT.h
+@@ -1384,6 +1384,20 @@ public:
+         return Jump(m_assembler.jump());
+     }
+ 
++    // Flags-style testing, as on ARM, for WebCore's CSS selector JIT: test32
++    // sets cr0 from reg & mask and branch() branches on it later (nothing in
++    // between may change cr0).
++    void test32(RegisterID reg, TrustedImm32 mask = TrustedImm32(-1))
++    {
++        test(reg, mask);
++    }
++
++    Jump branch(ResultCondition cond)
++    {
++        ASSERT(cond == Zero || cond == NonZero || cond == Signed || cond == PositiveOrZero);
++        return branchOnCondition(cond);
++    }
++
+     void jump(RegisterID target)
+     {
+         m_assembler.mtctr(target);
+diff --git a/Source/JavaScriptCore/assembler/PPCAssemblerJIT.h b/Source/JavaScriptCore/assembler/PPCAssemblerJIT.h
+index 68b50b07..f0c27bcc 100644
+--- a/Source/JavaScriptCore/assembler/PPCAssemblerJIT.h
++++ b/Source/JavaScriptCore/assembler/PPCAssemblerJIT.h
+@@ -340,6 +340,16 @@ public:
+     void bctr() { emitInst(0x4e800420); }
+     void bctrl() { emitInst(0x4e800421); }
+ 
++    void stwux(RegisterID rs, RegisterID ra, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 183)); }
++    void mtcrf(int mask, RegisterID rs) { emitInst((31 << 26) | (rs << 21) | ((mask & 0xff) << 12) | (144 << 1)); }
++
++    // The names PPCAssembler.h (TenFourFox's) gives these, which WebCore's
++    // CSS selector JIT uses directly.
++    void x_li32(RegisterID rt, int32_t value) { load32Constant(rt, value); }
++    void x_mflr(RegisterID rt) { mflr(rt); }
++    void x_mtlr(RegisterID rs) { mtlr(rs); }
++    void x_mtcr(RegisterID rs) { mtcrf(0xff, rs); }
++
+     void nop() { emitInst(0x60000000); }
+     void trap() { emitInst(0x7fe00008); }
+     void sync() { emitInst(0x7c0004ac); }
+-- 
+2.54.0 (Apple Git-157)
+
