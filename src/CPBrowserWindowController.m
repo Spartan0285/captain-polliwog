@@ -443,6 +443,9 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
             [self performSelector:@selector(writeDebugSnapshot) withObject:nil afterDelay:2.0];
         }
     }
+    // Loading again (a cancelled load gives way to the next): not yet.
+    if ([tab isLoading] && CPDebugSnapshotPath() != nil)
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(writeDebugSnapshot) object:nil];
     selectedWasLoading = [tab isLoading];
 }
 
@@ -659,8 +662,49 @@ static NSMenuItem *CPMenuItem(NSMenu *menu, NSString *title, SEL action, id targ
                [[CPBookmarkStore sharedStore] isFavoriteURLString:[[selectedTab URL] absoluteString]] ? NSOnState : NSOffState);
     CPMenuItem(menu, @"Add Bookmark...", @selector(addBookmark:), [CPBookmarksController sharedController], NSOffState);
     [menu addItem:[NSMenuItem separatorItem]];
+    if ([selectedTab isShowingPDF]) {
+        CPMenuItem(menu, @"Open in Preview", @selector(openPDFInPreview:), self, NSOffState);
+        CPMenuItem(menu, @"Save PDF...", @selector(savePDF:), self, NSOffState);
+    }
     CPMenuItem(menu, @"Open in Safari", @selector(openInSafari:), self, NSOffState);
     [self popUpMenu:menu fromButton:shareButton];
+}
+
+- (NSString *)PDFFilename
+{
+    NSString *name = [[[[selectedTab URL] path] lastPathComponent] stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+    if ([name length] < 2)
+        name = @"document";
+    if (![[[name pathExtension] lowercaseString] isEqualToString:@"pdf"])
+        name = [name stringByAppendingPathExtension:@"pdf"];
+    return name;
+}
+
+- (void)openPDFInPreview:(id)sender
+{
+    // The bytes already here, not a second trip over the network.
+    NSString *folder = [NSTemporaryDirectory() stringByAppendingPathComponent:@"Captain Polliwog PDFs"];
+    NSString *path = [folder stringByAppendingPathComponent:[self PDFFilename]];
+    [[NSFileManager defaultManager] createDirectoryAtPath:folder attributes:nil];
+    if (![[selectedTab pageData] writeToFile:path atomically:YES] ||
+        ![[NSWorkspace sharedWorkspace] openFile:path withApplication:@"Preview"])
+        NSBeep();
+}
+
+- (void)savePDF:(id)sender
+{
+    NSSavePanel *panel = [NSSavePanel savePanel];
+    [panel setRequiredFileType:@"pdf"];
+    [panel beginSheetForDirectory:[[CPSettings sharedSettings] downloadsFolder] file:[self PDFFilename]
+                   modalForWindow:[self window] modalDelegate:self
+                   didEndSelector:@selector(savePDFPanelDidEnd:returnCode:contextInfo:) contextInfo:[[selectedTab pageData] retain]];
+}
+
+- (void)savePDFPanelDidEnd:(NSSavePanel *)panel returnCode:(int)code contextInfo:(void *)context
+{
+    NSData *data = [(NSData *)context autorelease];
+    if (code == NSOKButton && ![data writeToFile:[panel filename] atomically:YES])
+        NSBeep();
 }
 
 - (void)emailPage:(id)sender

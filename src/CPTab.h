@@ -59,6 +59,8 @@
 - (NSURL *)URL;
 - (NSString *)title;
 - (NSString *)displayTitle;
+- (BOOL)isShowingPDF;
+- (NSData *)pageData;          // the main frame's bytes as they came
 - (BOOL)isLoading;
 - (double)progress;
 - (BOOL)canGoBack;

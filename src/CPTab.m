@@ -327,9 +327,23 @@ static NSString *CPEscapeHTML(NSString *text)
         return title;
     if (loading)
         return @"Loading...";
+    // A PDF has no <title>: its file name says more than the host.
+    if ([self isShowingPDF] && [[[URL path] lastPathComponent] length] > 1)
+        return [[[URL path] lastPathComponent] stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
     if ([[URL host] length] > 0)
         return [URL host];
     return @"Untitled";
+}
+
+- (BOOL)isShowingPDF
+{
+    NSString *type = [[[[webView mainFrame] dataSource] response] MIMEType];
+    return [[type lowercaseString] isEqualToString:@"application/pdf"];
+}
+
+- (NSData *)pageData
+{
+    return [[[webView mainFrame] dataSource] data];
 }
 
 - (BOOL)isLoading
