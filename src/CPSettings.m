@@ -310,6 +310,17 @@ CPBooleanSetting(stopsLongScripts, setStopsLongScripts, CPStopsLongScriptsKey)
     }
 }
 
++ (void)enableModernFeatures:(WebPreferences *)preferences
+{
+    static NSString *names[] = { @"setDisplayContentsEnabled:", @"setIsSecureContextAttributeEnabled:",
+                                 @"setDownloadAttributeEnabled:", nil };
+    unsigned i;
+    for (i = 0; names[i] != nil; i++) {
+        if ([preferences respondsToSelector:NSSelectorFromString(names[i])])
+            CPCallWithArgument(preferences, names[i], 1);
+    }
+}
+
 - (void)apply
 {
     CPMemoryProfile profile = [self effectiveMemoryProfile];
@@ -323,6 +334,7 @@ CPBooleanSetting(stopsLongScripts, setStopsLongScripts, CPStopsLongScriptsKey)
     [preferences setLoadsImagesAutomatically:[self loadsImages]];
     [preferences setJavaScriptEnabled:[self javaScriptEnabled]];
     [preferences setAllowsAnimatedImages:[self showsAnimatedImages]];
+    [CPSettings enableModernFeatures:preferences];
     // Newer WebKits: video waits for a click unless autoplay is on.
     CPCallWithArgument(preferences, @"setMediaPlaybackRequiresUserGesture:", [self autoplaysVideo] ? 0 : 1);
     // WebPreferences saves itself, so a session that ended in private mode

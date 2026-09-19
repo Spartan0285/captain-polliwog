@@ -575,6 +575,32 @@
         define(Blob.prototype, "arrayBuffer", function arrayBuffer() { return readBlob(this, "readAsArrayBuffer"); });
     }
 
+    // matchMedia(...).addEventListener("change", ...): older engines have
+    // only addListener, whose callback gets the list itself -- which carries
+    // the same matches and media an event would.
+    (function () {
+        var MQL = global.MediaQueryList;
+        var proto = MQL ? MQL.prototype : null;
+        if (!proto && global.matchMedia) {
+            try {
+                proto = Object.getPrototypeOf(global.matchMedia("all"));
+            } catch (e) {
+            }
+        }
+        if (!proto || typeof proto.addListener !== "function" || typeof proto.addEventListener === "function")
+            return;
+        define(proto, "addEventListener", function addEventListener(type, listener) {
+            if (type === "change" && listener)
+                this.addListener(typeof listener === "function" ? listener : listener.__polliwogHandle ||
+                    (listener.__polliwogHandle = function (list) { listener.handleEvent(list); }));
+        });
+        define(proto, "removeEventListener", function removeEventListener(type, listener) {
+            if (type === "change" && listener)
+                this.removeListener(typeof listener === "function" ? listener : listener.__polliwogHandle);
+        });
+        define(proto, "dispatchEvent", function dispatchEvent() { return true; });
+    })();
+
     // new EventTarget(), and classes that extend it, for engines where
     // EventTarget is only an interface: listeners live on a hidden
     // DocumentFragment, a real event target.

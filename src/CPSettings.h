@@ -4,6 +4,8 @@
 
 #import <Cocoa/Cocoa.h>
 
+@class WebPreferences;
+
 // A single memory budget drives every cache in the app. Swapping is the thing
 // to avoid on these machines: once a 500MHz G3 starts paging, every scroll
 // waits on the disk, so caches are kept small in RAM and generous on disk.
@@ -93,6 +95,10 @@ typedef enum {
 - (unsigned)historyItemLimit;
 
 - (void)apply;
+// Features our WebKit has but leaves off by default (display: contents,
+// isSecureContext, <a download>). Global in WebKit, but each WebPreferences
+// object carries them, so every one a WebView uses must say the same.
++ (void)enableModernFeatures:(WebPreferences *)preferences;
 - (void)clearCaches;
 - (unsigned long long)diskCacheBytesInUse;
 

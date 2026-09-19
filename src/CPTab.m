@@ -181,6 +181,7 @@ static NSString *CPEscapeHTML(NSString *text)
     [preferences setJavaScriptCanOpenWindowsAutomatically:NO];
     [preferences setPrivateBrowsingEnabled:[standard privateBrowsingEnabled]];
     [preferences setAllowsAnimatedImages:[standard allowsAnimatedImages]];
+    [CPSettings enableModernFeatures:preferences];
     [preferences setJavaScriptEnabled:(aURL != nil ? [CPSiteSettings javaScriptEnabledForURL:aURL] : [standard isJavaScriptEnabled])];
     [preferences setLoadsImagesAutomatically:(aURL != nil ? [CPSiteSettings imagesEnabledForURL:aURL] : [standard loadsImagesAutomatically])];
     if ([preferences respondsToSelector:@selector(setMediaPlaybackRequiresUserGesture:)])
