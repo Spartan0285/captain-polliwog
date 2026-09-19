@@ -1,7 +1,7 @@
 From 65ee9b42422ba39443e067b36266099bb0242a24 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 03:44:10 -0400
-Subject: [PATCH 18/42] WebKitLegacy Mac CMake: GCC's Objective-C++ flags, and
+Subject: [PATCH 18/43] WebKitLegacy Mac CMake: GCC's Objective-C++ flags, and
  the plug-in host types header
 
 ---

@@ -1,0 +1,1148 @@
+From 4687aea85fcf24a5bc0266598f06c9b9120017e0 Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Sat, 19 Sep 2026 00:33:25 -0400
+Subject: [PATCH 43/43] JavaScript: async generators and for await (ES2018)
+
+async function*, async generator methods, for await (x of y) and
+Symbol.asyncIterator. An async generator's body is compiled as a
+generator's; its awaits and yields both suspend it, and a yield first marks
+itself on the generator object. builtins/AsyncGeneratorPrototype.js drives
+the body the way @asyncFunctionResume drives an async function's, queues
+next/return/throw requests and does yield* delegation. for await gets its
+iterator from @getAsyncIterator, which wraps a plain iterable's iterator,
+and awaits each result and the return() of an early exit.
+
+SourceParseMode grows to 32 bits for the three new parse modes.
+---
+ Source/JavaScriptCore/CMakeLists.txt          |   1 +
+ Source/JavaScriptCore/DerivedSources.make     |   1 +
+ .../builtins/AsyncGeneratorPrototype.js       | 385 ++++++++++++++++++
+ Source/JavaScriptCore/builtins/BuiltinNames.h |   5 +
+ .../bytecompiler/BytecodeGenerator.cpp        |  43 +-
+ .../bytecompiler/BytecodeGenerator.h          |   2 +-
+ .../bytecompiler/NodesCodegen.cpp             |  23 +-
+ Source/JavaScriptCore/parser/ASTBuilder.h     |   2 +
+ Source/JavaScriptCore/parser/Nodes.h          |   4 +
+ Source/JavaScriptCore/parser/Parser.cpp       |  66 ++-
+ Source/JavaScriptCore/parser/Parser.h         |  14 +-
+ Source/JavaScriptCore/parser/ParserModes.h    |  52 ++-
+ Source/JavaScriptCore/parser/SyntaxChecker.h  |   1 +
+ .../runtime/CommonIdentifiers.h               |   1 +
+ .../runtime/FunctionExecutable.h              |   4 +-
+ Source/JavaScriptCore/runtime/JSFunction.cpp  |   5 +-
+ .../JavaScriptCore/runtime/JSGlobalObject.cpp |  16 +
+ .../JavaScriptCore/runtime/JSGlobalObject.h   |   3 +
+ 18 files changed, 594 insertions(+), 34 deletions(-)
+ create mode 100644 Source/JavaScriptCore/builtins/AsyncGeneratorPrototype.js
+
+diff --git a/Source/JavaScriptCore/CMakeLists.txt b/Source/JavaScriptCore/CMakeLists.txt
+index 96e51386..4b9f7b90 100644
+--- a/Source/JavaScriptCore/CMakeLists.txt
++++ b/Source/JavaScriptCore/CMakeLists.txt
+@@ -1428,6 +1428,7 @@ set(JavaScriptCore_BUILTINS_SOURCES
+     ${JAVASCRIPTCORE_DIR}/builtins/ArrayIteratorPrototype.js
+     ${JAVASCRIPTCORE_DIR}/builtins/ArrayPrototype.js
+     ${JAVASCRIPTCORE_DIR}/builtins/AsyncFunctionPrototype.js
++    ${JAVASCRIPTCORE_DIR}/builtins/AsyncGeneratorPrototype.js
+     ${JAVASCRIPTCORE_DIR}/builtins/DatePrototype.js
+     ${JAVASCRIPTCORE_DIR}/builtins/FunctionPrototype.js
+     ${JAVASCRIPTCORE_DIR}/builtins/GeneratorPrototype.js
+diff --git a/Source/JavaScriptCore/DerivedSources.make b/Source/JavaScriptCore/DerivedSources.make
+index d69baf5d..7da50f73 100644
+--- a/Source/JavaScriptCore/DerivedSources.make
++++ b/Source/JavaScriptCore/DerivedSources.make
+@@ -92,6 +92,7 @@ JavaScriptCore_BUILTINS_SOURCES = \
+     $(JavaScriptCore)/builtins/ArrayIteratorPrototype.js \
+     $(JavaScriptCore)/builtins/ArrayPrototype.js \
+     $(JavaScriptCore)/builtins/AsyncFunctionPrototype.js \
++    $(JavaScriptCore)/builtins/AsyncGeneratorPrototype.js \
+     $(JavaScriptCore)/builtins/DatePrototype.js \
+     $(JavaScriptCore)/builtins/FunctionPrototype.js \
+     $(JavaScriptCore)/builtins/GeneratorPrototype.js \
+diff --git a/Source/JavaScriptCore/builtins/AsyncGeneratorPrototype.js b/Source/JavaScriptCore/builtins/AsyncGeneratorPrototype.js
+new file mode 100644
+index 00000000..6db22588
+--- /dev/null
++++ b/Source/JavaScriptCore/builtins/AsyncGeneratorPrototype.js
+@@ -0,0 +1,385 @@
++/*
++ * Copyright (C) 2026 Captain Polliwog contributors.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
++ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
++ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++ * IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
++ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
++ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++// Async generators (async function*), for an engine that predates them.
++//
++// The body of an async generator is compiled as a generator's is; both its
++// awaits and its yields suspend it. Before suspending at a yield the body
++// sets @asyncGeneratorYieldKind on the generator object: 1 for yield, 2 for
++// yield* (whose delegation is done here). These functions drive the body the
++// way @asyncFunctionResume drives an async function's, keeping a queue of
++// next/return/throw requests, each with its own promise.
++
++function next(value)
++{
++    "use strict";
++
++    return @asyncGeneratorEnqueue(this, value, @GeneratorResumeModeNormal);
++}
++
++function return(value)
++{
++    "use strict";
++
++    return @asyncGeneratorEnqueue(this, value, @GeneratorResumeModeReturn);
++}
++
++function throw(exception)
++{
++    "use strict";
++
++    return @asyncGeneratorEnqueue(this, exception, @GeneratorResumeModeThrow);
++}
++
++function symbolAsyncIteratorGetter()
++{
++    "use strict";
++
++    return this;
++}
++
++@globalPrivate
++function asyncGeneratorEnqueue(generator, value, resumeMode)
++{
++    "use strict";
++
++    let promiseCapability = @newPromiseCapability(@Promise);
++    if (!@isObject(generator) || typeof generator.@generatorState !== "number") {
++        promiseCapability.@reject.@call(@undefined, new @TypeError("|this| should be an async generator"));
++        return promiseCapability.@promise;
++    }
++
++    let request = { resumeMode: resumeMode, value: value, promiseCapability: promiseCapability, next: null };
++    let last = generator.@asyncGeneratorQueueLast;
++    if (last)
++        last.next = request;
++    else
++        generator.@asyncGeneratorQueueFirst = request;
++    generator.@asyncGeneratorQueueLast = request;
++
++    if (!generator.@asyncGeneratorRunning)
++        @asyncGeneratorResumeNext(generator);
++    return promiseCapability.@promise;
++}
++
++// Settles the oldest request: { value, done } or a rejection.
++@globalPrivate
++function asyncGeneratorSettle(generator, value, done, isRejection)
++{
++    "use strict";
++
++    let request = generator.@asyncGeneratorQueueFirst;
++    if (!request)
++        return;
++    generator.@asyncGeneratorQueueFirst = request.next;
++    if (!request.next)
++        generator.@asyncGeneratorQueueLast = null;
++    if (isRejection)
++        request.promiseCapability.@reject.@call(@undefined, value);
++    else
++        request.promiseCapability.@resolve.@call(@undefined, { value: value, done: done });
++}
++
++@globalPrivate
++function asyncGeneratorAwaitThen(value, onFulfilled, onRejected)
++{
++    "use strict";
++
++    let wrapped = @newPromiseCapability(@Promise);
++    wrapped.@resolve.@call(@undefined, value);
++    wrapped.@promise.@then(onFulfilled, onRejected);
++}
++
++// Serves the next queued request, unless the body is busy with one already.
++@globalPrivate
++function asyncGeneratorResumeNext(generator)
++{
++    "use strict";
++
++    while (true) {
++        if (generator.@asyncGeneratorRunning)
++            return;
++        let request = generator.@asyncGeneratorQueueFirst;
++        if (!request)
++            return;
++
++        if (generator.@asyncGeneratorDelegate) {
++            @asyncGeneratorResumeDelegate(generator, request.value, request.resumeMode);
++            return;
++        }
++
++        if (generator.@generatorState === @GeneratorStateCompleted) {
++            if (request.resumeMode === @GeneratorResumeModeNormal) {
++                @asyncGeneratorSettle(generator, @undefined, true, false);
++                continue;
++            }
++            if (request.resumeMode === @GeneratorResumeModeThrow) {
++                @asyncGeneratorSettle(generator, request.value, true, true);
++                continue;
++            }
++            generator.@asyncGeneratorRunning = true;
++            @asyncGeneratorAwaitThen(request.value,
++                function(value) {
++                    generator.@asyncGeneratorRunning = false;
++                    @asyncGeneratorSettle(generator, value, true, false);
++                    @asyncGeneratorResumeNext(generator);
++                },
++                function(error) {
++                    generator.@asyncGeneratorRunning = false;
++                    @asyncGeneratorSettle(generator, error, true, true);
++                    @asyncGeneratorResumeNext(generator);
++                });
++            return;
++        }
++
++        @asyncGeneratorStep(generator, request.value, request.resumeMode);
++        return;
++    }
++}
++
++// Runs the body until it awaits, yields or finishes.
++@globalPrivate
++function asyncGeneratorStep(generator, sentValue, resumeMode)
++{
++    "use strict";
++
++    let state = generator.@generatorState;
++    let value = @undefined;
++    generator.@asyncGeneratorRunning = true;
++    generator.@asyncGeneratorYieldKind = 0;
++    try {
++        generator.@generatorState = @GeneratorStateExecuting;
++        value = generator.@generatorNext.@call(generator.@generatorThis, generator, state, sentValue, resumeMode, generator.@generatorFrame);
++    } catch (error) {
++        generator.@generatorState = @GeneratorStateCompleted;
++        generator.@asyncGeneratorRunning = false;
++        @asyncGeneratorSettle(generator, error, true, true);
++        @asyncGeneratorResumeNext(generator);
++        return;
++    }
++
++    if (generator.@generatorState === @GeneratorStateExecuting) {
++        // Finished: its return value is awaited, then given as done.
++        generator.@generatorState = @GeneratorStateCompleted;
++        @asyncGeneratorAwaitThen(value,
++            function(result) {
++                generator.@asyncGeneratorRunning = false;
++                @asyncGeneratorSettle(generator, result, true, false);
++                @asyncGeneratorResumeNext(generator);
++            },
++            function(error) {
++                generator.@asyncGeneratorRunning = false;
++                @asyncGeneratorSettle(generator, error, true, true);
++                @asyncGeneratorResumeNext(generator);
++            });
++        return;
++    }
++
++    let kind = generator.@asyncGeneratorYieldKind;
++    if (kind === 1) {
++        // yield: the value is awaited, then handed to the waiting request;
++        // the body stays suspended until the next one.
++        @asyncGeneratorAwaitThen(value,
++            function(result) {
++                generator.@asyncGeneratorRunning = false;
++                @asyncGeneratorSettle(generator, result, false, false);
++                @asyncGeneratorResumeNext(generator);
++            },
++            function(error) {
++                @asyncGeneratorStep(generator, error, @GeneratorResumeModeThrow);
++            });
++        return;
++    }
++
++    if (kind === 2) {
++        // yield*: hand requests to the inner async iterator until it's done.
++        let iterator;
++        try {
++            iterator = @getAsyncIterator(value);
++        } catch (error) {
++            @asyncGeneratorStep(generator, error, @GeneratorResumeModeThrow);
++            return;
++        }
++        generator.@asyncGeneratorDelegate = iterator;
++        @asyncGeneratorResumeDelegate(generator, @undefined, @GeneratorResumeModeNormal);
++        return;
++    }
++
++    // await: resume the body with the result.
++    @asyncGeneratorAwaitThen(value,
++        function(result) { @asyncGeneratorStep(generator, result, @GeneratorResumeModeNormal); },
++        function(error) { @asyncGeneratorStep(generator, error, @GeneratorResumeModeThrow); });
++}
++
++@globalPrivate
++function asyncGeneratorResumeDelegate(generator, sentValue, resumeMode)
++{
++    "use strict";
++
++    let iterator = generator.@asyncGeneratorDelegate;
++    generator.@asyncGeneratorRunning = true;
++
++    let method;
++    if (resumeMode === @GeneratorResumeModeNormal)
++        method = iterator.next;
++    else if (resumeMode === @GeneratorResumeModeThrow)
++        method = iterator.throw;
++    else
++        method = iterator.return;
++
++    if (method === @undefined || method === null) {
++        generator.@asyncGeneratorDelegate = @undefined;
++        if (resumeMode === @GeneratorResumeModeThrow) {
++            let returnMethod = iterator.return;
++            if (returnMethod !== @undefined && returnMethod !== null) {
++                try {
++                    returnMethod.@call(iterator);
++                } catch (error) {
++                }
++            }
++            @asyncGeneratorStep(generator, new @TypeError("The delegated iterator has no throw method"), @GeneratorResumeModeThrow);
++        } else
++            @asyncGeneratorStep(generator, sentValue, resumeMode);
++        return;
++    }
++
++    let promise;
++    try {
++        promise = method.@call(iterator, sentValue);
++    } catch (error) {
++        generator.@asyncGeneratorDelegate = @undefined;
++        @asyncGeneratorStep(generator, error, @GeneratorResumeModeThrow);
++        return;
++    }
++
++    @asyncGeneratorAwaitThen(promise,
++        function(result) {
++            if (!@isObject(result)) {
++                generator.@asyncGeneratorDelegate = @undefined;
++                @asyncGeneratorStep(generator, new @TypeError("Iterator result interface is not an object."), @GeneratorResumeModeThrow);
++                return;
++            }
++            if (result.done) {
++                generator.@asyncGeneratorDelegate = @undefined;
++                @asyncGeneratorStep(generator, result.value, resumeMode === @GeneratorResumeModeReturn ? @GeneratorResumeModeReturn : @GeneratorResumeModeNormal);
++                return;
++            }
++            generator.@asyncGeneratorRunning = false;
++            @asyncGeneratorSettle(generator, result.value, false, false);
++            @asyncGeneratorResumeNext(generator);
++        },
++        function(error) {
++            generator.@asyncGeneratorDelegate = @undefined;
++            @asyncGeneratorStep(generator, error, @GeneratorResumeModeThrow);
++        });
++}
++
++// GetIterator(obj, async): its Symbol.asyncIterator, or its ordinary
++// iterator with each value awaited.
++@globalPrivate
++function getAsyncIterator(iterable)
++{
++    "use strict";
++
++    if (iterable === @undefined || iterable === null)
++        @throwTypeError("Object is not async iterable");
++
++    let method = iterable.@asyncIteratorSymbol;
++    if (method !== @undefined && method !== null) {
++        let iterator = method.@call(iterable);
++        if (!@isObject(iterator))
++            @throwTypeError("The async iterator is not an object");
++        return iterator;
++    }
++
++    method = iterable.@iteratorSymbol;
++    if (typeof method !== "function")
++        @throwTypeError("Object is not async iterable");
++    let syncIterator = method.@call(iterable);
++    if (!@isObject(syncIterator))
++        @throwTypeError("The iterator is not an object");
++    return @createAsyncFromSyncIterator(syncIterator);
++}
++
++@globalPrivate
++function createAsyncFromSyncIterator(syncIterator)
++{
++    "use strict";
++
++    let nextMethod = syncIterator.next;
++
++    function settle(result)
++    {
++        let capability = @newPromiseCapability(@Promise);
++        if (!@isObject(result)) {
++            capability.@reject.@call(@undefined, new @TypeError("Iterator result interface is not an object."));
++            return capability.@promise;
++        }
++        let done = !!result.done;
++        let valueCapability = @newPromiseCapability(@Promise);
++        valueCapability.@resolve.@call(@undefined, result.value);
++        valueCapability.@promise.@then(
++            function(value) { capability.@resolve.@call(@undefined, { value: value, done: done }); },
++            function(error) { capability.@reject.@call(@undefined, error); });
++        return capability.@promise;
++    }
++
++    function rejected(error)
++    {
++        let capability = @newPromiseCapability(@Promise);
++        capability.@reject.@call(@undefined, error);
++        return capability.@promise;
++    }
++
++    let asyncIterator = {
++        next: function(value) {
++            try {
++                return settle(nextMethod.@call(syncIterator, value));
++            } catch (error) {
++                return rejected(error);
++            }
++        },
++        return: function(value) {
++            try {
++                let method = syncIterator.return;
++                if (method === @undefined || method === null)
++                    return settle({ value: value, done: true });
++                return settle(method.@call(syncIterator, value));
++            } catch (error) {
++                return rejected(error);
++            }
++        },
++        throw: function(value) {
++            try {
++                let method = syncIterator.throw;
++                if (method === @undefined || method === null)
++                    return rejected(value);
++                return settle(method.@call(syncIterator, value));
++            } catch (error) {
++                return rejected(error);
++            }
++        }
++    };
++    return asyncIterator;
++}
+diff --git a/Source/JavaScriptCore/builtins/BuiltinNames.h b/Source/JavaScriptCore/builtins/BuiltinNames.h
+index e84d1f56..08234f0f 100644
+--- a/Source/JavaScriptCore/builtins/BuiltinNames.h
++++ b/Source/JavaScriptCore/builtins/BuiltinNames.h
+@@ -120,6 +120,11 @@ namespace JSC {
+     macro(generatorValue) \
+     macro(generatorThis) \
+     macro(generatorResumeMode) \
++    macro(asyncGeneratorQueueFirst) \
++    macro(asyncGeneratorQueueLast) \
++    macro(asyncGeneratorRunning) \
++    macro(asyncGeneratorYieldKind) \
++    macro(asyncGeneratorDelegate) \
+     macro(Collator) \
+     macro(DateTimeFormat) \
+     macro(NumberFormat) \
+diff --git a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp
+index e729bc67..1ecefb2a 100644
+--- a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp
++++ b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp
+@@ -566,7 +566,9 @@ BytecodeGenerator::BytecodeGenerator(VM& vm, FunctionNode* functionNode, Unlinke
+     m_newTargetRegister = addVar();
+     switch (parseMode) {
+     case SourceParseMode::GeneratorWrapperFunctionMode:
+-    case SourceParseMode::GeneratorWrapperMethodMode: {
++    case SourceParseMode::GeneratorWrapperMethodMode:
++    case SourceParseMode::AsyncGeneratorWrapperFunctionMode:
++    case SourceParseMode::AsyncGeneratorWrapperMethodMode: {
+         m_generatorRegister = addVar();
+ 
+         // FIXME: Emit to_this only when Generator uses it.
+@@ -623,7 +625,8 @@ BytecodeGenerator::BytecodeGenerator(VM& vm, FunctionNode* functionNode, Unlinke
+ 
+     case SourceParseMode::AsyncFunctionBodyMode:
+     case SourceParseMode::AsyncArrowFunctionBodyMode:
+-    case SourceParseMode::GeneratorBodyMode: {
++    case SourceParseMode::GeneratorBodyMode:
++    case SourceParseMode::AsyncGeneratorBodyMode: {
+         // |this| is already filled correctly before here.
+         emitLoad(m_newTargetRegister, jsUndefined());
+         break;
+@@ -3256,6 +3259,8 @@ void BytecodeGenerator::emitNewFunctionExpressionCommon(RegisterID* dst, Functio
+     switch (function->parseMode()) {
+     case SourceParseMode::GeneratorWrapperFunctionMode:
+     case SourceParseMode::GeneratorWrapperMethodMode:
++    case SourceParseMode::AsyncGeneratorWrapperFunctionMode:
++    case SourceParseMode::AsyncGeneratorWrapperMethodMode:
+         opcodeID = op_new_generator_func_exp;
+         break;
+     case SourceParseMode::AsyncFunctionMode:
+@@ -4249,10 +4254,25 @@ void BytecodeGenerator::emitEnumeration(ThrowableExpressionData* node, Expressio
+ {
+     CompletionRecordScope completionRecordScope(*this);
+ 
++    // for await: the iterator comes from @getAsyncIterator, and each result
++    // (and return()'s) is awaited -- a yield, in an async function's body.
++    bool isForAwait = forLoopNode && forLoopNode->isForAwait();
++
+     RefPtr<RegisterID> subject = newTemporary();
+     emitNode(subject.get(), subjectNode);
+-    RefPtr<RegisterID> iterator = emitGetById(newTemporary(), subject.get(), propertyNames().iteratorSymbol);
+-    {
++    RefPtr<RegisterID> iterator;
++    if (isForAwait) {
++        iterator = newTemporary();
++        auto var = variable(propertyNames().builtinNames().getAsyncIteratorPrivateName());
++        RefPtr<RegisterID> scope = newTemporary();
++        moveToDestinationIfNeeded(scope.get(), emitResolveScope(scope.get(), var));
++        RefPtr<RegisterID> getAsyncIterator = emitGetFromScope(newTemporary(), scope.get(), var, ThrowIfNotFound);
++        CallArguments args(*this, nullptr, 1);
++        emitLoad(args.thisRegister(), jsUndefined());
++        emitMove(args.argumentRegister(0), subject.get());
++        emitCall(iterator.get(), getAsyncIterator.get(), NoExpectedFunction, args, node->divot(), node->divotStart(), node->divotEnd(), DebuggableCall::No);
++    } else {
++        iterator = emitGetById(newTemporary(), subject.get(), propertyNames().iteratorSymbol);
+         CallArguments args(*this, nullptr);
+         emitMove(args.thisRegister(), subject.get());
+         emitCall(iterator.get(), iterator.get(), NoExpectedFunction, args, node->divot(), node->divotStart(), node->divotEnd(), DebuggableCall::No);
+@@ -4317,6 +4337,8 @@ void BytecodeGenerator::emitEnumeration(ThrowableExpressionData* node, Expressio
+             CallArguments returnArguments(*this, nullptr);
+             emitMove(returnArguments.thisRegister(), iterator.get());
+             emitCall(value.get(), returnMethod.get(), NoExpectedFunction, returnArguments, node->divot(), node->divotStart(), node->divotEnd(), DebuggableCall::No);
++            if (isForAwait)
++                emitMove(value.get(), emitYield(value.get()));
+             emitJumpIfTrue(emitIsObject(newTemporary(), value.get()), finallyDone.get());
+             emitThrowTypeError(ASCIILiteral("Iterator result interface is not an object."));
+ 
+@@ -4359,6 +4381,13 @@ void BytecodeGenerator::emitEnumeration(ThrowableExpressionData* node, Expressio
+ 
+         {
+             emitIteratorNext(value.get(), iterator.get(), node);
++            if (isForAwait) {
++                emitMove(value.get(), emitYield(value.get()));
++                Ref<Label> typeIsObject = newLabel();
++                emitJumpIfTrue(emitIsObject(newTemporary(), value.get()), typeIsObject.get());
++                emitThrowTypeError(ASCIILiteral("Iterator result interface is not an object."));
++                emitLabel(typeIsObject.get());
++            }
+             emitJumpIfTrue(emitGetById(newTemporary(), value.get(), propertyNames().done), loopDone.get());
+             emitGetById(value.get(), value.get(), propertyNames().value);
+             emitJump(loopStart.get());
+@@ -4369,7 +4398,7 @@ void BytecodeGenerator::emitEnumeration(ThrowableExpressionData* node, Expressio
+ 
+     // IteratorClose sequence for break-ed control flow.
+     popFinallyControlFlowScope();
+-    emitIteratorClose(iterator.get(), node);
++    emitIteratorClose(iterator.get(), node, isForAwait);
+     emitLabel(loopDone.get());
+ }
+ 
+@@ -4577,7 +4606,7 @@ RegisterID* BytecodeGenerator::emitIteratorNextWithValue(RegisterID* dst, Regist
+     return dst;
+ }
+ 
+-void BytecodeGenerator::emitIteratorClose(RegisterID* iterator, const ThrowableExpressionData* node)
++void BytecodeGenerator::emitIteratorClose(RegisterID* iterator, const ThrowableExpressionData* node, bool awaitResult)
+ {
+     Ref<Label> done = newLabel();
+     RefPtr<RegisterID> returnMethod = emitGetById(newTemporary(), iterator, propertyNames().returnKeyword);
+@@ -4587,6 +4616,8 @@ void BytecodeGenerator::emitIteratorClose(RegisterID* iterator, const ThrowableE
+     CallArguments returnArguments(*this, nullptr);
+     emitMove(returnArguments.thisRegister(), iterator);
+     emitCall(value.get(), returnMethod.get(), NoExpectedFunction, returnArguments, node->divot(), node->divotStart(), node->divotEnd(), DebuggableCall::No);
++    if (awaitResult)
++        emitMove(value.get(), emitYield(value.get()));
+     emitJumpIfTrue(emitIsObject(newTemporary(), value.get()), done.get());
+     emitThrowTypeError(ASCIILiteral("Iterator result interface is not an object."));
+     emitLabel(done.get());
+diff --git a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h
+index fc86c598..dcabaad3 100644
+--- a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h
++++ b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h
+@@ -787,7 +787,7 @@ namespace JSC {
+ 
+         RegisterID* emitIteratorNext(RegisterID* dst, RegisterID* iterator, const ThrowableExpressionData* node);
+         RegisterID* emitIteratorNextWithValue(RegisterID* dst, RegisterID* iterator, RegisterID* value, const ThrowableExpressionData* node);
+-        void emitIteratorClose(RegisterID* iterator, const ThrowableExpressionData* node);
++        void emitIteratorClose(RegisterID* iterator, const ThrowableExpressionData* node, bool awaitResult = false);
+ 
+         RegisterID* emitRestParameter(RegisterID* result, unsigned numParametersToSkip);
+ 
+diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+index 42a9f275..25d46778 100644
+--- a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
++++ b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+@@ -3671,7 +3671,9 @@ void FunctionNode::emitBytecode(BytecodeGenerator& generator, RegisterID*)
+ 
+     switch (generator.parseMode()) {
+     case SourceParseMode::GeneratorWrapperFunctionMode:
+-    case SourceParseMode::GeneratorWrapperMethodMode: {
++    case SourceParseMode::GeneratorWrapperMethodMode:
++    case SourceParseMode::AsyncGeneratorWrapperFunctionMode:
++    case SourceParseMode::AsyncGeneratorWrapperMethodMode: {
+         StatementNode* singleStatement = this->singleStatement();
+         ASSERT(singleStatement->isExprStatement());
+         ExprStatementNode* exprStatement = static_cast<ExprStatementNode*>(singleStatement);
+@@ -3745,7 +3747,8 @@ void FunctionNode::emitBytecode(BytecodeGenerator& generator, RegisterID*)
+ 
+     case SourceParseMode::AsyncArrowFunctionBodyMode:
+     case SourceParseMode::AsyncFunctionBodyMode:
+-    case SourceParseMode::GeneratorBodyMode: {
++    case SourceParseMode::GeneratorBodyMode:
++    case SourceParseMode::AsyncGeneratorBodyMode: {
+         Ref<Label> generatorBodyLabel = generator.newLabel();
+         {
+             RefPtr<RegisterID> condition = generator.newTemporary();
+@@ -3834,6 +3837,22 @@ RegisterID* MethodDefinitionNode::emitBytecode(BytecodeGenerator& generator, Reg
+ 
+ RegisterID* YieldExprNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
+ {
++    // In an async generator, await and yield both suspend the body; the
++    // driver (AsyncGeneratorPrototype.js) tells them apart by this mark, and
++    // does yield*'s delegation itself.
++    if (generator.parseMode() == SourceParseMode::AsyncGeneratorBodyMode) {
++        RefPtr<RegisterID> arg = generator.newTemporary();
++        if (argument())
++            generator.emitNode(arg.get(), argument());
++        else
++            generator.emitLoad(arg.get(), jsUndefined());
++        RefPtr<RegisterID> kind = generator.emitLoad(generator.newTemporary(), jsNumber(delegate() ? 2 : 1));
++        generator.emitDirectPutById(generator.generatorRegister(), generator.propertyNames().builtinNames().asyncGeneratorYieldKindPrivateName(), kind.get(), PropertyNode::KnownDirect);
++        RefPtr<RegisterID> value = generator.emitYield(arg.get());
++        if (dst == generator.ignoredResult())
++            return nullptr;
++        return generator.emitMove(generator.finalDestination(dst), value.get());
++    }
+     if (!delegate()) {
+         RefPtr<RegisterID> arg = nullptr;
+         if (argument()) {
+diff --git a/Source/JavaScriptCore/parser/ASTBuilder.h b/Source/JavaScriptCore/parser/ASTBuilder.h
+index 7a0d51fa..9e3f43d9 100644
+--- a/Source/JavaScriptCore/parser/ASTBuilder.h
++++ b/Source/JavaScriptCore/parser/ASTBuilder.h
+@@ -642,6 +642,8 @@ public:
+         return createForInLoop(location, lexpr, iter, statements, declLocation, eStart, eDivot, eEnd, start, end, lexicalVariables);
+     }
+     
++    void setForOfIsAwait(StatementNode* node) { static_cast<ForOfNode*>(node)->setIsForAwait(); }
++
+     StatementNode* createForOfLoop(const JSTokenLocation& location, ExpressionNode* lhs, ExpressionNode* iter, StatementNode* statements, const JSTokenLocation&, const JSTextPosition& eStart, const JSTextPosition& eDivot, const JSTextPosition& eEnd, int start, int end, VariableEnvironment& lexicalVariables)
+     {
+         ForOfNode* result = new (m_parserArena) ForOfNode(location, lhs, iter, statements, lexicalVariables);
+diff --git a/Source/JavaScriptCore/parser/Nodes.h b/Source/JavaScriptCore/parser/Nodes.h
+index a6cb08a4..f6b9c010 100644
+--- a/Source/JavaScriptCore/parser/Nodes.h
++++ b/Source/JavaScriptCore/parser/Nodes.h
+@@ -1592,9 +1592,13 @@ namespace JSC {
+     public:
+         ForOfNode(const JSTokenLocation&, ExpressionNode*, ExpressionNode*, StatementNode*, VariableEnvironment&);
+         bool isForOfNode() const override { return true; }
++        bool isForAwait() const { return m_isForAwait; }
++        void setIsForAwait() { m_isForAwait = true; }
+ 
+     private:
+         void emitBytecode(BytecodeGenerator&, RegisterID* = 0) override;
++
++        bool m_isForAwait { false };
+     };
+ 
+     class ContinueNode : public StatementNode, public ThrowableExpressionData {
+diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/parser/Parser.cpp
+index c689c9f9..efc3ab1c 100644
+--- a/Source/JavaScriptCore/parser/Parser.cpp
++++ b/Source/JavaScriptCore/parser/Parser.cpp
+@@ -232,7 +232,7 @@ String Parser<LexerType>::parseInner(const Identifier& calleeName, SourceParseMo
+         else if (isModuleParseMode(parseMode))
+             sourceElements = parseModuleSourceElements(context, parseMode);
+         else if (isGeneratorWrapperParseMode(parseMode))
+-            sourceElements = parseGeneratorFunctionSourceElements(context, calleeName, CheckForStrictMode);
++            sourceElements = parseGeneratorFunctionSourceElements(context, calleeName, CheckForStrictMode, parseMode);
+         else
+             sourceElements = parseSourceElements(context, CheckForStrictMode);
+     }
+@@ -465,8 +465,9 @@ end:
+ }
+ 
+ template <typename LexerType>
+-template <class TreeBuilder> TreeSourceElements Parser<LexerType>::parseGeneratorFunctionSourceElements(TreeBuilder& context, const Identifier& name, SourceElementsMode mode)
++template <class TreeBuilder> TreeSourceElements Parser<LexerType>::parseGeneratorFunctionSourceElements(TreeBuilder& context, const Identifier& name, SourceElementsMode mode, SourceParseMode wrapperMode)
+ {
++    SourceParseMode bodyMode = isAsyncGeneratorWrapperParseMode(wrapperMode) ? SourceParseMode::AsyncGeneratorBodyMode : SourceParseMode::GeneratorBodyMode;
+     auto sourceElements = context.createSourceElements();
+ 
+     unsigned functionKeywordStart = tokenStart();
+@@ -484,7 +485,7 @@ template <class TreeBuilder> TreeSourceElements Parser<LexerType>::parseGenerato
+ 
+     {
+         AutoPopScopeRef generatorBodyScope(this, pushScope());
+-        generatorBodyScope->setSourceParseMode(SourceParseMode::GeneratorBodyMode);
++        generatorBodyScope->setSourceParseMode(bodyMode);
+         generatorBodyScope->setConstructorKind(ConstructorKind::None);
+         generatorBodyScope->setExpectedSuperBinding(m_superBinding);
+ 
+@@ -492,7 +493,7 @@ template <class TreeBuilder> TreeSourceElements Parser<LexerType>::parseGenerato
+         failIfFalse(parseSourceElements(generatorFunctionContext, mode), "Cannot parse the body of a generator");
+         popScope(generatorBodyScope, TreeBuilder::NeedsFreeVariableInfo);
+     }
+-    info.body = context.createFunctionMetadata(startLocation, tokenLocation(), startColumn, tokenColumn(), functionKeywordStart, functionNameStart, parametersStart, strictMode(), ConstructorKind::None, m_superBinding, info.parameterCount, SourceParseMode::GeneratorBodyMode, false);
++    info.body = context.createFunctionMetadata(startLocation, tokenLocation(), startColumn, tokenColumn(), functionKeywordStart, functionNameStart, parametersStart, strictMode(), ConstructorKind::None, m_superBinding, info.parameterCount, bodyMode, false);
+ 
+     info.endLine = tokenLine();
+     info.endOffset = m_token.m_data.offset;
+@@ -1213,6 +1214,13 @@ template <class TreeBuilder> TreeStatement Parser<LexerType>::parseForStatement(
+     int startLine = tokenLine();
+     next();
+ 
++    // for await (x of y), in async functions and async generators.
++    bool isForAwait = false;
++    if (match(AWAIT) && currentFunctionScope()->isAsyncFunctionBoundary()) {
++        isForAwait = true;
++        next();
++    }
++
+     DepthManager statementDepth(&m_statementDepth);
+     m_statementDepth++;
+ 
+@@ -1313,9 +1321,12 @@ template <class TreeBuilder> TreeStatement Parser<LexerType>::parseForStatement(
+         failIfFalse(statement, "Expected statement as body of for-", isOfEnumeration ? "of" : "in", " statement");
+         gatherLexicalVariablesIfNecessary();
+         TreeStatement result;
+-        if (isOfEnumeration)
++        if (isOfEnumeration) {
+             result = context.createForOfLoop(location, forInTarget, expr, statement, declLocation, declsStart, inLocation, exprEnd, startLine, endLine, *lexicalVariables);
+-        else {
++            if (isForAwait)
++                context.setForOfIsAwait(result);
++        } else {
++            semanticFailIfTrue(isForAwait, "for await requires 'of'");
+             if (isVarDeclaraton && forInInitializer)
+                 result = context.createForInLoop(location, decls, expr, statement, declLocation, declsStart, inLocation, exprEnd, startLine, endLine, *lexicalVariables);
+             else
+@@ -1375,6 +1386,7 @@ template <class TreeBuilder> TreeStatement Parser<LexerType>::parseForStatement(
+         endLoop();
+         failIfFalse(statement, "Expected a statement as the body of a for loop");
+         gatherLexicalVariablesIfNecessary();
++        semanticFailIfTrue(isForAwait, "for await requires 'of'");
+         TreeStatement result = context.createForLoop(location, decls, condition, increment, statement, startLine, endLine, *lexicalVariables);
+         popLexicalScopeIfNecessary();
+         return result;
+@@ -1405,18 +1417,26 @@ enumerationLoop:
+     TreeStatement result;
+     if (pattern) {
+         ASSERT(!decls);
+-        if (isOfEnumeration)
++        if (isOfEnumeration) {
+             result = context.createForOfLoop(location, pattern, expr, statement, declLocation, declsStart, declsEnd, exprEnd, startLine, endLine, *lexicalVariables);
+-        else 
++            if (isForAwait)
++                context.setForOfIsAwait(result);
++        } else {
++            semanticFailIfTrue(isForAwait, "for await requires 'of'");
+             result = context.createForInLoop(location, pattern, expr, statement, declLocation, declsStart, declsEnd, exprEnd, startLine, endLine, *lexicalVariables);
++        }
+ 
+         popLexicalScopeIfNecessary();
+         return result;
+     }
+-    if (isOfEnumeration)
++    if (isOfEnumeration) {
+         result = context.createForOfLoop(location, decls, expr, statement, declLocation, declsStart, declsEnd, exprEnd, startLine, endLine, *lexicalVariables);
+-    else
++        if (isForAwait)
++            context.setForOfIsAwait(result);
++    } else {
++        semanticFailIfTrue(isForAwait, "for await requires 'of'");
+         result = context.createForInLoop(location, decls, expr, statement, declLocation, declsStart, declsEnd, exprEnd, startLine, endLine, *lexicalVariables);
++    }
+     popLexicalScopeIfNecessary();
+     return result;
+ }
+@@ -2034,6 +2054,11 @@ static const char* stringForFunctionMode(SourceParseMode mode)
+     case SourceParseMode::GeneratorWrapperFunctionMode:
+     case SourceParseMode::GeneratorWrapperMethodMode:
+         return "generator function";
++    case SourceParseMode::AsyncGeneratorWrapperFunctionMode:
++    case SourceParseMode::AsyncGeneratorWrapperMethodMode:
++        return "async generator function";
++    case SourceParseMode::AsyncGeneratorBodyMode:
++        return "async generator";
+     case SourceParseMode::ArrowFunctionMode:
+         return "arrow function";
+     case SourceParseMode::AsyncFunctionMode:
+@@ -2399,6 +2424,8 @@ template <class TreeBuilder> bool Parser<LexerType>::parseFunctionInfo(TreeBuild
+     if (isGeneratorOrAsyncFunctionWrapperParseMode(mode)) {
+         AutoPopScopeRef generatorBodyScope(this, pushScope());
+         SourceParseMode innerParseMode = SourceParseMode::GeneratorBodyMode;
++        if (isAsyncGeneratorWrapperParseMode(mode))
++            innerParseMode = SourceParseMode::AsyncGeneratorBodyMode;
+         if (isAsyncFunctionWrapperParseMode(mode)) {
+             innerParseMode = mode == SourceParseMode::AsyncArrowFunctionMode
+                 ? SourceParseMode::AsyncArrowFunctionBodyMode
+@@ -2428,7 +2455,7 @@ template <class TreeBuilder> bool Parser<LexerType>::parseFunctionInfo(TreeBuild
+     context.setEndOffset(functionInfo.body, m_lexer->currentOffset());
+     if (functionScope->strictMode() && requirements != FunctionNameRequirements::Unnamed) {
+         ASSERT(functionInfo.name);
+-        RELEASE_ASSERT(SourceParseModeSet(SourceParseMode::NormalFunctionMode, SourceParseMode::MethodMode, SourceParseMode::ArrowFunctionMode, SourceParseMode::GeneratorBodyMode, SourceParseMode::GeneratorWrapperFunctionMode).contains(mode) || isAsyncFunctionWrapperParseMode(mode));
++        RELEASE_ASSERT(SourceParseModeSet(SourceParseMode::NormalFunctionMode, SourceParseMode::MethodMode, SourceParseMode::ArrowFunctionMode, SourceParseMode::GeneratorBodyMode, SourceParseMode::GeneratorWrapperFunctionMode, SourceParseMode::AsyncGeneratorWrapperFunctionMode).contains(mode) || isAsyncFunctionWrapperParseMode(mode));
+         semanticFailIfTrue(m_vm->propertyNames->arguments == *functionInfo.name, "'", functionInfo.name->impl(), "' is not a valid function name in strict mode");
+         semanticFailIfTrue(m_vm->propertyNames->eval == *functionInfo.name, "'", functionInfo.name->impl(), "' is not a valid function name in strict mode");
+     }
+@@ -2554,6 +2581,8 @@ template <class TreeBuilder> TreeStatement Parser<LexerType>::parseAsyncFunction
+     next();
+     ParserFunctionInfo<TreeBuilder> functionInfo;
+     SourceParseMode parseMode = SourceParseMode::AsyncFunctionMode;
++    if (consume(TIMES))
++        parseMode = SourceParseMode::AsyncGeneratorWrapperFunctionMode;
+     FunctionNameRequirements requirements = FunctionNameRequirements::Named;
+     if (declarationDefaultContext == DeclarationDefaultContext::ExportDefault) {
+         // Under the "export default" context, function declaration does not require the function name.
+@@ -2760,12 +2789,17 @@ parseMethod:
+             ident = m_token.m_data.ident;
+             ASSERT(ident);
+             next();
+-            if (!isGenerator && !isAsyncMethod && (matchIdentifierOrKeyword() || match(STRING) || match(DOUBLE) || match(INTEGER) || match(OPENBRACKET) || match(PRIVATENAME))) {
++            if (!isGenerator && !isAsyncMethod && (matchIdentifierOrKeyword() || match(STRING) || match(DOUBLE) || match(INTEGER) || match(OPENBRACKET) || match(PRIVATENAME) || (isAsync && match(TIMES)))) {
+                 isGetter = *ident == propertyNames.get;
+                 isSetter = *ident == propertyNames.set;
+ 
+                 if (UNLIKELY(isAsync && !m_lexer->prevTerminator())) {
+                     isAsyncMethod = true;
++                    // async *name(): an async generator method.
++                    if (consume(TIMES)) {
++                        isGenerator = true;
++                        isGetter = isSetter = false;
++                    }
+                     goto parseMethod;
+                 }
+             }
+@@ -2839,7 +2873,7 @@ parseMethod:
+             SourceParseMode parseMode = SourceParseMode::MethodMode;
+             if (isAsyncMethod) {
+                 isConstructor = false;
+-                parseMode = SourceParseMode::AsyncMethodMode;
++                parseMode = isGenerator ? SourceParseMode::AsyncGeneratorWrapperMethodMode : SourceParseMode::AsyncMethodMode;
+                 semanticFailIfTrue(*ident == m_vm->propertyNames->prototype, "Cannot declare an async method named 'prototype'");
+                 semanticFailIfTrue(*ident == m_vm->propertyNames->constructor, "Cannot declare an async method named 'constructor'");
+             } else if (isGenerator) {
+@@ -3974,6 +4008,8 @@ namedProperty:
+         else if (UNLIKELY(isAsync && !isAsyncMethod)) {
+             isAsyncMethod = true;
+             failIfTrue(m_lexer->prevTerminator(), "Expected a property name following keyword 'async'");
++            if (consume(TIMES))
++                isGenerator = true;
+             goto parseProperty;
+         } else
+             failWithMessage("Expected a ':' following the property name '", ident->impl(), "'");
+@@ -4044,7 +4080,7 @@ template <class TreeBuilder> TreeExpression Parser<LexerType>::parsePropertyMeth
+     unsigned methodStart = tokenStart();
+     ParserFunctionInfo<TreeBuilder> methodInfo;
+     methodInfo.name = methodName;
+-    SourceParseMode parseMode = isGenerator ? SourceParseMode::GeneratorWrapperMethodMode : isAsyncMethod ? SourceParseMode::AsyncMethodMode : SourceParseMode::MethodMode;
++    SourceParseMode parseMode = isGenerator ? (isAsyncMethod ? SourceParseMode::AsyncGeneratorWrapperMethodMode : SourceParseMode::GeneratorWrapperMethodMode) : isAsyncMethod ? SourceParseMode::AsyncMethodMode : SourceParseMode::MethodMode;
+     failIfFalse((parseFunctionInfo(context, FunctionNameRequirements::Unnamed, parseMode, false, ConstructorKind::None, SuperBinding::Needed, methodStart, methodInfo, FunctionDefinitionType::Method)), "Cannot parse this method");
+     return context.createMethodDefinition(methodLocation, methodInfo);
+ }
+@@ -4351,6 +4387,8 @@ template <class TreeBuilder> TreeExpression Parser<LexerType>::parseAsyncFunctio
+     ParserFunctionInfo<TreeBuilder> functionInfo;
+     functionInfo.name = &m_vm->propertyNames->nullIdentifier;
+     SourceParseMode parseMode = SourceParseMode::AsyncFunctionMode;
++    if (consume(TIMES))
++        parseMode = SourceParseMode::AsyncGeneratorWrapperFunctionMode;
+     failIfFalse(parseFunctionInfo(context, FunctionNameRequirements::None, parseMode, false, ConstructorKind::None, SuperBinding::NotNeeded, functionKeywordStart, functionInfo, FunctionDefinitionType::Expression), "Cannot parse async function expression");
+     return context.createFunctionExpr(location, functionInfo);
+ }
+diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parser/Parser.h
+index f890360e..e52298f6 100644
+--- a/Source/JavaScriptCore/parser/Parser.h
++++ b/Source/JavaScriptCore/parser/Parser.h
+@@ -242,6 +242,18 @@ public:
+             setIsGeneratorFunction();
+             break;
+ 
++        case SourceParseMode::AsyncGeneratorWrapperFunctionMode:
++        case SourceParseMode::AsyncGeneratorWrapperMethodMode:
++            setIsGeneratorFunction();
++            m_isAsyncFunction = true;
++            break;
++
++        case SourceParseMode::AsyncGeneratorBodyMode:
++            setIsGenerator();
++            m_isAsyncFunction = true;
++            m_isAsyncFunctionBoundary = true;
++            break;
++
+         case SourceParseMode::NormalFunctionMode:
+         case SourceParseMode::GetterMode:
+         case SourceParseMode::SetterMode:
+@@ -1493,7 +1505,7 @@ private:
+     }
+ 
+     template <class TreeBuilder> TreeSourceElements parseSourceElements(TreeBuilder&, SourceElementsMode);
+-    template <class TreeBuilder> TreeSourceElements parseGeneratorFunctionSourceElements(TreeBuilder&, const Identifier& name, SourceElementsMode);
++    template <class TreeBuilder> TreeSourceElements parseGeneratorFunctionSourceElements(TreeBuilder&, const Identifier& name, SourceElementsMode, SourceParseMode wrapperMode = SourceParseMode::GeneratorWrapperFunctionMode);
+     template <class TreeBuilder> TreeSourceElements parseAsyncFunctionSourceElements(TreeBuilder&, SourceParseMode, bool isArrowFunctionBodyExpression, SourceElementsMode);
+     template <class TreeBuilder> TreeStatement parseStatementListItem(TreeBuilder&, const Identifier*& directive, unsigned* directiveLiteralLength);
+     template <class TreeBuilder> TreeStatement parseStatement(TreeBuilder&, const Identifier*& directive, unsigned* directiveLiteralLength = 0);
+diff --git a/Source/JavaScriptCore/parser/ParserModes.h b/Source/JavaScriptCore/parser/ParserModes.h
+index 9a96f5d1..b75530d8 100644
+--- a/Source/JavaScriptCore/parser/ParserModes.h
++++ b/Source/JavaScriptCore/parser/ParserModes.h
+@@ -42,7 +42,7 @@ enum DebuggerMode { DebuggerOff, DebuggerOn };
+ 
+ enum class FunctionMode { FunctionExpression, FunctionDeclaration, MethodDefinition };
+ 
+-enum class SourceParseMode : uint16_t {
++enum class SourceParseMode : uint32_t {
+     NormalFunctionMode            = 0b0000000000000001,
+     GeneratorBodyMode             = 0b0000000000000010,
+     GeneratorWrapperFunctionMode  = 0b0000000000000100,
+@@ -59,6 +59,10 @@ enum class SourceParseMode : uint16_t {
+     ProgramMode                   = 0b0010000000000000,
+     ModuleAnalyzeMode             = 0b0100000000000000,
+     ModuleEvaluateMode            = 0b1000000000000000,
++    // Async generators (async function*): a generator whose body may await.
++    AsyncGeneratorWrapperFunctionMode = 0b10000000000000000,
++    AsyncGeneratorWrapperMethodMode   = 0b100000000000000000,
++    AsyncGeneratorBodyMode            = 0b1000000000000000000,
+ };
+ 
+ class SourceParseModeSet { 
+@@ -104,9 +108,27 @@ ALWAYS_INLINE bool isFunctionParseMode(SourceParseMode parseMode)
+         SourceParseMode::AsyncFunctionMode, 
+         SourceParseMode::AsyncMethodMode, 
+         SourceParseMode::AsyncArrowFunctionMode, 
+-        SourceParseMode::AsyncArrowFunctionBodyMode).contains(parseMode); 
++        SourceParseMode::AsyncArrowFunctionBodyMode,
++        SourceParseMode::AsyncGeneratorWrapperFunctionMode,
++        SourceParseMode::AsyncGeneratorWrapperMethodMode,
++        SourceParseMode::AsyncGeneratorBodyMode).contains(parseMode); 
+ } 
+ 
++ALWAYS_INLINE bool isAsyncGeneratorParseMode(SourceParseMode parseMode)
++{
++    return SourceParseModeSet(
++        SourceParseMode::AsyncGeneratorWrapperFunctionMode,
++        SourceParseMode::AsyncGeneratorWrapperMethodMode,
++        SourceParseMode::AsyncGeneratorBodyMode).contains(parseMode);
++}
++
++ALWAYS_INLINE bool isAsyncGeneratorWrapperParseMode(SourceParseMode parseMode)
++{
++    return SourceParseModeSet(
++        SourceParseMode::AsyncGeneratorWrapperFunctionMode,
++        SourceParseMode::AsyncGeneratorWrapperMethodMode).contains(parseMode);
++}
++
+ ALWAYS_INLINE bool isAsyncFunctionParseMode(SourceParseMode parseMode) 
+ { 
+     return SourceParseModeSet( 
+@@ -114,7 +136,10 @@ ALWAYS_INLINE bool isAsyncFunctionParseMode(SourceParseMode parseMode)
+         SourceParseMode::AsyncFunctionMode, 
+         SourceParseMode::AsyncMethodMode, 
+         SourceParseMode::AsyncArrowFunctionMode, 
+-        SourceParseMode::AsyncArrowFunctionBodyMode).contains(parseMode); 
++        SourceParseMode::AsyncArrowFunctionBodyMode,
++        SourceParseMode::AsyncGeneratorWrapperFunctionMode,
++        SourceParseMode::AsyncGeneratorWrapperMethodMode,
++        SourceParseMode::AsyncGeneratorBodyMode).contains(parseMode); 
+ } 
+ 
+ ALWAYS_INLINE bool isAsyncArrowFunctionParseMode(SourceParseMode parseMode) 
+@@ -146,7 +171,8 @@ ALWAYS_INLINE bool isMethodParseMode(SourceParseMode parseMode)
+         SourceParseMode::GetterMode,
+         SourceParseMode::SetterMode,
+         SourceParseMode::MethodMode,
+-        SourceParseMode::AsyncMethodMode).contains(parseMode);
++        SourceParseMode::AsyncMethodMode,
++        SourceParseMode::AsyncGeneratorWrapperMethodMode).contains(parseMode);
+ }
+ 
+ ALWAYS_INLINE bool isGeneratorOrAsyncFunctionBodyParseMode(SourceParseMode parseMode)
+@@ -154,7 +180,8 @@ ALWAYS_INLINE bool isGeneratorOrAsyncFunctionBodyParseMode(SourceParseMode parse
+     return SourceParseModeSet(
+         SourceParseMode::GeneratorBodyMode,
+         SourceParseMode::AsyncFunctionBodyMode,
+-        SourceParseMode::AsyncArrowFunctionBodyMode).contains(parseMode);
++        SourceParseMode::AsyncArrowFunctionBodyMode,
++        SourceParseMode::AsyncGeneratorBodyMode).contains(parseMode);
+ }
+ 
+ ALWAYS_INLINE bool isGeneratorOrAsyncFunctionWrapperParseMode(SourceParseMode parseMode)
+@@ -164,7 +191,9 @@ ALWAYS_INLINE bool isGeneratorOrAsyncFunctionWrapperParseMode(SourceParseMode pa
+         SourceParseMode::GeneratorWrapperMethodMode,
+         SourceParseMode::AsyncFunctionMode,
+         SourceParseMode::AsyncArrowFunctionMode,
+-        SourceParseMode::AsyncMethodMode).contains(parseMode);
++        SourceParseMode::AsyncMethodMode,
++        SourceParseMode::AsyncGeneratorWrapperFunctionMode,
++        SourceParseMode::AsyncGeneratorWrapperMethodMode).contains(parseMode);
+ }
+ 
+ ALWAYS_INLINE bool isGeneratorParseMode(SourceParseMode parseMode)
+@@ -172,14 +201,21 @@ ALWAYS_INLINE bool isGeneratorParseMode(SourceParseMode parseMode)
+     return SourceParseModeSet(
+         SourceParseMode::GeneratorBodyMode,
+         SourceParseMode::GeneratorWrapperFunctionMode,
+-        SourceParseMode::GeneratorWrapperMethodMode).contains(parseMode);    
++        SourceParseMode::GeneratorWrapperMethodMode,
++        SourceParseMode::AsyncGeneratorWrapperFunctionMode,
++        SourceParseMode::AsyncGeneratorWrapperMethodMode,
++        SourceParseMode::AsyncGeneratorBodyMode).contains(parseMode);    
+ }
+ 
++// Async generators' wrappers work as generators' do: they make the
++// generator object and return it.
+ ALWAYS_INLINE bool isGeneratorWrapperParseMode(SourceParseMode parseMode)
+ {
+     return SourceParseModeSet(
+         SourceParseMode::GeneratorWrapperFunctionMode,
+-        SourceParseMode::GeneratorWrapperMethodMode).contains(parseMode);
++        SourceParseMode::GeneratorWrapperMethodMode,
++        SourceParseMode::AsyncGeneratorWrapperFunctionMode,
++        SourceParseMode::AsyncGeneratorWrapperMethodMode).contains(parseMode);
+ }
+ 
+ ALWAYS_INLINE bool isArrowFunctionParseMode(SourceParseMode parseMode)
+diff --git a/Source/JavaScriptCore/parser/SyntaxChecker.h b/Source/JavaScriptCore/parser/SyntaxChecker.h
+index e694a885..27dc53a4 100644
+--- a/Source/JavaScriptCore/parser/SyntaxChecker.h
++++ b/Source/JavaScriptCore/parser/SyntaxChecker.h
+@@ -251,6 +251,7 @@ public:
+     int createForLoop(const JSTokenLocation&, int, int, int, int, int, int, VariableEnvironment&) { return StatementResult; }
+     int createForInLoop(const JSTokenLocation&, int, int, int, const JSTokenLocation&, int, int, int, int, int, VariableEnvironment&) { return StatementResult; }
+     int createForOfLoop(const JSTokenLocation&, int, int, int, const JSTokenLocation&, int, int, int, int, int, VariableEnvironment&) { return StatementResult; }
++    void setForOfIsAwait(int) { }
+     int createEmptyStatement(const JSTokenLocation&) { return StatementResult; }
+     int createDeclarationStatement(const JSTokenLocation&, int, int, int) { return StatementResult; }
+     int createReturnStatement(const JSTokenLocation&, int, int, int) { return StatementResult; }
+diff --git a/Source/JavaScriptCore/runtime/CommonIdentifiers.h b/Source/JavaScriptCore/runtime/CommonIdentifiers.h
+index 963b95b9..90c2658d 100644
+--- a/Source/JavaScriptCore/runtime/CommonIdentifiers.h
++++ b/Source/JavaScriptCore/runtime/CommonIdentifiers.h
+@@ -392,6 +392,7 @@
+     macro(yield)
+ 
+ #define JSC_COMMON_PRIVATE_IDENTIFIERS_EACH_WELL_KNOWN_SYMBOL(macro) \
++    macro(asyncIterator) \
+     macro(hasInstance) \
+     macro(isConcatSpreadable) \
+     macro(iterator) \
+diff --git a/Source/JavaScriptCore/runtime/FunctionExecutable.h b/Source/JavaScriptCore/runtime/FunctionExecutable.h
+index 53579ba2..07f62d1c 100644
+--- a/Source/JavaScriptCore/runtime/FunctionExecutable.h
++++ b/Source/JavaScriptCore/runtime/FunctionExecutable.h
+@@ -138,7 +138,9 @@ public:
+             SourceParseMode::NormalFunctionMode,
+             SourceParseMode::GeneratorBodyMode,
+             SourceParseMode::GeneratorWrapperFunctionMode,
+-            SourceParseMode::GeneratorWrapperMethodMode
++            SourceParseMode::GeneratorWrapperMethodMode,
++            SourceParseMode::AsyncGeneratorWrapperFunctionMode,
++            SourceParseMode::AsyncGeneratorWrapperMethodMode
+         ).contains(parseMode()) || isClass();
+     }
+     DerivedContextType derivedContextType() const { return m_unlinkedExecutable->derivedContextType(); }
+diff --git a/Source/JavaScriptCore/runtime/JSFunction.cpp b/Source/JavaScriptCore/runtime/JSFunction.cpp
+index 151b7507..0f72b2b0 100644
+--- a/Source/JavaScriptCore/runtime/JSFunction.cpp
++++ b/Source/JavaScriptCore/runtime/JSFunction.cpp
+@@ -365,7 +365,10 @@ bool JSFunction::getOwnPropertySlot(JSObject* object, ExecState* exec, PropertyN
+                 // Unlike function instances, the object that is the value of the a GeneratorFunction's prototype
+                 // property does not have a constructor property whose value is the GeneratorFunction instance.
+                 // https://tc39.github.io/ecma262/#sec-generatorfunction-instances-prototype
+-                prototype = constructEmptyObject(exec, thisObject->globalObject(vm)->generatorPrototype());
++                if (isAsyncGeneratorWrapperParseMode(thisObject->jsExecutable()->parseMode()))
++                    prototype = constructEmptyObject(exec, thisObject->globalObject(vm)->asyncGeneratorPrototype());
++                else
++                    prototype = constructEmptyObject(exec, thisObject->globalObject(vm)->generatorPrototype());
+             } else {
+                 prototype = constructEmptyObject(exec);
+                 prototype->putDirect(vm, vm.propertyNames->constructor, thisObject, DontEnum);
+diff --git a/Source/JavaScriptCore/runtime/JSGlobalObject.cpp b/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
+index e96f9fdb..6c9c6654 100644
+--- a/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
++++ b/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
+@@ -65,6 +65,7 @@
+ #include "InspectorInstrumentationObject.h"
+ #include "Interpreter.h"
+ #include "IteratorPrototype.h"
++#include "JSCBuiltins.h"
+ #include "JSAPIWrapperObject.h"
+ #include "JSArrayBuffer.h"
+ #include "JSArrayBufferConstructor.h"
+@@ -707,6 +708,19 @@ m_ ## lowerName ## Prototype->putDirectWithoutTransition(vm, vm.propertyNames->c
+     m_generatorPrototype->putDirectWithoutTransition(vm, vm.propertyNames->constructor, m_generatorFunctionPrototype.get(), DontEnum | ReadOnly);
+     m_generatorFunctionPrototype->putDirectWithoutTransition(vm, vm.propertyNames->prototype, m_generatorPrototype.get(), DontEnum | ReadOnly);
+ 
++    // %AsyncIteratorPrototype% and %AsyncGeneratorPrototype%: plain objects
++    // whose methods are the builtins in AsyncGeneratorPrototype.js.
++    // Each with a structure of its own: putDirectWithoutTransition changes
++    // the structure in place, and the shared empty-object one is everyone's.
++    m_asyncIteratorPrototype.set(vm, this, JSFinalObject::create(vm, JSFinalObject::createStructure(vm, this, m_objectPrototype.get(), JSFinalObject::defaultInlineCapacity())));
++    m_asyncIteratorPrototype->putDirectWithoutTransition(vm, vm.propertyNames->asyncIteratorSymbol,
++        JSFunction::createBuiltinFunction(vm, asyncGeneratorPrototypeSymbolAsyncIteratorGetterCodeGenerator(vm), this, "[Symbol.asyncIterator]"), DontEnum);
++    m_asyncGeneratorPrototype.set(vm, this, JSFinalObject::create(vm, JSFinalObject::createStructure(vm, this, m_asyncIteratorPrototype.get(), JSFinalObject::defaultInlineCapacity())));
++    m_asyncGeneratorPrototype->putDirectWithoutTransition(vm, vm.propertyNames->next, JSFunction::create(vm, asyncGeneratorPrototypeNextCodeGenerator(vm), this), DontEnum);
++    m_asyncGeneratorPrototype->putDirectWithoutTransition(vm, vm.propertyNames->returnKeyword, JSFunction::create(vm, asyncGeneratorPrototypeReturnCodeGenerator(vm), this), DontEnum);
++    m_asyncGeneratorPrototype->putDirectWithoutTransition(vm, vm.propertyNames->throwKeyword, JSFunction::create(vm, asyncGeneratorPrototypeThrowCodeGenerator(vm), this), DontEnum);
++    m_asyncGeneratorPrototype->putDirectWithoutTransition(vm, vm.propertyNames->toStringTagSymbol, jsString(&vm, "AsyncGenerator"), DontEnum | ReadOnly);
++
+     m_asyncFunctionPrototype.set(vm, this, AsyncFunctionPrototype::create(vm, AsyncFunctionPrototype::createStructure(vm, this, m_functionPrototype.get())));
+     AsyncFunctionConstructor* asyncFunctionConstructor = AsyncFunctionConstructor::create(vm, AsyncFunctionConstructor::createStructure(vm, this, functionConstructor), m_asyncFunctionPrototype.get());
+     m_asyncFunctionPrototype->putDirectWithoutTransition(vm, vm.propertyNames->constructor, asyncFunctionConstructor, DontEnum | ReadOnly);
+@@ -1291,6 +1305,8 @@ void JSGlobalObject::visitChildren(JSCell* cell, SlotVisitor& visitor)
+     visitor.append(thisObject->m_iteratorPrototype);
+     visitor.append(thisObject->m_generatorFunctionPrototype);
+     visitor.append(thisObject->m_generatorPrototype);
++    visitor.append(thisObject->m_asyncIteratorPrototype);
++    visitor.append(thisObject->m_asyncGeneratorPrototype);
+     visitor.append(thisObject->m_asyncFunctionPrototype);
+     visitor.append(thisObject->m_moduleLoaderPrototype);
+ 
+diff --git a/Source/JavaScriptCore/runtime/JSGlobalObject.h b/Source/JavaScriptCore/runtime/JSGlobalObject.h
+index fdfd81b6..15495dc7 100644
+--- a/Source/JavaScriptCore/runtime/JSGlobalObject.h
++++ b/Source/JavaScriptCore/runtime/JSGlobalObject.h
+@@ -286,6 +286,8 @@ public:
+     WriteBarrier<IteratorPrototype> m_iteratorPrototype;
+     WriteBarrier<GeneratorFunctionPrototype> m_generatorFunctionPrototype;
+     WriteBarrier<GeneratorPrototype> m_generatorPrototype;
++    WriteBarrier<JSObject> m_asyncIteratorPrototype;
++    WriteBarrier<JSObject> m_asyncGeneratorPrototype;
+     WriteBarrier<ModuleLoaderPrototype> m_moduleLoaderPrototype;
+ 
+     LazyProperty<JSGlobalObject, Structure> m_debuggerScopeStructure;
+@@ -565,6 +567,7 @@ public:
+     IteratorPrototype* iteratorPrototype() const { return m_iteratorPrototype.get(); }
+     GeneratorFunctionPrototype* generatorFunctionPrototype() const { return m_generatorFunctionPrototype.get(); }
+     GeneratorPrototype* generatorPrototype() const { return m_generatorPrototype.get(); }
++    JSObject* asyncGeneratorPrototype() const { return m_asyncGeneratorPrototype.get(); }
+     AsyncFunctionPrototype* asyncFunctionPrototype() const { return m_asyncFunctionPrototype.get(); }
+     MapPrototype* mapPrototype() const { return m_mapPrototype.get(); }
+     // Workaround for the name conflict between JSCell::setPrototype.
+-- 
+2.50.1 (Apple Git-155)
+

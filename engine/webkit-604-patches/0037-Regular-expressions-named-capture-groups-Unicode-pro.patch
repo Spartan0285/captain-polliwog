@@ -1,7 +1,7 @@
 From 28159d1e477a1d95fead951e9a47f8373b8ba56f Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Fri, 18 Sep 2026 17:27:51 -0400
-Subject: [PATCH 37/42] Regular expressions: named capture groups, Unicode
+Subject: [PATCH 37/43] Regular expressions: named capture groups, Unicode
  property escapes
 
 - (?<name>...), \k<name>, match.groups, $<name> in replacement strings,

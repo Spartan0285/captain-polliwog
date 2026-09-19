@@ -310,6 +310,27 @@ whole scripts fail somewhere, and each now has a test in `engine/tests`:
   `structuredClone`, `queueMicrotask`, Intl additions and more, each only
   where missing.
 
+**Modern CSS, and async generators** (19 September 2026). Apple's home
+page stacked its navigation and jammed its buttons together. It needed
+`display: contents` (in 604, switched off; the app now turns it on),
+`gap` in flexbox, `column-gap` in grid, `padding-block`/`-inline` with
+`var()`, `:has()` and `overflow: clip`; all are in, with checks in
+`engine/tests/css-modern.html`. `:has()` is matched by walking the
+element's descendants (or following siblings) with each argument anchored
+back to it; elements it matched are restyled when anything inside them
+changes, which is cheap because only those elements are flagged.
+
+Wikipedia ran without its scripts because MediaWiki refuses browsers that
+can't parse `async function*`. Async generators (ES2018) are built the way
+604 already builds async functions: the body is a generator whose `await`s
+and `yield`s both suspend it, a `yield` marks itself on the generator
+object first, and `builtins/AsyncGeneratorPrototype.js` drives the body,
+queues `next`/`return`/`throw` requests, and does `yield*` delegation.
+`for await` asks `@getAsyncIterator` for the iterator (wrapping a plain
+iterable's iterator when there is no `Symbol.asyncIterator`) and awaits
+each result. `SourceParseMode` grew from 16 to 32 bits for the three new
+modes. Tests in `engine/tests/async-generators.js`.
+
 A lesson from the way: `CommonIdentifiers.h` and `BuiltinNames.h` are
 compiled into WebCore, so adding a name to either shifts what WebCore reads
 (`Document.prototype` came back undefined). After changing them, rebuild

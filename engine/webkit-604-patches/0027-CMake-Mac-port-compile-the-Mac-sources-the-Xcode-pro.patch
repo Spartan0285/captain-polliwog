@@ -1,7 +1,7 @@
 From 1703681384ef1878bb3a1dfeaee05c093d13cfe9 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 10:14:30 -0400
-Subject: [PATCH 27/42] CMake Mac port: compile the Mac sources the Xcode
+Subject: [PATCH 27/43] CMake Mac port: compile the Mac sources the Xcode
  projects build
 
 WebCoreView.m (a category on NSView that WebCore messages), and in

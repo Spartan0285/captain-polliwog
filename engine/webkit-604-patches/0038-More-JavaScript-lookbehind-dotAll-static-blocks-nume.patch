@@ -1,7 +1,7 @@
 From 4f06deae79de38ca7caea3eef4d073960aac7c6a Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Fri, 18 Sep 2026 19:16:11 -0400
-Subject: [PATCH 38/42] More JavaScript: lookbehind, dotAll, static blocks,
+Subject: [PATCH 38/43] More JavaScript: lookbehind, dotAll, static blocks,
  numeric separators, import maps
 
 - Regular expression lookbehind, (?<=...) and (?<!...): the body is
