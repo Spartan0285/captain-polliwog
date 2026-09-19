@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<!-- Import maps: bare specifiers in static and dynamic imports, exact and
+     prefix ("lib/") keys. window.importMapResults collects the outcomes. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Import maps</title>
+<script type="importmap">{"imports":{"foo":"./foo.js","lib/":"./"}}</script>
+<script>window.importMapResults = [];</script>
+<script type="module">
+import { both } from "./uses-foo.js";
+window.importMapResults.push("static: " + both);
+</script>
+<script>
+import("foo").then(function (m) { window.importMapResults.push("dynamic classic: " + m.default); },
+                   function (e) { window.importMapResults.push("dynamic classic FAIL: " + e); });
+</script>
+<script type="module">
+import("./uses-foo.js").then(function (m) { window.importMapResults.push("dynamic module: " + m.both); },
+                            function (e) { window.importMapResults.push("dynamic module FAIL: " + e); });
+</script>
+</head>
+<body>import maps</body>
+</html>
