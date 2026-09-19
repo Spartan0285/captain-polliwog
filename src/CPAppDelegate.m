@@ -9,6 +9,7 @@
 #import "CPCurlProtocol.h"
 #import "CPSettings.h"
 #import "CPPreferencesController.h"
+#import "CPAutoFillController.h"
 #import "CPDebugSnapshot.h"
 #import "CPTab.h"
 #import "CPMemoryWatcher.h"
@@ -98,6 +99,7 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     CPAddItem(menu, @"Show All", @selector(unhideAllApplications:), nil);
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Preferences...", @selector(showPreferences:), @",");
+    CPAddItem(menu, @"AutoFill...", @selector(showAutoFill:), nil);
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Quit Captain Polliwog", @selector(terminate:), @"q");
     // Without a nib, Tiger only treats this as the application menu once told.
@@ -120,6 +122,8 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     CPAddItem(menu, @"Copy", @selector(copy:), @"c");
     CPAddItem(menu, @"Paste", @selector(paste:), @"v");
     CPAddItem(menu, @"Select All", @selector(selectAll:), @"a");
+    [menu addItem:[NSMenuItem separatorItem]];
+    CPAddItem(menu, @"AutoFill Form", @selector(autoFillForm:), @"A");
 
     menu = CPAddSubmenu(mainMenu, @"View");
     CPAddItem(menu, @"Reload Page", @selector(reload:), @"r");
@@ -194,6 +198,11 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     // The controller is still on the stack; let it outlive this call.
     [[controller retain] autorelease];
     [browserWindows removeObject:controller];
+}
+
+- (IBAction)showAutoFill:(id)sender
+{
+    [[CPAutoFillController sharedController] showWindow:sender];
 }
 
 - (IBAction)showPreferences:(id)sender

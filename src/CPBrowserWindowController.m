@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #import "CPBrowserWindowController.h"
+#import "CPAutoFill.h"
 #import "CPAppDelegate.h"
 #import "CPTab.h"
 #import "CPSiteModes.h"
@@ -235,6 +236,10 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugShowPreferences"] ||
         [[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugShowBookmarks"])
         return;
+    // CPDebugAutoFill: AutoFill the page's form first (addresses only need
+    // no password).
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugAutoFill"] && ![selectedTab isDiscarded])
+        [CPAutoFill fillFormInTab:selectedTab];
     CPWriteWindowSnapshot([self window]);
 
     // CPDebugScript: JavaScript to run in the page, its result logged, for
@@ -519,6 +524,11 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [selectedTab reloadForSiteMode];
 }
 
+- (IBAction)autoFillForm:(id)sender
+{
+    [CPAutoFill fillFormInTab:[self selectedTab]];
+}
+
 - (IBAction)toggleReader:(id)sender
 {
     [[self selectedTab] toggleReader];
@@ -578,6 +588,8 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         return (page != nil && [page canMakeTextSmaller]);
     if (action == @selector(selectNextTab:) || action == @selector(selectPreviousTab:))
         return ([tabs count] > 1);
+    if (action == @selector(autoFillForm:))
+        return page != nil;
     if (action == @selector(toggleReader:)) {
         [item setState:[selectedTab isShowingReader] ? NSOnState : NSOffState];
         return [selectedTab isShowingReader] || [selectedTab canShowReader];

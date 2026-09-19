@@ -7,6 +7,7 @@
 #import "CPDebugSnapshot.h"
 #import "CPDownloadsController.h"
 #import "CPReader.h"
+#import "CPAutoFill.h"
 #import "CPSiteModes.h"
 #import "CPScriptWatchdog.h"
 #import "CPUserScripts.h"
@@ -570,6 +571,10 @@ decisionListener:(id<WebPolicyDecisionListener>)listener
 {
     int type = [[action objectForKey:WebActionNavigationTypeKey] intValue];
     unsigned int modifiers = [[action objectForKey:WebActionModifierFlagsKey] unsignedIntValue];
+
+    // Leaving a page where a password was typed: offer to save it.
+    if (frame == [sender mainFrame] && !readerLoadPending && type != WebNavigationTypeBackForward)
+        [CPAutoFill captureLoginInTab:self];
 
     if (type == WebNavigationTypeLinkClicked && (modifiers & NSCommandKeyMask) &&
         [owner respondsToSelector:@selector(tab:openTabWithRequest:inBackground:)]) {

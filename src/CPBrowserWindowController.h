@@ -43,6 +43,7 @@
 - (IBAction)reloadOrStop:(id)sender;
 - (IBAction)openLocation:(id)sender;
 - (IBAction)addressEntered:(id)sender;
+- (IBAction)autoFillForm:(id)sender;
 - (IBAction)toggleReader:(id)sender;
 - (IBAction)makeTextLarger:(id)sender;
 - (IBAction)makeTextSmaller:(id)sender;

@@ -22,7 +22,7 @@ CFLAGS  = -isysroot $(SDK) -Os -Wall -Wno-unused-parameter
 # G3 baseline so one PowerPC build runs on every PowerPC Mac; tuned for G4 laptops.
 CFLAGS_ppc  = -mcpu=G3 -mtune=G4
 CFLAGS_i386 =
-LDFLAGS = -isysroot $(SDK) -Wl,-syslibroot,$(SDK) -framework Cocoa -framework WebKit -framework SystemConfiguration
+LDFLAGS = -isysroot $(SDK) -Wl,-syslibroot,$(SDK) -framework Cocoa -framework WebKit -framework SystemConfiguration -framework Security -framework AddressBook
 DEPS_LIBS = libcurl.a libssl.a libcrypto.a libz.a
 
 .PHONY: all app clean
@@ -56,13 +56,13 @@ ARCH_BINARIES = $(patsubst %,$(BUILD)/%/$(EXEC),$(ARCHS))
 $(BUILD)/$(EXEC): $(ARCH_BINARIES)
 	lipo -create $(ARCH_BINARIES) -output $@
 
-app: $(BUILD)/$(EXEC) Resources/Info.plist Resources/start.html Resources/cacert.pem Resources/polyfills.js
+app: $(BUILD)/$(EXEC) Resources/Info.plist Resources/start.html Resources/cacert.pem Resources/polyfills.js Resources/autofill.js
 	@rm -rf "$(APP)"
 	@mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	@cp $(BUILD)/$(EXEC) "$(APP)/Contents/MacOS/$(EXEC)"
 	@sed -e 's/@VERSION@/$(VERSION)/g' Resources/Info.plist > "$(APP)/Contents/Info.plist"
 	@printf 'APPLCPwg' > "$(APP)/Contents/PkgInfo"
-	@cp Resources/start.html Resources/cacert.pem Resources/polyfills.js "$(APP)/Contents/Resources/"
+	@cp Resources/start.html Resources/cacert.pem Resources/polyfills.js Resources/autofill.js "$(APP)/Contents/Resources/"
 	@echo "Built $(APP) ($$(lipo -info $(BUILD)/$(EXEC) | sed 's/.*: //'))"
 
 clean:

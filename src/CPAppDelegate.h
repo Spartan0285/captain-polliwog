@@ -25,6 +25,7 @@
 - (IBAction)newTab:(id)sender;
 - (IBAction)showDownloads:(id)sender;
 - (IBAction)togglePrivateBrowsing:(id)sender;
+- (IBAction)showAutoFill:(id)sender;
 - (IBAction)showPreferences:(id)sender;
 
 @end
