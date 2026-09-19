@@ -5,6 +5,7 @@
 #import "CPAppDelegate.h"
 #import "CPSiteModes.h"
 #import "CPMediaRelay.h"
+#import "CPAccelerator.h"
 #import "CPBrowserWindowController.h"
 #import "CPCurlProtocol.h"
 #import "CPSettings.h"
@@ -381,6 +382,7 @@ static size_t CPStatisticCount(Class statistics, NSString *name)
 
     // Before any page can ask for video.
     [CPMediaRelay start];
+    [CPAccelerator start];
 
     [[CPSettings sharedSettings] apply];
     // Testing aid: start straight in private browsing, without the question.

@@ -1,7 +1,7 @@
 From f53b157f0ab42611adf79a30700daa58f06bc678 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 14:33:41 -0400
-Subject: [PATCH 34/51] JavaScript: optional chaining (?.) and nullish
+Subject: [PATCH 34/52] JavaScript: optional chaining (?.) and nullish
  coalescing (??)
 
 Both ES2020, and in nearly every modern site's scripts: a single use

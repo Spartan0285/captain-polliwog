@@ -6,6 +6,7 @@
 #import "CPSettings.h"
 #import "CPSiteModes.h"
 #import "CPDebugSnapshot.h"
+#import "CPAccelerator.h"
 
 #define CPWindowWidth   520.0f
 #define CPWindowHeight  500.0f
@@ -183,6 +184,61 @@ static struct {
         top -= 22.0f;
     }
     [tabs addTabViewItem:item];
+
+    // PowerEmu's Web Accelerator (see CPAccelerator.h)
+    item = [[[NSTabViewItem alloc] initWithIdentifier:@"poweremu"] autorelease];
+    [item setLabel:@"PowerEmu"];
+    view = [item view];
+    top = CPWindowHeight - 90.0f;
+
+    acceleratorBox = [[NSButton alloc] initWithFrame:NSMakeRect(18.0f, top, 440.0f, 18.0f)];
+    [acceleratorBox setButtonType:NSSwitchButton];
+    [acceleratorBox setTitle:@"Speed up browsing with PowerEmu when it's available"];
+    [acceleratorBox setTarget:self];
+    [acceleratorBox setAction:@selector(acceleratorChanged:)];
+    [view addSubview:acceleratorBox];
+    [acceleratorBox release];
+    CPLabel(view, NSMakeRect(36.0f, top - 46.0f, 420.0f, 42.0f),
+            @"PowerEmu fetches pages with a modern Mac's networking, converts images this Mac can't show, "
+            @"shrinks huge ones, and leaves out ads and trackers. Without it, pages load as usual.", YES, NO);
+
+    top -= 76.0f;
+    acceleratorStatus = CPLabel(view, NSMakeRect(36.0f, top, 420.0f, 28.0f), @"", NO, NO);
+
+    top -= 44.0f;
+    CPLabel(view, NSMakeRect(10.0f, top, 120.0f, 17.0f), @"Pairing code:", NO, YES);
+    pairingField = [[NSTextField alloc] initWithFrame:NSMakeRect(138.0f, top - 2.0f, 120.0f, 22.0f)];
+    [[pairingField cell] setPlaceholderString:@"0000-0000"];
+    [pairingField setTarget:self];
+    [pairingField setAction:@selector(pairingCodeChanged:)];
+    [view addSubview:pairingField];
+    [pairingField release];
+    CPButton(view, NSMakeRect(262.0f, top - 5.0f, 80.0f, 24.0f), @"Use", self, @selector(pairingCodeChanged:));
+    CPLabel(view, NSMakeRect(138.0f, top - 64.0f, 320.0f, 56.0f),
+            @"Only for PowerEmu on another Mac; inside a PowerEmu virtual Mac none is needed. "
+            @"The code is shown in PowerEmu's Service Hub. The connection to the other Mac isn't encrypted, "
+            @"so pages you visit, sign-ins included, cross your network in the clear.", YES, NO);
+    [tabs addTabViewItem:item];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(acceleratorStatusChanged:)
+                                                 name:CPAcceleratorStatusDidChangeNotification object:nil];
+}
+
+- (void)acceleratorStatusChanged:(NSNotification *)notification
+{
+    [acceleratorStatus setStringValue:[CPAccelerator statusDescription]];
+}
+
+- (IBAction)acceleratorChanged:(id)sender
+{
+    [CPAccelerator setEnabled:[acceleratorBox state] == NSOnState];
+}
+
+- (IBAction)pairingCodeChanged:(id)sender
+{
+    [CPAccelerator setPairingCode:[pairingField stringValue]];
+    // Not shown again once saved.
+    [pairingField setStringValue:@""];
+    [[pairingField cell] setPlaceholderString:([[CPAccelerator pairingCode] length] > 0 ? @"Saved" : @"0000-0000")];
 }
 
 - (void)refresh
@@ -221,6 +277,9 @@ static struct {
     [homePageField setStringValue:[settings homePage]];
     [newTabPopUp selectItemAtIndex:(int)[settings newTabPage]];
     [downloadsField setStringValue:[[settings downloadsFolder] stringByAbbreviatingWithTildeInPath]];
+    [acceleratorBox setState:[CPAccelerator isEnabled] ? NSOnState : NSOffState];
+    [acceleratorStatus setStringValue:[CPAccelerator statusDescription]];
+    [[pairingField cell] setPlaceholderString:([[CPAccelerator pairingCode] length] > 0 ? @"Saved" : @"0000-0000")];
 }
 
 @end

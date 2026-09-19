@@ -16,6 +16,9 @@
     NSPopUpButton *newTabPopUp;
     NSTextField   *downloadsField;
     NSPopUpButton *siteModePopUp;
+    NSButton      *acceleratorBox;
+    NSTextField   *acceleratorStatus;
+    NSTextField   *pairingField;
 }
 
 + (CPPreferencesController *)sharedController;

@@ -9,6 +9,8 @@
 #import "CPSettings.h"
 #import "CPDebugSnapshot.h"
 #include <curl/curl.h>
+#import "CPAccelerator.h"
+#import "CPPrivateBrowsing.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -59,6 +61,33 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
 
     if (statusCode >= 100 && statusCode <= 199)
         return;             // keep waiting for the real response
+
+    if (viaAccelerator) {
+        NSString *powerEmuError = [responseHeaders objectForKey:@"x-poweremu-error"];
+        NSString *method = [request HTTPMethod];
+        BOOL idempotent = method == nil || [method isEqualToString:@"GET"] || [method isEqualToString:@"HEAD"];
+        if (statusCode == 401 && (powerEmuError != nil || [responseHeaders objectForKey:@"x-poweremu"] == nil)) {
+            // PowerEmu itself refused us: nothing reached the site.
+            [CPAccelerator markPairingRejected];
+            retryDirect = YES;
+            return;
+        }
+        if ((statusCode == 502 || statusCode == 504) && powerEmuError != nil && idempotent) {
+            // PowerEmu couldn't get the page; the direct path shows the
+            // site's own error if the site really is down.
+            if (CPDebugLogging())
+                NSLog(@"Captain Polliwog: PowerEmu error (%@) for %@; trying directly", powerEmuError, [request URL]);
+            retryDirect = YES;
+            return;
+        }
+        if (CPDebugLogging()) {
+            NSString *converted = [responseHeaders objectForKey:@"x-poweremu-converted"];
+            NSString *blocked = [responseHeaders objectForKey:@"x-poweremu-blocked"];
+            if (converted != nil || blocked != nil)
+                NSLog(@"Captain Polliwog: PowerEmu %@%@ %@", converted != nil ? @"converted " : @"blocked by ",
+                      converted != nil ? converted : blocked, [request URL]);
+        }
+    }
 
     for (index = 0; index + 1 < [responseHeaderOrder count]; index += 2) {
         if ([[[responseHeaderOrder objectAtIndex:index] lowercaseString] isEqualToString:@"set-cookie"])
@@ -511,7 +540,29 @@ static NSString *CPAcceptLanguageHeader(void)
     errorBuffer = calloc(1, CURL_ERROR_SIZE);
 
     curl_easy_setopt(easy, CURLOPT_PRIVATE, self);
-    curl_easy_setopt(easy, CURLOPT_URL, [[[request URL] absoluteString] UTF8String]);
+    viaAccelerator = !bypassAccelerator && [CPAccelerator shouldRoute:[request URL]];
+    if (viaAccelerator) {
+        // To PowerEmu, asking for the real URL (an absolute-form request
+        // target, as to a forward proxy); PowerEmu makes the TLS connection.
+        NSURL *url = [request URL];
+        NSString *target = [url absoluteString];
+        NSString *host = [url host];
+        NSRange fragment = [target rangeOfString:@"#"];
+        if (fragment.location != NSNotFound)
+            target = [target substringToIndex:fragment.location];
+        if ([url port] != nil)
+            host = [NSString stringWithFormat:@"%@:%@", host, [url port]];
+        curl_easy_setopt(easy, CURLOPT_URL, [[CPAccelerator baseURL] UTF8String]);
+        curl_easy_setopt(easy, CURLOPT_REQUEST_TARGET, [target UTF8String]);
+        headers = curl_slist_append(headers, [[@"Host: " stringByAppendingString:host] UTF8String]);
+        headers = curl_slist_append(headers, [[@"X-PowerEmu-Engine: " stringByAppendingString:[CPAccelerator engineHeader]] UTF8String]);
+        if ([CPAccelerator token] != nil)
+            headers = curl_slist_append(headers, [[@"X-PowerEmu-Token: " stringByAppendingString:[CPAccelerator token]] UTF8String]);
+        if ([[CPPrivateBrowsing sharedPrivateBrowsing] isEnabled])
+            headers = curl_slist_append(headers, "X-PowerEmu-Private: 1");
+    } else {
+        curl_easy_setopt(easy, CURLOPT_URL, [[[request URL] absoluteString] UTF8String]);
+    }
     curl_easy_setopt(easy, CURLOPT_ERRORBUFFER, errorBuffer);
     curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
     // A page's redirects go back to WebKit; a download has no WebKit to go
@@ -535,7 +586,10 @@ static NSString *CPAcceptLanguageHeader(void)
     curl_easy_setopt(easy, CURLOPT_HEADERDATA, self);
     curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, CPWriteCallback);
     curl_easy_setopt(easy, CURLOPT_WRITEDATA, self);
-    curl_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT, 30L);
+    if (viaAccelerator)
+        curl_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT_MS, 1500L);
+    else
+        curl_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT, 30L);
     curl_easy_setopt(easy, CURLOPT_LOW_SPEED_LIMIT, 1L);
     curl_easy_setopt(easy, CURLOPT_LOW_SPEED_TIME, 120L);
 
@@ -580,7 +634,8 @@ static NSString *CPAcceptLanguageHeader(void)
 
     if (method == nil)
         method = @"GET";
-    uploadBody = [[request HTTPBody] retain];
+    if (uploadBody == nil)
+        uploadBody = [[request HTTPBody] retain];
     if (uploadBody == nil && [request HTTPBodyStream] != nil) {
         NSMutableData *collected = [NSMutableData data];
         NSInputStream *stream = [request HTTPBodyStream];
@@ -605,6 +660,19 @@ static NSString *CPAcceptLanguageHeader(void)
     }
 
     return YES;
+}
+
+- (BOOL)takeDirectRetry
+{
+    if (!retryDirect || cancelled)
+        return NO;
+    retryDirect = NO;
+    bypassAccelerator = YES;
+    viaAccelerator = NO;
+    statusCode = 0;
+    [responseHeaders removeAllObjects];
+    [responseHeaderOrder removeAllObjects];
+    return YES;     // keeps uploadBody: a body stream can only be read once
 }
 
 - (void)releaseHandle
@@ -667,6 +735,8 @@ static NSString *CPAcceptLanguageHeader(void)
 {
     if (cancelled)
         return 0;
+    if (retryDirect)
+        return length;      // PowerEmu's error page: the retry will answer
     if (downloadOwner != nil) {
         double now;
         // Error pages are not what the reader asked to save.
@@ -707,6 +777,22 @@ static NSString *CPAcceptLanguageHeader(void)
 {
     if (cancelled || servedFromCache)
         return;
+    if (viaAccelerator && !retryDirect && code != CURLE_OK && statusCode == 0) {
+        double connectTime = 0;
+        NSString *method = [request HTTPMethod];
+        BOOL idempotent = method == nil || [method isEqualToString:@"GET"] || [method isEqualToString:@"HEAD"];
+        curl_easy_getinfo((CURL *)easyHandle, CURLINFO_CONNECT_TIME, &connectTime);
+        if (connectTime <= 0) {
+            // Never reached PowerEmu, so nothing reached the site: safe to
+            // send again directly, whatever the method.
+            [CPAccelerator markFailed];
+            retryDirect = YES;
+        } else if (idempotent && (code == CURLE_GOT_NOTHING || code == CURLE_RECV_ERROR || code == CURLE_SEND_ERROR)) {
+            retryDirect = YES;
+        }
+    }
+    if (retryDirect)
+        return;             // the engine starts it again, directly
     if (downloadOwner != nil) {
         NSError *error = nil;
         if (downloadFile != NULL) {

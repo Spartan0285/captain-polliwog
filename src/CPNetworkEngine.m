@@ -5,6 +5,7 @@
 #import "CPNetworkEngine.h"
 #import "CPNetworkTask.h"
 #include <curl/curl.h>
+#import "CPAccelerator.h"
 
 @interface CPNetworkEngine (Private)
 - (void)networkThread:(id)ignored;
@@ -52,6 +53,16 @@
         }
         [stopping release];
 
+        {
+            // Through PowerEmu every request goes to one host, so the usual
+            // six connections per host would queue a page's resources.
+            static long hostLimit = 6;
+            long wanted = [CPAccelerator baseURL] != nil ? 12 : 6;
+            if (wanted != hostLimit) {
+                hostLimit = wanted;
+                curl_multi_setopt((CURLM *)multiHandle, CURLMOPT_MAX_HOST_CONNECTIONS, hostLimit);
+            }
+        }
         for (index = 0; index < [starting count]; index++) {
             CPNetworkTask *task = [starting objectAtIndex:index];
             if ([task isCancelled])
@@ -80,6 +91,12 @@
             curl_multi_remove_handle((CURLM *)multiHandle, message->easy_handle);
             [task releaseHandle];
             [activeTasks removeObject:task];
+            // PowerEmu failed before the site answered: once more, directly.
+            if ([task takeDirectRetry]) {
+                pthread_mutex_lock(&mutex);
+                [pendingTasks addObject:task];
+                pthread_mutex_unlock(&mutex);
+            }
         }
 
         if ([activeTasks count] > 0) {

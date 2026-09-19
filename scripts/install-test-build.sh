@@ -24,8 +24,8 @@ ditto -x -k "$frameworks" "$app/Contents/"
     "$app/Contents/Info.plist"
 ( cd "$stage" && ditto -c -k --norsrc --keepParent "Captain Polliwog.app" install.zip )
 
-scp -O -q "$stage/install.zip" "$host:/tmp/cp-install.zip"
-ssh -o ConnectTimeout=90 "$host" '
+scp -4 -O -q "$stage/install.zip" "$host:/tmp/cp-install.zip"
+ssh -4 -o ConnectTimeout=90 "$host" '
     A="/Applications/Captain Polliwog.app"
     killall CaptainPolliwog 2>/dev/null; sleep 2
     rm -rf "$A" && ditto -x -k /tmp/cp-install.zip /Applications/

@@ -1,0 +1,153 @@
+From 014c5f3ad384c0863b9f4cc82f0f991e34584115 Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Sat, 19 Sep 2026 16:14:53 -0400
+Subject: [PATCH 52/52] PowerPC JIT: integer typed arrays are little-endian
+
+Leopard WebKit keeps the integer typed arrays in little-endian order on
+big-endian Macs (JSGenericTypedArrayView.h flips their bytes), so the JIT's
+typed array accesses use PowerPC's byte-reversed loads and stores (lhbrx,
+lwbrx, sthbrx, stwbrx). Without this, 16- and 32-bit typed array elements
+written or read by JIT code had their bytes swapped.
+---
+ .../assembler/MacroAssemblerPPCJIT.h          | 44 +++++++++++++++++++
+ .../assembler/PPCAssemblerJIT.h               |  7 +++
+ .../JavaScriptCore/jit/JITPropertyAccess.cpp  | 23 ++++++++++
+ 3 files changed, 74 insertions(+)
+
+diff --git a/Source/JavaScriptCore/assembler/MacroAssemblerPPCJIT.h b/Source/JavaScriptCore/assembler/MacroAssemblerPPCJIT.h
+index f20e9ed0..15540ba7 100644
+--- a/Source/JavaScriptCore/assembler/MacroAssemblerPPCJIT.h
++++ b/Source/JavaScriptCore/assembler/MacroAssemblerPPCJIT.h
+@@ -591,6 +591,35 @@ public:
+         load16(address, dest);
+     }
+ 
++    // Little-endian element access, for the integer typed arrays, which Leopard
++    // WebKit keeps in little-endian order even on big-endian Macs (see
++    // JSGenericTypedArrayView.h).
++    void load16LittleEndian(BaseIndex address, RegisterID dest)
++    {
++        m_assembler.lhbrx(dest, PPCRegisters::r0, effectiveAddress(address));
++    }
++
++    void load16SignedExtendTo32LittleEndian(BaseIndex address, RegisterID dest)
++    {
++        m_assembler.lhbrx(dest, PPCRegisters::r0, effectiveAddress(address));
++        m_assembler.extsh(dest, dest);
++    }
++
++    void load32LittleEndian(BaseIndex address, RegisterID dest)
++    {
++        m_assembler.lwbrx(dest, PPCRegisters::r0, effectiveAddress(address));
++    }
++
++    void store16LittleEndian(RegisterID src, BaseIndex address)
++    {
++        m_assembler.sthbrx(src, PPCRegisters::r0, effectiveAddress(address));
++    }
++
++    void store32LittleEndian(RegisterID src, BaseIndex address)
++    {
++        m_assembler.stwbrx(src, PPCRegisters::r0, effectiveAddress(address));
++    }
++
+     void load16SignedExtendTo32(ImplicitAddress address, RegisterID dest)
+     {
+         Address resolved = resolveAddress(address);
+@@ -1915,6 +1944,21 @@ private:
+         return addressTempRegister;
+     }
+ 
++    // The whole address in addressTempRegister.
++    RegisterID effectiveAddress(BaseIndex address)
++    {
++        ASSERT(address.base != tempRegister && address.index != tempRegister);
++        RegisterID index = address.index;
++        if (address.scale) {
++            m_assembler.slwi(addressTempRegister, index, address.scale);
++            index = addressTempRegister;
++        }
++        m_assembler.add(addressTempRegister, address.base, index);
++        if (address.offset)
++            add32(TrustedImm32(address.offset), addressTempRegister);
++        return addressTempRegister;
++    }
++
+     Address absoluteAddress(const void* address)
+     {
+         int32_t value = reinterpret_cast<int32_t>(address);
+diff --git a/Source/JavaScriptCore/assembler/PPCAssemblerJIT.h b/Source/JavaScriptCore/assembler/PPCAssemblerJIT.h
+index f0c27bcc..f8197406 100644
+--- a/Source/JavaScriptCore/assembler/PPCAssemblerJIT.h
++++ b/Source/JavaScriptCore/assembler/PPCAssemblerJIT.h
+@@ -340,6 +340,13 @@ public:
+     void bctr() { emitInst(0x4e800420); }
+     void bctrl() { emitInst(0x4e800421); }
+ 
++    // Byte-reversed (little-endian) loads and stores, X-form only. ra may be
++    // r0, meaning no base.
++    void lhbrx(RegisterID rt, RegisterID ra, RegisterID rb) { emitInst(formX(31, rt, ra, rb, 790)); }
++    void lwbrx(RegisterID rt, RegisterID ra, RegisterID rb) { emitInst(formX(31, rt, ra, rb, 534)); }
++    void sthbrx(RegisterID rs, RegisterID ra, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 918)); }
++    void stwbrx(RegisterID rs, RegisterID ra, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 662)); }
++
+     void stwux(RegisterID rs, RegisterID ra, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 183)); }
+     void mtcrf(int mask, RegisterID rs) { emitInst((31 << 26) | (rs << 21) | ((mask & 0xff) << 12) | (144 << 1)); }
+ 
+diff --git a/Source/JavaScriptCore/jit/JITPropertyAccess.cpp b/Source/JavaScriptCore/jit/JITPropertyAccess.cpp
+index db9617bb..a860b890 100644
+--- a/Source/JavaScriptCore/jit/JITPropertyAccess.cpp
++++ b/Source/JavaScriptCore/jit/JITPropertyAccess.cpp
+@@ -1584,6 +1584,19 @@ JIT::JumpList JIT::emitIntTypedArrayGetByVal(Instruction*, PatchableJump& badTyp
+         else
+             load8(BaseIndex(scratch, property, TimesOne), resultPayload);
+         break;
++#if CPU(PPC)
++    // Leopard WebKit keeps integer typed arrays little-endian (see
++    // JSGenericTypedArrayView.h).
++    case 2:
++        if (JSC::isSigned(type))
++            load16SignedExtendTo32LittleEndian(BaseIndex(scratch, property, TimesTwo), resultPayload);
++        else
++            load16LittleEndian(BaseIndex(scratch, property, TimesTwo), resultPayload);
++        break;
++    case 4:
++        load32LittleEndian(BaseIndex(scratch, property, TimesFour), resultPayload);
++        break;
++#else
+     case 2:
+         if (JSC::isSigned(type))
+             load16SignedExtendTo32(BaseIndex(scratch, property, TimesTwo), resultPayload);
+@@ -1593,6 +1606,7 @@ JIT::JumpList JIT::emitIntTypedArrayGetByVal(Instruction*, PatchableJump& badTyp
+     case 4:
+         load32(BaseIndex(scratch, property, TimesFour), resultPayload);
+         break;
++#endif
+     default:
+         CRASH();
+     }
+@@ -1732,12 +1746,21 @@ JIT::JumpList JIT::emitIntTypedArrayPutByVal(Instruction* currentInstruction, Pa
+     case 1:
+         store8(earlyScratch, BaseIndex(lateScratch, property, TimesOne));
+         break;
++#if CPU(PPC)
++    case 2:
++        store16LittleEndian(earlyScratch, BaseIndex(lateScratch, property, TimesTwo));
++        break;
++    case 4:
++        store32LittleEndian(earlyScratch, BaseIndex(lateScratch, property, TimesFour));
++        break;
++#else
+     case 2:
+         store16(earlyScratch, BaseIndex(lateScratch, property, TimesTwo));
+         break;
+     case 4:
+         store32(earlyScratch, BaseIndex(lateScratch, property, TimesFour));
+         break;
++#endif
+     default:
+         CRASH();
+     }
+-- 
+2.54.0 (Apple Git-157)
+

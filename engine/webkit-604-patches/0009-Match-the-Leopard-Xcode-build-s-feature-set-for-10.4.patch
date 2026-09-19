@@ -1,7 +1,7 @@
 From 82045658a64927cdd158fea917370133459d19bf Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 00:02:11 -0400
-Subject: [PATCH 09/51] Match the Leopard Xcode build's feature set for
+Subject: [PATCH 09/52] Match the Leopard Xcode build's feature set for
  10.4/10.5 targets
 
 Found by preprocessing wtf/Platform.h with the -D flags the Leopard

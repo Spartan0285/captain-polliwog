@@ -35,6 +35,13 @@
     BOOL                 responseDelivered;
     BOOL                 cancelled;
 
+    // PowerEmu's Web Accelerator (CPAccelerator): whether this attempt went
+    // through it, and whether to run the request again directly because
+    // PowerEmu, not the site, failed.
+    BOOL                 viaAccelerator;
+    BOOL                 retryDirect;
+    BOOL                 bypassAccelerator;
+
     // Download mode: the body goes straight to a file on the network thread
     // and never passes through memory or the main thread.
     id                   downloadOwner;     // retained
@@ -68,6 +75,10 @@
 // not keep each other alive. The network thread checks for cancellation
 // before it touches the owner.
 - (void)detachDownloadOwner;
+
+// Network thread, after the handle is released: YES when the request should
+// be started again, directly (PowerEmu failed before the site answered).
+- (BOOL)takeDirectRetry;
 
 // Network thread: build and tear down the libcurl handle.
 - (BOOL)prepareHandle;
