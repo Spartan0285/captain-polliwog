@@ -8,7 +8,7 @@
 #import "CPDebugSnapshot.h"
 
 #define CPWindowWidth   520.0f
-#define CPWindowHeight  470.0f
+#define CPWindowHeight  500.0f
 
 static NSTextField *CPLabel(NSView *parent, NSRect frame, NSString *text, BOOL small, BOOL rightAligned)
 {
@@ -62,6 +62,7 @@ static struct {
 } CPSwitches[] = {
     { @"loadsImages", @"setLoadsImages:", @"Load images", @"Off, pages load far faster and use less memory." },
     { @"showsAnimatedImages", @"setShowsAnimatedImages:", @"Animate images", @"GIF animations keep the processor busy." },
+    { @"webGLEnabled", @"setWebGLEnabled:", @"Allow 3D graphics (WebGL)", @"Slow on these Macs; pages fall back without it." },
     { @"javaScriptEnabled", @"setJavaScriptEnabled:", @"Run JavaScript", @"Most sites need it; Reader never does." },
     { @"blocksAdsAndTrackers", @"setBlocksAdsAndTrackers:", @"Block ads and trackers", @"Often the heaviest part of a page." },
     { @"playsVideo", @"setPlaysVideo:", @"Play video and audio", @"Takes effect when Captain Polliwog next opens." },

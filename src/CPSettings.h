@@ -64,6 +64,10 @@ typedef enum {
 - (void)setAutoplaysVideo:(BOOL)flag;
 - (BOOL)showsAnimatedImages;
 - (void)setShowsAnimatedImages:(BOOL)flag;
+// WebGL: off by default. On a G3 or G4 it mostly fails, and costs a lot
+// of memory and processor time where it doesn't.
+- (BOOL)webGLEnabled;
+- (void)setWebGLEnabled:(BOOL)flag;
 // Stop a script that runs 15 seconds without a break.
 - (BOOL)stopsLongScripts;
 - (void)setStopsLongScripts:(BOOL)flag;
@@ -96,7 +100,7 @@ typedef enum {
 
 - (void)apply;
 // Features our WebKit has but leaves off by default (display: contents,
-// isSecureContext, <a download>). Global in WebKit, but each WebPreferences
+// isSecureContext, <a download>), and WebGL as the setting says. Global in WebKit, but each WebPreferences
 // object carries them, so every one a WebView uses must say the same.
 + (void)enableModernFeatures:(WebPreferences *)preferences;
 - (void)clearCaches;

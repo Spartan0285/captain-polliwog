@@ -1,7 +1,7 @@
 From 961b409ec07cb35ab8c0f9796844831d80459942 Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Thu, 17 Sep 2026 23:52:33 -0400
-Subject: [PATCH 03/44] CMake Mac port: build for Leopard's frameworks and
+Subject: [PATCH 03/45] CMake Mac port: build for Leopard's frameworks and
  WebKitSystemInterface
 
 Use libWebKitSystemInterfaceLeopard.a for 10.4/10.5 deployment targets,

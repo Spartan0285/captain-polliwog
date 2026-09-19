@@ -752,6 +752,44 @@
     if (global.customElements)
         define(global.CustomElementRegistry ? CustomElementRegistry.prototype : Object.getPrototypeOf(customElements), "upgrade", function upgrade() {});
 
+    /* performance.measure(name, { start, end, detail }) (User Timing 3):
+       older engines take only mark names, and throw on the object. The
+       options become mark names where they are names; numbers measure from
+       the start. A measurement is never worth stopping a page for, so a
+       missing mark is ignored. On the prototype: a property on the object
+       itself goes when its wrapper is collected. */
+    (function () {
+        var proto = global.Performance ? Performance.prototype : null;
+        if (!proto || typeof proto.measure !== "function" || proto.measure.__polliwog)
+            return;
+        var nativeMeasure = proto.measure;
+        var measure = function measure(name, startOrOptions, endMark) {
+            var args = [name];
+            if (startOrOptions && typeof startOrOptions === "object") {
+                if (typeof startOrOptions.start === "string") {
+                    args.push(startOrOptions.start);
+                    if (typeof startOrOptions.end === "string")
+                        args.push(startOrOptions.end);
+                } else if (typeof startOrOptions.end === "string")
+                    args.push("navigationStart", startOrOptions.end);
+            } else {
+                if (startOrOptions !== undefined)
+                    args.push(startOrOptions);
+                if (endMark !== undefined)
+                    args.push(endMark);
+            }
+            try {
+                return nativeMeasure.apply(this, args);
+            } catch (e) {
+                if (e && e.name === "SyntaxError")
+                    return undefined;
+                throw e;
+            }
+        };
+        measure.__polliwog = true;
+        proto.measure = measure;
+    })();
+
     /* PerformanceObserver.observe({ type }) as well as { entryTypes } */
     if (typeof global.PerformanceObserver === "function") {
         var nativeObserve = PerformanceObserver.prototype.observe;

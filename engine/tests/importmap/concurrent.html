@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<!-- Several dynamic imports at once that share a dependency, as GitHub's
+     page does while loading; window.concurrentResults collects outcomes. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Concurrent imports</title>
+<script type="importmap">{"imports":{"foo":"./foo.js","lib/":"./","shared":"./shared.js"}}</script>
+<script>
+window.concurrentResults = [];
+["./a.js", "./b.js", "shared", "./c.js", "./a.js"].forEach(function (spec) {
+    import(spec).then(function (m) { window.concurrentResults.push("ok " + spec); },
+                      function (e) { window.concurrentResults.push("FAIL " + spec + ": " + e); });
+});
+</script>
+<script type="module">import("./b.js").then(function () { window.concurrentResults.push("ok module b"); }, function (e) { window.concurrentResults.push("FAIL module b: " + e); });</script>
+</head>
+<body>concurrent imports</body>
+</html>

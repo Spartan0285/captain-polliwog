@@ -25,6 +25,7 @@ static NSString * const CPBlocksAdsKey         = @"CPBlocksAdsAndTrackers";
 static NSString * const CPPlaysVideoKey        = @"CPPlaysVideo";
 static NSString * const CPAutoplayKey          = @"CPAutoplaysVideo";
 static NSString * const CPAnimatedImagesKey    = @"CPAnimatedImages";
+static NSString * const CPWebGLKey             = @"CPWebGL";
 static NSString * const CPStopsLongScriptsKey  = @"CPStopsLongScripts";
 static NSString * const CPHomePageKey          = @"CPHomePage";
 static NSString * const CPNewTabPageKey        = @"CPNewTabPage";
@@ -84,6 +85,7 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPPlaysVideoKey];
     [defaults setObject:[NSNumber numberWithBool:NO] forKey:CPAutoplayKey];
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPAnimatedImagesKey];
+    [defaults setObject:[NSNumber numberWithBool:NO] forKey:CPWebGLKey];
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPStopsLongScriptsKey];
     [defaults setObject:@"" forKey:CPHomePageKey];
     [defaults setObject:[NSNumber numberWithInt:CPNewTabShowsStartPage] forKey:CPNewTabPageKey];
@@ -200,6 +202,7 @@ CPBooleanSetting(blocksAdsAndTrackers, setBlocksAdsAndTrackers, CPBlocksAdsKey)
 CPBooleanSetting(playsVideo, setPlaysVideo, CPPlaysVideoKey)
 CPBooleanSetting(autoplaysVideo, setAutoplaysVideo, CPAutoplayKey)
 CPBooleanSetting(showsAnimatedImages, setShowsAnimatedImages, CPAnimatedImagesKey)
+CPBooleanSetting(webGLEnabled, setWebGLEnabled, CPWebGLKey)
 CPBooleanSetting(stopsLongScripts, setStopsLongScripts, CPStopsLongScriptsKey)
 
 - (NSString *)homePage
@@ -319,6 +322,8 @@ CPBooleanSetting(stopsLongScripts, setStopsLongScripts, CPStopsLongScriptsKey)
         if ([preferences respondsToSelector:NSSelectorFromString(names[i])])
             CPCallWithArgument(preferences, names[i], 1);
     }
+    if ([preferences respondsToSelector:@selector(setWebGLEnabled:)])
+        CPCallWithArgument(preferences, @"setWebGLEnabled:", [[CPSettings sharedSettings] webGLEnabled] ? 1 : 0);
 }
 
 - (void)apply

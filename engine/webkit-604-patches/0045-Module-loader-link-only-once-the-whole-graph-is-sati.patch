@@ -1,0 +1,110 @@
+From 70ebcfde09384826303939f6c3e83e5629193c98 Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Sat, 19 Sep 2026 03:45:21 -0400
+Subject: [PATCH 45/45] Module loader: link only once the whole graph is
+ satisfied
+
+A module whose dependency another request is already satisfying waits only
+for that dependency's instantiation, so concurrent imports sharing a module
+could link before a dependency's own dependencies resolved, and failed with
+'undefined is not an object'. GitHub loads React this way. Linking (and
+loadModule, and dynamic import) now first waits until every reachable
+module is satisfied.
+---
+ .../builtins/ModuleLoaderPrototype.js         | 46 +++++++++++++++++++
+ .../runtime/ModuleLoaderPrototype.cpp         |  1 +
+ 2 files changed, 47 insertions(+)
+
+diff --git a/Source/JavaScriptCore/builtins/ModuleLoaderPrototype.js b/Source/JavaScriptCore/builtins/ModuleLoaderPrototype.js
+index 29556ea3..5762de06 100644
+--- a/Source/JavaScriptCore/builtins/ModuleLoaderPrototype.js
++++ b/Source/JavaScriptCore/builtins/ModuleLoaderPrototype.js
+@@ -312,6 +312,46 @@ function requestSatisfy(key, fetcher)
+     return satisfyPromise;
+ }
+ 
++// A module whose dependency is already being satisfied by another request
++// waits only for that dependency's instantiation (waiting for its satisfy
++// could chain promises in a circle). So when several imports that share a
++// module run at once, a module can reach linking while a dependency of a
++// dependency is still unresolved. Before linking, wait until everything
++// reachable is satisfied; waiting here, at the top, can't form a cycle.
++function requestSatisfyAll(entry, fetcher)
++{
++    "use strict";
++
++    var pending = [];
++    var seen = [];
++    var stack = [entry];
++    while (stack.length) {
++        var current = stack.pop();
++        if (seen.indexOf(current) !== -1)
++            continue;
++        @putByValDirect(seen, seen.length, current);
++        if (current.state < @ModuleLink) {
++            @putByValDirect(pending, pending.length, current.satisfy ? current.satisfy : this.requestSatisfy(current.key, fetcher));
++            continue;
++        }
++        var dependencies = current.dependencies;
++        for (var i = 0, length = dependencies.length; i < length; ++i) {
++            var value = dependencies[i].value;
++            if (value)
++                @putByValDirect(stack, stack.length, value.registryEntry);
++        }
++    }
++
++    if (!pending.length) {
++        var deferred = @newPromiseCapability(@InternalPromise);
++        deferred.@resolve.@call(@undefined, entry);
++        return deferred.@promise;
++    }
++    return @InternalPromise.internalAll(pending).then(() => {
++        return this.requestSatisfyAll(entry, fetcher);
++    });
++}
++
+ function requestLink(key, fetcher)
+ {
+     // https://whatwg.github.io/loader/#request-link
+@@ -326,6 +366,8 @@ function requestLink(key, fetcher)
+     }
+ 
+     return this.requestSatisfy(key, fetcher).then((entry) => {
++        return this.requestSatisfyAll(entry, fetcher);
++    }).then((entry) => {
+         this.link(entry, fetcher);
+         return entry;
+     });
+@@ -449,6 +491,8 @@ function loadModule(moduleName, referrer, fetcher)
+     // For example, take the "jquery" and return the URL for the resource.
+     return this.resolve(moduleName, referrer, fetcher).then((key) => {
+         return this.requestSatisfy(key, fetcher);
++    }).then((entry) => {
++        return this.requestSatisfyAll(entry, fetcher);
+     }).then((entry) => {
+         return entry.key;
+     });
+@@ -471,6 +515,8 @@ function requestImportModule(key, fetcher)
+     "use strict";
+ 
+     return this.requestSatisfy(key, fetcher).then((entry) => {
++        return this.requestSatisfyAll(entry, fetcher);
++    }).then((entry) => {
+         this.linkAndEvaluateModule(entry.key, fetcher);
+         return this.getModuleNamespaceObject(entry.module);
+     });
+diff --git a/Source/JavaScriptCore/runtime/ModuleLoaderPrototype.cpp b/Source/JavaScriptCore/runtime/ModuleLoaderPrototype.cpp
+index 67186e50..e1825c24 100644
+--- a/Source/JavaScriptCore/runtime/ModuleLoaderPrototype.cpp
++++ b/Source/JavaScriptCore/runtime/ModuleLoaderPrototype.cpp
+@@ -77,6 +77,7 @@ const ClassInfo ModuleLoaderPrototype::s_info = { "ModuleLoader", &Base::s_info,
+     requestFetch                   JSBuiltin                                           DontEnum|Function 2
+     requestInstantiate             JSBuiltin                                           DontEnum|Function 2
+     requestSatisfy                 JSBuiltin                                           DontEnum|Function 2
++    requestSatisfyAll              JSBuiltin                                           DontEnum|Function 2
+     requestLink                    JSBuiltin                                           DontEnum|Function 2
+     requestReady                   JSBuiltin                                           DontEnum|Function 2
+     link                           JSBuiltin                                           DontEnum|Function 2
+-- 
+2.50.1 (Apple Git-155)
+
