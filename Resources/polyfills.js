@@ -1274,6 +1274,29 @@
         CSSStyleSheet.prototype = NativeSheet.prototype;
         global.CSSStyleSheet = CSSStyleSheet;
 
+        // A sheet holds the <style> elements showing it, to update them; so
+        // that it doesn't keep every component that ever adopted it alive,
+        // those no longer in a document are let go as the list grows.
+        function addOwner(sheet, style) {
+            var owners = sheet.__polliwogOwners;
+            owners.push(style);
+            if (owners.length >= 32 && (owners.length & (owners.length - 1)) === 0) {
+                sheet.__polliwogOwners = owners.filter(function (owner) {
+                    return owner === style || isAttached(owner);
+                });
+            }
+        }
+
+        function isAttached(node) {
+            if ("isConnected" in node)
+                return node.isConnected;
+            for (var n = node; n; n = n.parentNode || n.host) {
+                if (n.nodeType === 9)
+                    return true;
+            }
+            return false;
+        }
+
         function isConstructed(sheet) {
             return sheet && Object.prototype.hasOwnProperty.call(sheet, "__polliwogText");
         }
@@ -1301,7 +1324,7 @@
                     style.setAttribute("media", sheet.media.mediaText);
                 style.textContent = sheet.__polliwogText;
                 Object.defineProperty(style, "__polliwogSheet", { value: sheet });
-                sheet.__polliwogOwners.push(style);
+                addOwner(sheet, style);
                 styles.push(style);
                 if (host)
                     host.appendChild(style);

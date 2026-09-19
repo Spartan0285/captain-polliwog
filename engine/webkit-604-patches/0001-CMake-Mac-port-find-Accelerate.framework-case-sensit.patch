@@ -1,7 +1,7 @@
 From 3cb49e891432e0b32559812a70ce6124d36d6fe0 Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Thu, 17 Sep 2026 23:51:20 -0400
-Subject: [PATCH 01/45] CMake Mac port: find Accelerate.framework
+Subject: [PATCH 01/46] CMake Mac port: find Accelerate.framework
  case-sensitively
 
 Builds on a case-sensitive file system (cross-compiling from Linux) cannot

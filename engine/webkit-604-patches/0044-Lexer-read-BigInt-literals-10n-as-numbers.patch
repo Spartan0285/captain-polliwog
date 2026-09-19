@@ -1,7 +1,7 @@
 From 50d010d9cfa69163f13d9a8f6dba5d9b0e3f2891 Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Sat, 19 Sep 2026 00:58:52 -0400
-Subject: [PATCH 44/45] Lexer: read BigInt literals (10n) as numbers
+Subject: [PATCH 44/46] Lexer: read BigInt literals (10n) as numbers
 
 This engine has no BigInt, and pages only run their BigInt code where a
 feature test finds one; reading the literal as its number lets the rest of

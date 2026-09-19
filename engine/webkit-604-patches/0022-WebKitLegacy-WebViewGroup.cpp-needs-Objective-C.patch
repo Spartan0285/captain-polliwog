@@ -1,7 +1,7 @@
 From 56c02ce50eacc8adbcd6d003006d796a9fb5be7e Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 03:57:22 -0400
-Subject: [PATCH 22/45] WebKitLegacy: WebViewGroup.cpp needs Objective-C++
+Subject: [PATCH 22/46] WebKitLegacy: WebViewGroup.cpp needs Objective-C++
 
 ---
  Source/WebKitLegacy/PlatformMac.cmake | 2 +-

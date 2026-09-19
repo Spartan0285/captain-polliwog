@@ -315,11 +315,51 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
         [[CPMemoryWatcher sharedWatcher] relieveMemoryPressure:@"tabs were over the memory budget"];
 }
 
+// Debugging: once a minute, what WebKit holds -- the JavaScript heap, live
+// objects by type, global objects (one per frame), cached pages and fonts --
+// to tell a leak in a page from one in the engine or the app.
+static size_t CPStatisticCount(Class statistics, NSString *name)
+{
+    SEL selector = NSSelectorFromString(name);
+    if (![statistics respondsToSelector:selector])
+        return 0;
+    return ((size_t (*)(id, SEL))[statistics methodForSelector:selector])(statistics, selector);
+}
+
+- (void)logMemoryStatistics:(NSTimer *)timer
+{
+    Class statistics = NSClassFromString(@"WebCoreStatistics");
+    NSMutableArray *types = [NSMutableArray array];
+    NSCountedSet *counts;
+    NSEnumerator *names;
+    NSString *name;
+
+    if (statistics == Nil)
+        return;
+    counts = [statistics respondsToSelector:@selector(javaScriptObjectTypeCounts)] ? [statistics performSelector:@selector(javaScriptObjectTypeCounts)] : nil;
+    names = [counts objectEnumerator];
+    while ((name = [names nextObject]) != nil) {
+        if ([counts countForObject:name] >= 2000)
+            [types addObject:[NSString stringWithFormat:@"%@ %u", name, (unsigned)[counts countForObject:name]]];
+    }
+    NSLog(@"Captain Polliwog: memory: JS objects %lu, global objects %lu, protected %lu, cached pages %lu, fonts %lu | %@ | big types: %@",
+          (unsigned long)CPStatisticCount(statistics, @"javaScriptObjectsCount"),
+          (unsigned long)CPStatisticCount(statistics, @"javaScriptGlobalObjectsCount"),
+          (unsigned long)CPStatisticCount(statistics, @"javaScriptProtectedObjectsCount"),
+          (unsigned long)CPStatisticCount(statistics, @"cachedPageCount"),
+          (unsigned long)CPStatisticCount(statistics, @"cachedFontDataCount"),
+          [statistics respondsToSelector:@selector(memoryStatistics)] ? [[statistics performSelector:@selector(memoryStatistics)] description] : @"",
+          [types componentsJoinedByString:@", "]);
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
     NSString *debugURL = [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugURL"];
     NSArray *debugTabs;
     unsigned index;
+
+    if (CPDebugLogging() && [[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugMemory"])
+        [NSTimer scheduledTimerWithTimeInterval:60.0 target:self selector:@selector(logMemoryStatistics:) userInfo:nil repeats:YES];
 
     // Before any page can ask for video.
     [CPMediaRelay start];
