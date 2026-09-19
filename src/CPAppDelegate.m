@@ -4,6 +4,7 @@
 
 #import "CPAppDelegate.h"
 #import "CPSiteModes.h"
+#import "CPMediaRelay.h"
 #import "CPBrowserWindowController.h"
 #import "CPCurlProtocol.h"
 #import "CPSettings.h"
@@ -303,6 +304,9 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     NSString *debugURL = [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugURL"];
     NSArray *debugTabs;
     unsigned index;
+
+    // Before any page can ask for video.
+    [CPMediaRelay start];
 
     [[CPSettings sharedSettings] apply];
     // Testing aid: start straight in private browsing, without the question.

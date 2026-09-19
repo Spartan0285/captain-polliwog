@@ -1,0 +1,51 @@
+From 4b40bd0796d7b19fc755c0e7f66a7bd13ccb0a67 Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Fri, 18 Sep 2026 20:49:06 -0400
+Subject: [PATCH 41/41] Play web media through the browser's relay
+
+QuickTime fetches media with the system's networking, TLS 1.0 on Tiger
+and Leopard, which video servers refuse. When the browser has
+registered a relay (CPMediaRelayPort and CPMediaRelayToken in its
+registered defaults), http and https media go through it instead.
+---
+ .../graphics/mac/MediaPlayerPrivateQTKit.mm   | 21 ++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/Source/WebCore/platform/graphics/mac/MediaPlayerPrivateQTKit.mm b/Source/WebCore/platform/graphics/mac/MediaPlayerPrivateQTKit.mm
+index b270fe6f..2e427680 100644
+--- a/Source/WebCore/platform/graphics/mac/MediaPlayerPrivateQTKit.mm
++++ b/Source/WebCore/platform/graphics/mac/MediaPlayerPrivateQTKit.mm
+@@ -267,10 +267,29 @@ NSMutableDictionary *MediaPlayerPrivateQTKit::commonMovieAttributes()
+     return movieAttributes;
+ }
+ 
++// Captain Polliwog: QuickTime fetches media with the system's networking,
++// which on Tiger and Leopard speaks only TLS 1.0, and video servers refuse
++// it. The browser runs a relay on 127.0.0.1 that fetches through its own
++// networking; it leaves the relay's port and token in its registered
++// defaults.
++static NSURL *relayedMediaURL(NSURL *url)
++{
++    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
++    NSInteger port = [defaults integerForKey:@"CPMediaRelayPort"];
++    NSString *token = [defaults stringForKey:@"CPMediaRelayToken"];
++    NSString *scheme = [[url scheme] lowercaseString];
++    if (port <= 0 || !token || !([scheme isEqualToString:@"https"] || [scheme isEqualToString:@"http"]))
++        return url;
++    NSString *escaped = [(NSString *)CFURLCreateStringByAddingPercentEscapes(nullptr, (CFStringRef)[url absoluteString], nullptr,
++        CFSTR(":/?#[]@!$&'()*+,;=%"), kCFStringEncodingUTF8) autorelease];
++    NSURL *relayed = [NSURL URLWithString:[NSString stringWithFormat:@"http://127.0.0.1:%ld/media?token=%@&url=%@", (long)port, token, escaped]];
++    return relayed ? relayed : url;
++}
++
+ void MediaPlayerPrivateQTKit::createQTMovie(const String& url)
+ {
+     URL kURL(ParsedURLString, url);
+-    NSURL *cocoaURL = kURL;
++    NSURL *cocoaURL = relayedMediaURL(kURL);
+     NSMutableDictionary *movieAttributes = commonMovieAttributes();    
+     [movieAttributes setValue:cocoaURL forKey:QTMovieURLAttribute];
+ 
+-- 
+2.50.1 (Apple Git-155)
+
