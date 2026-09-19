@@ -1,7 +1,7 @@
 From fd3480c00018efe1378271bd5e3edb8f026ba56c Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Thu, 17 Sep 2026 23:57:01 -0400
-Subject: [PATCH 07/46] Use Leopard mig output when cross-compiling without mig
+Subject: [PATCH 07/47] Use Leopard mig output when cross-compiling without mig
 
 ---
  Source/WTF/wtf/PlatformMac.cmake              |   14 +-

@@ -1,0 +1,75 @@
+From 363dc6663ac6c6126b814a1be2ecaf3f047a28ad Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Sat, 19 Sep 2026 08:32:14 -0400
+Subject: [PATCH 47/47] Text: settings that only turn features off keep the
+ simple code path
+
+On 10.5/10.6 the simple path applies no kerning or ligatures (applyTransforms
+is compiled out), so font-feature-settings with only zero values and
+font-variant settings that only turn ligatures off gain nothing from the
+complex path, which costs several times as much on a G4. ProseMirror and code
+views set exactly these: Speedometer's Editor-TipTap went from 21.9s to 3.4s
+an iteration on the iBook.
+---
+ .../WebCore/platform/graphics/FontCascade.cpp | 37 ++++++++++++++++++-
+ 1 file changed, 36 insertions(+), 1 deletion(-)
+
+diff --git a/Source/WebCore/platform/graphics/FontCascade.cpp b/Source/WebCore/platform/graphics/FontCascade.cpp
+index 815e5d0c..81961d5b 100644
+--- a/Source/WebCore/platform/graphics/FontCascade.cpp
++++ b/Source/WebCore/platform/graphics/FontCascade.cpp
+@@ -617,6 +617,37 @@ FontCascade::CodePath FontCascade::codePath()
+     return s_codePath;
+ }
+ 
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1060
++// On 10.5 and 10.6 the simple code path applies no kerning or ligatures at
++// all (Font::applyTransforms is compiled out), so settings that only turn
++// such features off -- editors' and code views' "font-variant-ligatures:
++// none", "font-feature-settings: 'liga' 0" -- need no complex path, which
++// on these Macs costs many times as much.
++static bool onlyTurnsFeaturesOff(const FontDescription& description)
++{
++    for (auto& feature : description.featureSettings()) {
++        if (feature.value())
++            return false;
++    }
++    const FontVariantSettings& variants = description.variantSettings();
++    return variants.commonLigatures != FontVariantLigatures::Yes
++        && variants.discretionaryLigatures != FontVariantLigatures::Yes
++        && variants.historicalLigatures != FontVariantLigatures::Yes
++        && variants.contextualAlternates != FontVariantLigatures::Yes
++        && variants.position == FontVariantPosition::Normal
++        && variants.caps == FontVariantCaps::Normal
++        && variants.numericFigure == FontVariantNumericFigure::Normal
++        && variants.numericSpacing == FontVariantNumericSpacing::Normal
++        && variants.numericFraction == FontVariantNumericFraction::Normal
++        && variants.numericOrdinal == FontVariantNumericOrdinal::Normal
++        && variants.numericSlashedZero == FontVariantNumericSlashedZero::Normal
++        && variants.alternates == FontVariantAlternates::Normal
++        && variants.eastAsianVariant == FontVariantEastAsianVariant::Normal
++        && variants.eastAsianWidth == FontVariantEastAsianWidth::Normal
++        && variants.eastAsianRuby == FontVariantEastAsianRuby::Normal;
++}
++#endif
++
+ FontCascade::CodePath FontCascade::codePath(const TextRun& run) const
+ {
+     if (s_codePath != Auto)
+@@ -625,8 +656,12 @@ FontCascade::CodePath FontCascade::codePath(const TextRun& run) const
+ #if PLATFORM(COCOA)
+     // Because Font::applyTransforms() doesn't know which features to enable/disable in the simple code path, it can't properly handle feature or variant settings.
+     // FIXME: https://bugs.webkit.org/show_bug.cgi?id=150791: @font-face features should also cause this to be complex.
+-    if (m_fontDescription.featureSettings().size() > 0 || !m_fontDescription.variantSettings().isAllNormal())
++    if (m_fontDescription.featureSettings().size() > 0 || !m_fontDescription.variantSettings().isAllNormal()) {
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1060
++        if (!onlyTurnsFeaturesOff(m_fontDescription))
++#endif
+         return Complex;
++    }
+ 
+ #else
+ 
+-- 
+2.50.1 (Apple Git-155)
+
