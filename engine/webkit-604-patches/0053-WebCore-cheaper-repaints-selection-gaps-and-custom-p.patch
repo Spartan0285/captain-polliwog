@@ -1,0 +1,321 @@
+From 1efc4fe039af5e3cb7e5a77143165cc8853c8e59 Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Sat, 19 Sep 2026 18:26:01 -0400
+Subject: [PATCH 53/53] WebCore: cheaper repaints, selection gaps and custom
+ properties
+
+Three costs the Speedometer profiles showed on a G4:
+- Every repaint called -[NSView setNeedsDisplayInRect:], which walks the view
+  tree inside an Objective-C exception guard. They are now collected and
+  handed to AppKit once per run loop pass, or as one rectangle when that
+  covers little more (10% on Speedometer's TodoMVC-JavaScript-ES5).
+- A selection change walked every layer of the page twice, to repaint and to
+  clear block selection gaps, even when no layer had any. RenderView now
+  remembers whether any layer recorded gaps.
+- RenderStyle::checkVariablesInCustomProperties walked the whole inherited
+  custom property map, hundreds of entries on pages built with a design
+  system, although only the properties this element set can be unresolved.
+  StyleCustomPropertyData now tracks those.
+---
+ Source/WebCore/platform/ScrollView.cpp        | 13 ++++++
+ Source/WebCore/platform/ScrollView.h          | 13 ++++++
+ Source/WebCore/platform/mac/ScrollViewMac.mm  | 41 +++++++++++++++++--
+ Source/WebCore/rendering/RenderLayer.cpp      |  2 +
+ Source/WebCore/rendering/RenderView.cpp       |  7 +++-
+ Source/WebCore/rendering/RenderView.h         |  4 ++
+ .../WebCore/rendering/style/RenderStyle.cpp   | 18 +++++---
+ .../rendering/style/StyleCustomPropertyData.h | 12 +++++-
+ .../WebKitLegacy/mac/WebView/WebHTMLView.mm   |  6 +++
+ 9 files changed, 104 insertions(+), 12 deletions(-)
+
+diff --git a/Source/WebCore/platform/ScrollView.cpp b/Source/WebCore/platform/ScrollView.cpp
+index 7ddb7532..101a7ab3 100644
+--- a/Source/WebCore/platform/ScrollView.cpp
++++ b/Source/WebCore/platform/ScrollView.cpp
+@@ -26,6 +26,10 @@
+ #include "config.h"
+ #include "ScrollView.h"
+ 
++#if PLATFORM(MAC)
++#include "RunLoopObserver.h"
++#endif
++
+ #include "GraphicsContext.h"
+ #include "GraphicsLayer.h"
+ #include "HostWindow.h"
+@@ -46,6 +50,10 @@ ScrollView::ScrollView()
+ 
+ ScrollView::~ScrollView()
+ {
++#if PLATFORM(MAC)
++    if (m_pendingRepaintObserver)
++        m_pendingRepaintObserver->invalidate();
++#endif
+ }
+ 
+ void ScrollView::addChild(Widget& child)
+@@ -776,6 +784,11 @@ void ScrollView::scrollContents(const IntSize& scrollDelta)
+     if (!window)
+         return;
+ 
++#if PLATFORM(MAC)
++    // Anything still waiting is in the pre-scroll coordinates.
++    flushPendingRepaints();
++#endif
++
+     // Since scrolling is double buffered, we will be blitting the scroll view's intersection
+     // with the clip rect every time to keep it smooth.
+     IntRect clipRect = windowClipRect();
+diff --git a/Source/WebCore/platform/ScrollView.h b/Source/WebCore/platform/ScrollView.h
+index 9622188e..03b1f749 100644
+--- a/Source/WebCore/platform/ScrollView.h
++++ b/Source/WebCore/platform/ScrollView.h
+@@ -60,6 +60,8 @@ class HostWindow;
+ class LegacyTileCache;
+ class Scrollbar;
+ 
++class RunLoopObserver;
++
+ class ScrollView : public Widget, public ScrollableArea {
+ public:
+     virtual ~ScrollView();
+@@ -511,6 +513,17 @@ private:
+     bool platformScroll(ScrollDirection, ScrollGranularity);
+     void platformSetScrollbarsSuppressed(bool repaintOnUnsuppress);
+     void platformRepaintContentRectangle(const IntRect&);
++#if PLATFORM(MAC)
++public:
++    // Repaints are collected and handed to AppKit once per run loop pass:
++    // -[NSView setNeedsDisplayInRect:] walks up the view tree and is guarded
++    // against Objective-C exceptions, which a page invalidating hundreds of
++    // small rectangles during layout pays for every time.
++    WEBCORE_EXPORT void flushPendingRepaints();
++private:
++    Vector<IntRect> m_pendingRepaintRects;
++    std::unique_ptr<RunLoopObserver> m_pendingRepaintObserver;
++#endif
+     bool platformIsOffscreen() const;
+     void platformSetScrollbarOverlayStyle(ScrollbarOverlayStyle);
+    
+diff --git a/Source/WebCore/platform/mac/ScrollViewMac.mm b/Source/WebCore/platform/mac/ScrollViewMac.mm
+index 5381e2ab..ab1cd7b3 100644
+--- a/Source/WebCore/platform/mac/ScrollViewMac.mm
++++ b/Source/WebCore/platform/mac/ScrollViewMac.mm
+@@ -26,6 +26,8 @@
+ #import "config.h"
+ #import "ScrollView.h"
+ 
++#import "RunLoopObserver.h"
++
+ #import "FloatRect.h"
+ #import "FloatSize.h"
+ #import "IntRect.h"
+@@ -224,12 +226,45 @@ bool ScrollView::platformScroll(ScrollDirection, ScrollGranularity)
+     return false;
+ }
+ 
++// Before AppKit's own display pass, which runs at a much higher order.
++static const CFIndex repaintFlushRunLoopOrder = 0;
++
+ void ScrollView::platformRepaintContentRectangle(const IntRect& rect)
+ {
+-    BEGIN_BLOCK_OBJC_EXCEPTIONS;
+-    NSView *view = documentView();
+-    [view setNeedsDisplayInRect:rect];
++    m_pendingRepaintRects.append(rect);
++    if (!m_pendingRepaintObserver) {
++        m_pendingRepaintObserver = std::make_unique<RunLoopObserver>(repaintFlushRunLoopOrder, [this] {
++            flushPendingRepaints();
++        });
++    }
++    if (!m_pendingRepaintObserver->isScheduled())
++        m_pendingRepaintObserver->schedule(CFRunLoopGetCurrent());
++}
+ 
++void ScrollView::flushPendingRepaints()
++{
++    if (m_pendingRepaintRects.isEmpty())
++        return;
++    Vector<IntRect> rects = WTFMove(m_pendingRepaintRects);
++
++    BEGIN_BLOCK_OBJC_EXCEPTIONS;
++    if (NSView *view = documentView()) {
++        // One rectangle covering them all, unless that would repaint much
++        // more than the rectangles themselves do.
++        IntRect bounds = rects[0];
++        unsigned area = 0;
++        for (auto& rect : rects) {
++            bounds.unite(rect);
++            area += rect.width() * rect.height();
++        }
++        unsigned boundsArea = bounds.width() * bounds.height();
++        if (rects.size() > 32 || boundsArea <= area + area / 2)
++            [view setNeedsDisplayInRect:bounds];
++        else {
++            for (auto& rect : rects)
++                [view setNeedsDisplayInRect:rect];
++        }
++    }
+     END_BLOCK_OBJC_EXCEPTIONS;
+ }
+ 
+diff --git a/Source/WebCore/rendering/RenderLayer.cpp b/Source/WebCore/rendering/RenderLayer.cpp
+index 18b64156..dd7fe062 100644
+--- a/Source/WebCore/rendering/RenderLayer.cpp
++++ b/Source/WebCore/rendering/RenderLayer.cpp
+@@ -5862,6 +5862,8 @@ LayoutRect RenderLayer::localClipRect(bool& clipExceedsBounds) const
+ void RenderLayer::addBlockSelectionGapsBounds(const LayoutRect& bounds)
+ {
+     m_blockSelectionGapsBounds.unite(enclosingIntRect(bounds));
++    if (!m_blockSelectionGapsBounds.isEmpty())
++        renderer().view().setMayHaveBlockSelectionGaps();
+ }
+ 
+ void RenderLayer::clearBlockSelectionGapsBounds()
+diff --git a/Source/WebCore/rendering/RenderView.cpp b/Source/WebCore/rendering/RenderView.cpp
+index 3f327fb7..e8fd0991 100644
+--- a/Source/WebCore/rendering/RenderView.cpp
++++ b/Source/WebCore/rendering/RenderView.cpp
+@@ -1048,8 +1048,10 @@ void RenderView::applySubtreeSelection(const SelectionSubtreeRoot& root, Selecti
+         currentRenderer->setSelectionStateIfNeeded(SelectionInside);
+     }
+ 
+-    if (blockRepaintMode != RepaintNothing)
++    if (blockRepaintMode != RepaintNothing && m_mayHaveBlockSelectionGaps) {
+         layer()->clearBlockSelectionGapsBounds();
++        m_mayHaveBlockSelectionGaps = false;
++    }
+ 
+     // Now that the selection state has been updated for the new objects, walk them again and
+     // put them in the new objects list.
+@@ -1136,7 +1138,8 @@ void RenderView::getSelection(RenderObject*& startRenderer, std::optional<unsign
+ 
+ void RenderView::clearSelection()
+ {
+-    layer()->repaintBlockSelectionGaps();
++    if (m_mayHaveBlockSelectionGaps)
++        layer()->repaintBlockSelectionGaps();
+     setSelection(nullptr, std::nullopt, nullptr, std::nullopt, RepaintNewMinusOld);
+ }
+ 
+diff --git a/Source/WebCore/rendering/RenderView.h b/Source/WebCore/rendering/RenderView.h
+index 69762ca8..1a9c8947 100644
+--- a/Source/WebCore/rendering/RenderView.h
++++ b/Source/WebCore/rendering/RenderView.h
+@@ -212,6 +212,9 @@ public:
+     ImageQualityController& imageQualityController();
+ 
+     void setHasSoftwareFilters(bool hasSoftwareFilters) { m_hasSoftwareFilters = hasSoftwareFilters; }
++    // Whether any layer may hold block selection gaps: when none does, a
++    // selection change needn't walk every layer to repaint or clear them.
++    void setMayHaveBlockSelectionGaps() { m_mayHaveBlockSelectionGaps = true; }
+     bool hasSoftwareFilters() const { return m_hasSoftwareFilters; }
+ 
+     uint64_t rendererCount() const { return m_rendererCount; }
+@@ -377,6 +380,7 @@ private:
+ 
+     bool m_selectionWasCaret { false };
+     bool m_hasSoftwareFilters { false };
++    bool m_mayHaveBlockSelectionGaps { false };
+     bool m_usesFirstLineRules { false };
+     bool m_usesFirstLetterRules { false };
+ #if !ASSERT_DISABLED
+diff --git a/Source/WebCore/rendering/style/RenderStyle.cpp b/Source/WebCore/rendering/style/RenderStyle.cpp
+index a1371bdb..d909b40a 100644
+--- a/Source/WebCore/rendering/style/RenderStyle.cpp
++++ b/Source/WebCore/rendering/style/RenderStyle.cpp
+@@ -2196,15 +2196,20 @@ void RenderStyle::checkVariablesInCustomProperties()
+ 
+     auto& customPropertyData = m_rareInheritedData.access().customProperties.access();
+ 
++    // Only the properties set with var() references since the last
++    // resolution can need it (see StyleCustomPropertyData::unresolvedNames).
++    Vector<AtomicString> pendingNames = WTFMove(customPropertyData.unresolvedNames);
++
+     // Our first pass checks the variables for validity and replaces any properties that became
+     // invalid with empty values.
+     auto& customProperties = customPropertyData.values;
+     HashSet<AtomicString> invalidProperties;
+-    for (auto entry : customProperties) {
+-        if (!entry.value->containsVariables())
++    for (auto& name : pendingNames) {
++        auto entry = customProperties.find(name);
++        if (entry == customProperties.end() || !entry->value->containsVariables())
+             continue;
+         HashSet<AtomicString> seenProperties;
+-        entry.value->checkVariablesForCycles(entry.key, customProperties, seenProperties, invalidProperties);
++        entry->value->checkVariablesForCycles(name, customProperties, seenProperties, invalidProperties);
+     }
+     
+     // Now insert invalid values.
+@@ -2217,10 +2222,11 @@ void RenderStyle::checkVariablesInCustomProperties()
+     // Now that all of the properties have been tested for validity and replaced with
+     // invalid values if they failed, we can perform variable substitution on the valid values.
+     Vector<Ref<CSSCustomPropertyValue>> resolvedValues;
+-    for (auto entry : customProperties) {
+-        if (!entry.value->containsVariables())
++    for (auto& name : pendingNames) {
++        auto entry = customProperties.find(name);
++        if (entry == customProperties.end() || !entry->value->containsVariables())
+             continue;
+-        entry.value->resolveVariableReferences(customProperties, resolvedValues);
++        entry->value->resolveVariableReferences(customProperties, resolvedValues);
+     }
+     
+     // With all results computed, we can now mutate our table to eliminate the variables and
+diff --git a/Source/WebCore/rendering/style/StyleCustomPropertyData.h b/Source/WebCore/rendering/style/StyleCustomPropertyData.h
+index 88f1831c..039ec4c9 100644
+--- a/Source/WebCore/rendering/style/StyleCustomPropertyData.h
++++ b/Source/WebCore/rendering/style/StyleCustomPropertyData.h
+@@ -56,13 +56,22 @@ public:
+     
+     void setCustomPropertyValue(const AtomicString& name, Ref<CSSCustomPropertyValue>&& value)
+     {
+-        if (value->containsVariables())
++        if (value->containsVariables()) {
+             containsVariables = true;
++            unresolvedNames.append(name);
++        }
+         values.set(name, WTFMove(value));
+     }
+ 
+     CustomPropertyValueMap values;
+     bool containsVariables { false };
++    // The properties set with var() references since they were last
++    // resolved. Inherited values arrive resolved, so RenderStyle::
++    // checkVariablesInCustomProperties only needs to look at these, not at
++    // every inherited property: pages that define hundreds of variables
++    // (design systems like Spectrum) otherwise pay for all of them on every
++    // element that sets one.
++    Vector<AtomicString> unresolvedNames;
+ 
+ private:
+     StyleCustomPropertyData() = default;
+@@ -70,6 +79,7 @@ private:
+         : RefCounted<StyleCustomPropertyData>()
+         , values(other.values)
+         , containsVariables(other.containsVariables)
++        , unresolvedNames(other.unresolvedNames)
+     { }
+ };
+ 
+diff --git a/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm b/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm
+index 68f35429..3a7e1f3a 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm
+@@ -1834,6 +1834,12 @@ CLANG_PRAGMA(diagnostic pop)
+     if (_private->dataSource && [self _isTopHTMLView]) {
+         [self _web_updateLayoutAndStyleIfNeededRecursive];
+         [[self _webView] _flushCompositingChanges];
++        // Hand AppKit the repaints collected during layout before it works
++        // out what to draw (see ScrollView::flushPendingRepaints).
++        if (Frame* coreFrame = core([self _frame])) {
++            if (FrameView* view = coreFrame->view())
++                view->flushPendingRepaints();
++        }
+     }
+ 
+     [super viewWillDraw];
+-- 
+2.54.0 (Apple Git-157)
+

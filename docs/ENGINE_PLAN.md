@@ -450,3 +450,71 @@ that still build for big-endian (Debian ships 2.52 on 32-bit PowerPC Linux).
 - TenFourFox IonPower: tenfourfox.blogspot.com/2015/06/mission-accomplished-ionpower-kicks.html
 - Leopard WebKit: sourceforge.net/projects/leopard-webkit/
 - Measurements: this repository, `scripts/measure-cache.sh` and the experiment above.
+
+## 19 September: the PowerPC JIT, and what Speedometer really measures
+
+JavaScriptCore now has a **PowerPC baseline JIT** (patches 0048-0052): an
+offlineasm PPC backend so the LLInt runs as PowerPC code, a new assembler and
+macro assembler for the JIT, and the big-endian work that goes with them.
+It is built by the `leopard-g4-jit` variant; `leopard-g4` still ships the
+interpreter.
+
+Big-endian rules learned the hard way, all of them bugs first:
+
+- A C function returns an `EncodedJSValue` **tag first**, in r3, while JS code
+  returns the payload there. `setupResults` swaps; `setupResultsFromJSCall`
+  (a JS getter's result) does not; the native call thunks and the VM entry
+  swap.
+- JSValue **arguments** to C go tag first (`JSVALUE_ARGUMENT_WORDS`).
+- The **callee** and **argument count** call frame slots keep their payload at
+  +4 (`callFrameHeaderOffset`).
+- Leopard WebKit keeps the **integer typed arrays little-endian** even on a
+  big-endian Mac, so the JIT uses `lhbrx`/`lwbrx`/`sthbrx`/`stwbrx` for their
+  elements. Getting this wrong hung Speedometer for over an hour.
+
+Test with `jsc`, forcing everything through the JIT
+(`--thresholdForJITAfterWarmUp=1 --thresholdForJITSoon=1`) and comparing
+against `--useJIT=false`.
+
+### What it bought
+
+On jsc micro-benchmarks the JIT is **1.5 to 3.5 times faster** than the
+interpreter (integer loops 3.5x, property access 3x, calls 3x).
+
+On Speedometer 3.1 on the PowerBook G4, the score moved 0.259 (C loop) ->
+0.261 (native interpreter) -> **0.271** (JIT), against PowerFox 26.4's 0.189.
+The JavaScript-heavy suites gained 15-29% (Charts-observable-plot, Perf
+Dashboard, Stockcharts, TipTap), but Speedometer mostly measures **style,
+layout and painting**, where the JIT changes nothing.
+
+### Where the remaining time goes (profiles on the G4)
+
+| Suite | Main-thread time |
+|---|---|
+| TodoMVC-JavaScript-ES5 | layout 70%, of which AppKit repaint invalidation 18%; JavaScript ~0% |
+| The Complex-DOM suites | style and layout over the whole big DOM; per-layout walks of every RenderLayer |
+| Charts-chartjs | about 60% Core Graphics rasterizing antialiased paths, 29% JavaScript |
+
+Three fixes came out of those profiles (commit "WebCore: cheaper repaints,
+selection gaps and custom properties"): repaints handed to AppKit once per run
+loop pass (**+10% on ES5**), selection changes no longer walking every layer,
+and custom property resolution touching only the properties an element sets
+(this one speeds up loading such pages, not the measured part).
+
+### To beat PowerFox on every suite
+
+Still losing six of twenty. In order of how much they need:
+
+1. **Charts-chartjs** (needs 51%): Core Graphics path rasterization. Would need
+   canvas-level work, e.g. drawing axis-aligned hairlines as rectangles, and a
+   faster path for Chart.js's `Object.assign` loops.
+2. **ES6-Webpack-Complex-DOM** (30%), **Svelte** (25%), **ES5** (11%),
+   **Preact** (15%), **Angular** (8%).
+
+The Complex-DOM losses share one cause: a small DOM change relayouts the whole
+page, and every layout walks every RenderLayer (`updateLayerPosition`,
+geometry maps, repaint rectangles). Gecko reflows only dirty subtrees. The
+fixes worth trying, in order: relayout boundaries so the TodoMVC app doesn't
+drag the big DOM into its layout; layer position updates only for layers whose
+renderers moved; and cheaper repaint rectangle computation.
+
