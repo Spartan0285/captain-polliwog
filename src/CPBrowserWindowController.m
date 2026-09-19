@@ -17,8 +17,11 @@
 #import "CPSiteSettings.h"
 #import "CPSettings.h"
 #import "CPDebugSnapshot.h"
+#import "CPTitleBarView.h"
 #import <WebKit/WebKit.h>
 
+// The single top row: the window's buttons and the toolbar, over the title
+// bar and the top of the content view.
 #define CPBarHeight     38.0f
 #define CPTabBarHeight  22.0f
 #define CPStatusHeight  20.0f
@@ -27,6 +30,7 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 
 @interface CPBrowserWindowController (Private)
 - (NSButton *)addButtonWithImage:(NSImage *)image frame:(NSRect)frame action:(SEL)action toolTip:(NSString *)toolTip;
+- (NSButton *)addButtonWithImage:(NSImage *)image frame:(NSRect)frame action:(SEL)action toolTip:(NSString *)toolTip toView:(NSView *)view;
 - (NSBox *)addSeparatorWithFrame:(NSRect)frame autoresizingMask:(unsigned int)mask;
 - (void)buildInterface;
 - (void)showSelectedTab;
@@ -42,6 +46,12 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 
 - (NSButton *)addButtonWithImage:(NSImage *)image frame:(NSRect)frame action:(SEL)action toolTip:(NSString *)toolTip
 {
+    return [self addButtonWithImage:image frame:frame action:action toolTip:toolTip
+                             toView:[[self window] contentView]];
+}
+
+- (NSButton *)addButtonWithImage:(NSImage *)image frame:(NSRect)frame action:(SEL)action toolTip:(NSString *)toolTip toView:(NSView *)view
+{
     NSButton *button = [[NSButton alloc] initWithFrame:frame];
     // Plain icons, as Safari's toolbar has had since version 7.
     [button setBordered:NO];
@@ -52,7 +62,7 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [button setAction:action];
     [button setToolTip:toolTip];
     [button setAutoresizingMask:NSViewMinYMargin];
-    [[[self window] contentView] addSubview:button];
+    [view addSubview:button];
     [button release];
     return button;
 }
@@ -73,39 +83,57 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     NSRect bounds = [content bounds];
     float width = NSWidth(bounds);
     float height = NSHeight(bounds);
-    float tabBarTop = height - CPBarHeight - 1.0f;
     NSFont *smallFont = [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
+    NSView *frameView = [content superview];
+    // The standard title bar's height: the bar covers it and this much more.
+    float overlap = CPBarHeight - (NSHeight([frameView bounds]) - NSMaxY([content frame]));
+    float tabBarTop = height - overlap;
+    CPTitleBarView *bar = [CPTitleBarView installInWindow:[self window] height:CPBarHeight];
+    float barWidth = NSWidth([bar bounds]);
+    float left = [bar windowButtonsMaxX] + 12.0f;
+    float buttonY = floorf((CPBarHeight - 24.0f) / 2.0f);
 
-    // Safari's layout: back and forward; the address bar with the site's
-    // icon, Favorites, page settings and reload inside it; share, downloads
-    // and a new tab at the right.
+    [(CPUnifiedContentView *)content setOverlap:overlap];
+
+    // Safari's layout, in one row with the window's buttons: back and
+    // forward; the address bar with the site's icon, Favorites, page
+    // settings and reload inside it; share, downloads and a new tab at the
+    // right.
     backButton = [self addButtonWithImage:[CPIcons backImage]
-                                    frame:NSMakeRect(10.0f, height - 31.0f, 26.0f, 24.0f)
+                                    frame:NSMakeRect(left, buttonY, 26.0f, 24.0f)
                                    action:@selector(goBack:)
-                                  toolTip:@"Back"];
+                                  toolTip:@"Back"
+                                   toView:bar];
     forwardButton = [self addButtonWithImage:[CPIcons forwardImage]
-                                       frame:NSMakeRect(38.0f, height - 31.0f, 26.0f, 24.0f)
+                                       frame:NSMakeRect(left + 28.0f, buttonY, 26.0f, 24.0f)
                                       action:@selector(goForward:)
-                                     toolTip:@"Forward"];
+                                     toolTip:@"Forward"
+                                      toView:bar];
     newTabButton = [self addButtonWithImage:[CPIcons plusImage]
-                                      frame:NSMakeRect(width - 34.0f, height - 31.0f, 26.0f, 24.0f)
+                                      frame:NSMakeRect(barWidth - 34.0f, buttonY, 26.0f, 24.0f)
                                      action:@selector(newTab:)
-                                    toolTip:@"New Tab"];
+                                    toolTip:@"New Tab"
+                                     toView:bar];
     downloadsButton = [self addButtonWithImage:[CPIcons downloadsImage]
-                                         frame:NSMakeRect(width - 62.0f, height - 31.0f, 26.0f, 24.0f)
+                                         frame:NSMakeRect(barWidth - 62.0f, buttonY, 26.0f, 24.0f)
                                         action:@selector(showDownloads:)
-                                       toolTip:@"Downloads"];
+                                       toolTip:@"Downloads"
+                                        toView:bar];
     shareButton = [self addButtonWithImage:[CPIcons shareImage]
-                                     frame:NSMakeRect(width - 90.0f, height - 31.0f, 26.0f, 24.0f)
+                                     frame:NSMakeRect(barWidth - 90.0f, buttonY, 26.0f, 24.0f)
                                     action:@selector(showShareMenu:)
-                                   toolTip:@"Share"];
-    [newTabButton setAutoresizingMask:(NSViewMinXMargin | NSViewMinYMargin)];
-    [downloadsButton setAutoresizingMask:(NSViewMinXMargin | NSViewMinYMargin)];
-    [shareButton setAutoresizingMask:(NSViewMinXMargin | NSViewMinYMargin)];
+                                   toolTip:@"Share"
+                                    toView:bar];
+    [backButton setAutoresizingMask:NSViewNotSizable];
+    [forwardButton setAutoresizingMask:NSViewNotSizable];
+    [newTabButton setAutoresizingMask:NSViewMinXMargin];
+    [downloadsButton setAutoresizingMask:NSViewMinXMargin];
+    [shareButton setAutoresizingMask:NSViewMinXMargin];
 
-    addressBar = [[CPAddressBar alloc] initWithFrame:NSMakeRect(72.0f, height - 32.0f, width - 72.0f - 98.0f, 26.0f)];
-    [addressBar setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
-    [content addSubview:addressBar];
+    addressBar = [[CPAddressBar alloc] initWithFrame:NSMakeRect(left + 64.0f, floorf((CPBarHeight - 26.0f) / 2.0f),
+                                                                barWidth - (left + 64.0f) - 98.0f, 26.0f)];
+    [addressBar setAutoresizingMask:NSViewWidthSizable];
+    [bar addSubview:addressBar];
     [addressBar release];
     addressField = [addressBar textField];
     [addressField setTarget:self];
@@ -117,9 +145,6 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [[addressBar favoriteButton] setAction:@selector(toggleFavorite:)];
     [[addressBar pageButton] setTarget:self];
     [[addressBar pageButton] setAction:@selector(showPageMenu:)];
-
-    [self addSeparatorWithFrame:NSMakeRect(0.0f, tabBarTop, width, 1.0f)
-               autoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
 
     tabBar = [[CPTabBarView alloc] initWithFrame:NSMakeRect(0.0f, tabBarTop - CPTabBarHeight,
                                                             width, CPTabBarHeight)];
@@ -305,6 +330,12 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
                                                        defer:YES];
     [window setReleasedWhenClosed:NO];
     [window setMinSize:NSMakeSize(420.0f, 300.0f)];
+    {
+        // Leaves the band under the single top row to CPTitleBarView.
+        CPUnifiedContentView *content = [[CPUnifiedContentView alloc] initWithFrame:[[window contentView] frame]];
+        [window setContentView:content];
+        [content release];
+    }
     [window setTitle:@"Captain Polliwog"];
     [window center];
 
