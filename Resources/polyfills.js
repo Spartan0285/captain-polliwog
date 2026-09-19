@@ -401,6 +401,122 @@
         });
     }
 
+    /* Intl.NumberFormat with style "unit" and notation "compact" or
+       "scientific", which older engines reject or ignore. The number itself
+       is formatted natively; the unit or suffix is added here. */
+    (function () {
+        if (typeof Intl !== "object" || typeof Intl.NumberFormat !== "function")
+            return;
+        var Native = Intl.NumberFormat;
+        var hasUnit = true, hasCompact = false;
+        try { new Native("en", { style: "unit", unit: "kilometer" }); } catch (e) { hasUnit = false; }
+        try { hasCompact = new Native("en", { notation: "compact" }).format(1500) !== "1,500"; } catch (e) { }
+        if (hasUnit && hasCompact)
+            return;
+
+        var shortUnits = {
+            acre: "ac", bit: "bit", byte: "byte", celsius: "°C", centimeter: "cm", day: "day", degree: "deg",
+            fahrenheit: "°F", foot: "ft", gallon: "gal", gigabit: "Gb", gigabyte: "GB", gram: "g", hectare: "ha",
+            hour: "hr", inch: "in", kilobit: "kb", kilobyte: "kB", kilogram: "kg", kilometer: "km", liter: "L",
+            megabit: "Mb", megabyte: "MB", meter: "m", mile: "mi", milliliter: "mL", millimeter: "mm",
+            millisecond: "ms", minute: "min", month: "mth", ounce: "oz", percent: "%", petabyte: "PB",
+            pound: "lb", second: "sec", stone: "st", terabit: "Tb", terabyte: "TB", week: "wk", yard: "yd", year: "yr"
+        };
+        var narrowUnits = { percent: "%", celsius: "°C", fahrenheit: "°", kilometer: "km", meter: "m", second: "s", minute: "m", hour: "h", day: "d" };
+
+        function unitLabel(unit, display, value) {
+            var parts = String(unit).split("-per-");
+            var label = function (u) {
+                if (display === "long")
+                    return u + (Math.abs(value) === 1 ? "" : "s");
+                if (display === "narrow" && narrowUnits[u])
+                    return narrowUnits[u];
+                return shortUnits[u] || u;
+            };
+            return parts.length === 2 ? label(parts[0]) + "/" + (shortUnits[parts[1]] || parts[1]) : label(parts[0]);
+        }
+
+        function NumberFormat(locales, options) {
+            if (!(this instanceof NumberFormat))
+                return new NumberFormat(locales, options);
+            options = options || {};
+            var nativeOptions = {}, key;
+            for (key in options)
+                nativeOptions[key] = options[key];
+            var unit = null, notation = options.notation || "standard";
+            if (options.style === "unit" && !hasUnit) {
+                unit = options.unit;
+                if (!unit)
+                    throw new TypeError("The unit option is required with style: unit");
+                nativeOptions.style = "decimal";
+                delete nativeOptions.unit;
+                delete nativeOptions.unitDisplay;
+            }
+            delete nativeOptions.notation;
+            delete nativeOptions.compactDisplay;
+            var native = new Native(locales, nativeOptions);
+            var formatNumber = function (value) {
+                value = Number(value);
+                var text;
+                if (notation === "compact" && !hasCompact && isFinite(value)) {
+                    var abs = Math.abs(value), suffixes = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]], i;
+                    text = null;
+                    for (i = 0; i < suffixes.length; i++) {
+                        if (abs >= suffixes[i][0]) {
+                            var scaled = value / suffixes[i][0];
+                            var digits = options.maximumFractionDigits !== undefined ? options.maximumFractionDigits : (Math.abs(scaled) < 100 ? 1 : 0);
+                            text = new Native(locales, { maximumFractionDigits: digits }).format(scaled) + suffixes[i][1];
+                            break;
+                        }
+                    }
+                    if (text === null)
+                        text = new Native(locales, { maximumFractionDigits: options.maximumFractionDigits !== undefined ? options.maximumFractionDigits : 0 }).format(value);
+                } else if ((notation === "scientific" || notation === "engineering") && isFinite(value) && value !== 0) {
+                    var exponent = Math.floor(Math.log(Math.abs(value)) / Math.LN10);
+                    if (notation === "engineering")
+                        exponent -= ((exponent % 3) + 3) % 3;
+                    text = native.format(value / Math.pow(10, exponent)) + "E" + exponent;
+                } else
+                    text = native.format(value);
+                if (unit !== null) {
+                    var label = unitLabel(unit, options.unitDisplay || "short", value);
+                    text = unit === "percent" && options.unitDisplay !== "long" ? text + label : text + " " + label;
+                }
+                return text;
+            };
+            // format is a bound function, as the spec has it: pages pass it around.
+            // (Defined, not assigned: the prototype's format is a getter.)
+            Object.defineProperty(this, "format", { value: formatNumber, configurable: true, writable: true });
+            Object.defineProperty(this, "formatToParts", { value: function (value) {
+                return [{ type: "literal", value: formatNumber(value) }];
+            }, configurable: true, writable: true });
+            Object.defineProperty(this, "resolvedOptions", { value: function () {
+                var resolved = native.resolvedOptions();
+                if (unit !== null) {
+                    resolved.style = "unit";
+                    resolved.unit = unit;
+                    resolved.unitDisplay = options.unitDisplay || "short";
+                }
+                resolved.notation = notation;
+                return resolved;
+            }, configurable: true, writable: true });
+        }
+        NumberFormat.prototype = Native.prototype;
+        NumberFormat.supportedLocalesOf = Native.supportedLocalesOf;
+        try {
+            Object.defineProperty(Intl, "NumberFormat", { value: NumberFormat, writable: true, configurable: true });
+        } catch (e) {
+            return;
+        }
+
+        var nativeToLocaleString = Number.prototype.toLocaleString;
+        Number.prototype.toLocaleString = function toLocaleString(locales, options) {
+            if (options && ((options.style === "unit" && !hasUnit) || (options.notation && options.notation !== "standard")))
+                return new NumberFormat(locales, options).format(this);
+            return nativeToLocaleString.apply(this, arguments);
+        };
+    })();
+
     if (typeof Intl === "object" && !Intl.PluralRules) {
         // English plural rules, enough for pages that only choose between
         // "one" and "other".
@@ -1060,5 +1176,192 @@
         global.IntersectionObserverEntry = function IntersectionObserverEntry() {};
         global.IntersectionObserverEntry.prototype.isIntersecting = false;
         global.IntersectionObserverEntry.prototype.intersectionRatio = 0;
+    })();
+
+    /* Constructable style sheets: new CSSStyleSheet(), replace() and
+       replaceSync(), and adoptedStyleSheets on documents and shadow roots
+       (Safari 16.4). Each adopted sheet is shown as a <style> element in the
+       root, which the engine parses once per distinct text; replaceSync()
+       updates them all, and a root whose contents are replaced gets them
+       back. */
+    (function () {
+        var NativeSheet = global.CSSStyleSheet;
+        if (!NativeSheet || !global.document)
+            return;
+        try {
+            new NativeSheet();
+            return;
+        } catch (e) {
+        }
+        var marker = "data-polliwog-adopted";
+
+        function refresh(sheet) {
+            var owners = sheet.__polliwogOwners;
+            for (var i = 0; i < owners.length; i++) {
+                if (owners[i].textContent !== sheet.__polliwogText)
+                    owners[i].textContent = sheet.__polliwogText;
+                owners[i].disabled = sheet.disabled;
+            }
+        }
+
+        var CSSStyleSheet = function CSSStyleSheet(options) {
+            var sheet = this;
+            Object.defineProperty(sheet, "__polliwogText", { value: "", writable: true });
+            Object.defineProperty(sheet, "__polliwogRules", { value: [], writable: true });
+            Object.defineProperty(sheet, "__polliwogOwners", { value: [], writable: true });
+            var media = options && options.media ? String(options.media) : "";
+            var disabled = !!(options && options.disabled);
+            Object.defineProperty(sheet, "disabled", {
+                get: function () { return disabled; },
+                set: function (value) { disabled = !!value; refresh(sheet); },
+                configurable: true
+            });
+            Object.defineProperty(sheet, "media", { value: { mediaText: media, length: media ? 1 : 0 }, configurable: true });
+            Object.defineProperty(sheet, "cssRules", {
+                get: function () {
+                    var owner = sheet.__polliwogOwners[0];
+                    if (owner && owner.sheet)
+                        return owner.sheet.cssRules;
+                    return sheet.__polliwogRules.map(function (text) { return { cssText: text }; });
+                },
+                configurable: true
+            });
+            Object.defineProperty(sheet, "rules", { get: function () { return sheet.cssRules; }, configurable: true });
+            Object.defineProperty(sheet, "ownerNode", { value: null, configurable: true });
+            Object.defineProperty(sheet, "href", { value: null, configurable: true });
+            Object.defineProperty(sheet, "type", { value: "text/css", configurable: true });
+            var setText = function (text) {
+                // @import isn't allowed in constructed sheets.
+                sheet.__polliwogText = String(text).replace(/@import[^;]*;/g, "");
+                sheet.__polliwogRules = sheet.__polliwogText ? [sheet.__polliwogText] : [];
+                refresh(sheet);
+            };
+            Object.defineProperty(sheet, "replaceSync", { value: function replaceSync(text) { setText(text); }, configurable: true, writable: true });
+            Object.defineProperty(sheet, "replace", {
+                value: function replace(text) {
+                    try {
+                        setText(text);
+                        return Promise.resolve(sheet);
+                    } catch (e) {
+                        return Promise.reject(e);
+                    }
+                },
+                configurable: true, writable: true
+            });
+            Object.defineProperty(sheet, "insertRule", {
+                value: function insertRule(rule, index) {
+                    var rules = sheet.__polliwogRules.slice();
+                    index = index === undefined ? 0 : Math.max(0, Math.min(Number(index) || 0, rules.length));
+                    rules.splice(index, 0, String(rule));
+                    sheet.__polliwogRules = rules;
+                    sheet.__polliwogText = rules.join("\n");
+                    refresh(sheet);
+                    return index;
+                },
+                configurable: true, writable: true
+            });
+            Object.defineProperty(sheet, "deleteRule", {
+                value: function deleteRule(index) {
+                    var rules = sheet.__polliwogRules.slice();
+                    rules.splice(Number(index) || 0, 1);
+                    sheet.__polliwogRules = rules;
+                    sheet.__polliwogText = rules.join("\n");
+                    refresh(sheet);
+                },
+                configurable: true, writable: true
+            });
+        };
+        CSSStyleSheet.prototype = NativeSheet.prototype;
+        global.CSSStyleSheet = CSSStyleSheet;
+
+        function isConstructed(sheet) {
+            return sheet && Object.prototype.hasOwnProperty.call(sheet, "__polliwogText");
+        }
+
+        function render(root) {
+            var host = root.nodeType === 9 ? (root.head || root.documentElement) : root;
+            var old = root.__polliwogStyles || [];
+            for (var i = 0; i < old.length; i++) {
+                var owners = old[i].__polliwogSheet.__polliwogOwners;
+                var at = owners.indexOf(old[i]);
+                if (at !== -1)
+                    owners.splice(at, 1);
+                if (old[i].parentNode)
+                    old[i].parentNode.removeChild(old[i]);
+            }
+            var styles = [];
+            var sheets = root.__polliwogAdopted || [];
+            for (var j = 0; j < sheets.length; j++) {
+                var sheet = sheets[j];
+                if (!isConstructed(sheet))
+                    throw new TypeError("Only constructed style sheets can be adopted");
+                var style = root.nodeType === 9 ? root.createElement("style") : (root.ownerDocument || document).createElement("style");
+                style.setAttribute(marker, "");
+                if (sheet.media.mediaText)
+                    style.setAttribute("media", sheet.media.mediaText);
+                style.textContent = sheet.__polliwogText;
+                Object.defineProperty(style, "__polliwogSheet", { value: sheet });
+                sheet.__polliwogOwners.push(style);
+                styles.push(style);
+                if (host)
+                    host.appendChild(style);
+                style.disabled = sheet.disabled;
+            }
+            Object.defineProperty(root, "__polliwogStyles", { value: styles, writable: true, configurable: true });
+            watch(root);
+        }
+
+        // A shadow root whose innerHTML is set loses the styles; put them back.
+        function watch(root) {
+            if (root.nodeType === 9 || root.__polliwogWatcher || typeof MutationObserver !== "function")
+                return;
+            var observer = new MutationObserver(function () {
+                var styles = root.__polliwogStyles || [];
+                for (var i = 0; i < styles.length; i++) {
+                    if (styles[i].parentNode !== root) {
+                        for (var k = 0; k < styles.length; k++)
+                            root.appendChild(styles[k]);
+                        return;
+                    }
+                }
+            });
+            observer.observe(root, { childList: true });
+            Object.defineProperty(root, "__polliwogWatcher", { value: observer });
+        }
+
+        function adoptedList(root) {
+            var list = root.__polliwogAdopted || [];
+            if (typeof Proxy !== "function")
+                return list.slice();
+            // An array the page may push to, as with the real observable array.
+            return new Proxy(list, {
+                set: function (target, property, value) {
+                    target[property] = value;
+                    render(root);
+                    return true;
+                },
+                deleteProperty: function (target, property) {
+                    delete target[property];
+                    render(root);
+                    return true;
+                }
+            });
+        }
+
+        function defineAdopted(proto) {
+            if (!proto || Object.getOwnPropertyDescriptor(proto, "adoptedStyleSheets"))
+                return;
+            Object.defineProperty(proto, "adoptedStyleSheets", {
+                get: function () { return adoptedList(this); },
+                set: function (sheets) {
+                    var list = Array.prototype.slice.call(sheets || []);
+                    Object.defineProperty(this, "__polliwogAdopted", { value: list, writable: true, configurable: true });
+                    render(this);
+                },
+                configurable: true
+            });
+        }
+        defineAdopted(global.ShadowRoot && ShadowRoot.prototype);
+        defineAdopted(global.Document && Document.prototype);
     })();
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);

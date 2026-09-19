@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<!-- Constructable style sheets and Intl unit formatting, which the app's
+     polyfills add. window.polyfillResults lists the checks. -->
+<html>
+<head><meta charset="utf-8"><title>Polyfills</title></head>
+<body>
+<div id="host"></div>
+<p id="plain">plain</p>
+<script>
+var r = [];
+function check(name, ok) { r.push((ok ? "ok " : "FAIL ") + name); }
+try {
+    var sheet = new CSSStyleSheet();
+    sheet.replaceSync(":host { display: block; color: rgb(0, 128, 0); } .x { color: rgb(255, 0, 0); }");
+    var host = document.getElementById("host");
+    var root = host.attachShadow({ mode: "open" });
+    root.adoptedStyleSheets = [sheet];
+    root.innerHTML = '<span class="x">x</span>';
+    check("instanceof", sheet instanceof CSSStyleSheet);
+    var docSheet = new CSSStyleSheet();
+    docSheet.replaceSync("#plain { color: rgb(0, 0, 255); }");
+    document.adoptedStyleSheets = [docSheet];
+    check("adopted in document", getComputedStyle(document.getElementById("plain")).color === "rgb(0, 0, 255)");
+    docSheet.replaceSync("#plain { color: rgb(1, 2, 3); }");
+    check("replaceSync updates", getComputedStyle(document.getElementById("plain")).color === "rgb(1, 2, 3)");
+    check("adopted list", document.adoptedStyleSheets.length === 1 && document.adoptedStyleSheets[0] === docSheet);
+} catch (e) { check("constructable sheets threw " + e, false); }
+setTimeout(function () {
+    try {
+        var span = document.getElementById("host").shadowRoot.querySelector(".x");
+        check("adopted in shadow root", getComputedStyle(document.getElementById("host")).color === "rgb(0, 128, 0)");
+        check("styles survive innerHTML", getComputedStyle(span).color === "rgb(255, 0, 0)");
+    } catch (e) { check("survive threw " + e, false); }
+    try {
+        check("unit format", new Intl.NumberFormat("en-US", { style: "unit", unit: "kilometer" }).format(12) === "12 km");
+        check("compact", new Intl.NumberFormat("en-US", { notation: "compact" }).format(1500) === "1.5K");
+        check("bound format", [1000, 2000].map(new Intl.NumberFormat("en-US").format).join("|") === "1,000|2,000");
+        check("toLocaleString unit", (5).toLocaleString("en-US", { style: "unit", unit: "percent" }) === "5%");
+        check("plain still native", new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(3) === "$3.00");
+    } catch (e) { check("intl threw " + e, false); }
+    window.polyfillResults = r.join(", ");
+}, 50);
+</script>
+</body>
+</html>
