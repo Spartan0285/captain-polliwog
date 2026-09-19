@@ -26,6 +26,9 @@ extern NSString * const CPSiteModesDidChangeNotification;
 
 // The mode to use for a page: the site's own choice, or the default.
 + (CPSiteMode)modeForURL:(NSURL *)url;
+// What a site gets without a choice of its own: the default, or the
+// browser's own pick for a few sites (YouTube: Mobile).
++ (CPSiteMode)defaultModeForURL:(NSURL *)url;
 // Whether the site has a choice of its own.
 + (BOOL)hasModeForURL:(NSURL *)url;
 + (void)setMode:(CPSiteMode)mode forURL:(NSURL *)url;

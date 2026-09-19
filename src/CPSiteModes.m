@@ -137,6 +137,31 @@ static int CPWebKitMajorVersion(void)
     return CPStoredMode([[NSUserDefaults standardUserDefaults] dictionaryForKey:CPSiteModesKey], key) != nil;
 }
 
+// Sites whose desktop version is too much for these Macs, or doesn't work
+// on their engines, where the mobile one does: YouTube's desktop app never
+// shows anything, its mobile site works. Below the person's own choice
+// for a site, above the default for all sites.
+static NSDictionary *CPBuiltInSiteModes(void)
+{
+    static NSDictionary *modes = nil;
+    if (modes == nil)
+        modes = [[NSDictionary alloc] initWithObjectsAndKeys:
+                 [NSNumber numberWithInt:CPSiteModeMobile], @"youtube.com",
+                 nil];
+    return modes;
+}
+
++ (CPSiteMode)defaultModeForURL:(NSURL *)url
+{
+    NSString *key = CPSiteKey(url);
+    NSNumber *mode = key != nil ? CPStoredMode(CPBuiltInSiteModes(), key) : nil;
+    CPSiteMode defaultMode = [self defaultMode];
+    // A default of Mobile or Basic for every site already goes further.
+    if (mode == nil || defaultMode != CPSiteModeDesktop)
+        return defaultMode;
+    return (CPSiteMode)[mode intValue];
+}
+
 + (CPSiteMode)modeForURL:(NSURL *)url
 {
     NSString *key = CPSiteKey(url);
@@ -148,7 +173,7 @@ static int CPWebKitMajorVersion(void)
     if (mode == nil)
         mode = CPStoredMode([[NSUserDefaults standardUserDefaults] dictionaryForKey:CPSiteModesKey], key);
     if (mode == nil)
-        return [self defaultMode];
+        return [self defaultModeForURL:url];
     return (CPSiteMode)[mode intValue];
 }
 

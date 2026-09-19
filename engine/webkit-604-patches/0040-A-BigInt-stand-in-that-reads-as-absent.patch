@@ -1,0 +1,77 @@
+From 107908f07e6edc9e92a3b687bdfb612dc73d0580 Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Fri, 18 Sep 2026 20:15:15 -0400
+Subject: [PATCH 40/40] A BigInt stand-in that reads as absent
+
+typeof BigInt is "undefined" (it masquerades, as document.all does), so
+code that checks takes its no-BigInt path; calling it anyway returns a
+plain number. YouTube's player calls it unconditionally at load and
+stopped at the ReferenceError.
+---
+ .../JavaScriptCore/runtime/JSGlobalObject.cpp | 43 +++++++++++++++++++
+ 1 file changed, 43 insertions(+)
+
+diff --git a/Source/JavaScriptCore/runtime/JSGlobalObject.cpp b/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
+index a6f998ac..e96f9fdb 100644
+--- a/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
++++ b/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
+@@ -239,6 +239,46 @@ static EncodedJSValue JSC_HOST_CALL hasOwnLengthProperty(ExecState* exec)
+ 
+ namespace JSC {
+ 
++// BigInt, which this engine lacks, as document.all is: typeof BigInt is
++// "undefined" and it compares equal to undefined, so code that checks for
++// it takes its path for engines without it; but a script that calls it
++// regardless (YouTube's player does, at load) gets a plain number back
++// instead of stopping at a ReferenceError.
++static EncodedJSValue JSC_HOST_CALL callBigIntStub(ExecState* exec)
++{
++    return JSValue::encode(jsNumber(exec->argument(0).toNumber(exec)));
++}
++
++class BigIntStub final : public InternalFunction {
++public:
++    typedef InternalFunction Base;
++    static const unsigned StructureFlags = Base::StructureFlags | MasqueradesAsUndefined;
++
++    static BigIntStub* create(VM& vm, JSGlobalObject* globalObject)
++    {
++        Structure* structure = Structure::create(vm, globalObject, globalObject->functionPrototype(), TypeInfo(ObjectType, StructureFlags), info());
++        BigIntStub* stub = new (NotNull, allocateCell<BigIntStub>(vm.heap)) BigIntStub(vm, structure);
++        stub->finishCreation(vm, ASCIILiteral("BigInt"));
++        return stub;
++    }
++
++    DECLARE_INFO;
++
++    static CallType getCallData(JSCell*, CallData& callData)
++    {
++        callData.native.function = callBigIntStub;
++        return CallType::Host;
++    }
++
++private:
++    BigIntStub(VM& vm, Structure* structure)
++        : Base(vm, structure)
++    {
++    }
++};
++
++const ClassInfo BigIntStub::s_info = { "Function", &Base::s_info, nullptr, nullptr, CREATE_METHOD_TABLE(BigIntStub) };
++
+ const ClassInfo JSGlobalObject::s_info = { "GlobalObject", &Base::s_info, &globalObjectTable, nullptr, CREATE_METHOD_TABLE(JSGlobalObject) };
+ 
+ const GlobalObjectMethodTable JSGlobalObject::s_globalObjectMethodTable = {
+@@ -715,6 +755,9 @@ putDirectWithoutTransition(vm, vm.propertyNames-> jsName, lowerName ## Construct
+     if (Options::exposeInternalModuleLoader())
+         putDirectWithoutTransition(vm, vm.propertyNames->Loader, m_moduleLoader.get(), DontEnum);
+ 
++    masqueradesAsUndefinedWatchpoint()->fireAll(vm, "BigInt stand-in");
++    putDirectWithoutTransition(vm, Identifier::fromString(&vm, "BigInt"), BigIntStub::create(vm, this), DontEnum);
++
+     JSFunction* builtinLog = JSFunction::create(vm, this, 1, vm.propertyNames->emptyIdentifier.string(), globalFuncBuiltinLog);
+ 
+     JSFunction* privateFuncAbs = JSFunction::create(vm, this, 0, String(), mathProtoFuncAbs, AbsIntrinsic);
+-- 
+2.50.1 (Apple Git-155)
+

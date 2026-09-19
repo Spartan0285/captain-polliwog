@@ -236,6 +236,16 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         [[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugShowBookmarks"])
         return;
     CPWriteWindowSnapshot([self window]);
+
+    // CPDebugScript: JavaScript to run in the page, its result logged, for
+    // looking inside pages the test scripts load.
+    {
+        NSString *script = [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugScript"];
+        if (script != nil && ![selectedTab isDiscarded]) {
+            NSString *result = [[selectedTab webView] stringByEvaluatingJavaScriptFromString:script];
+            NSLog(@"Captain Polliwog: script result: %@", result);
+        }
+    }
 }
 
 @end
@@ -578,7 +588,7 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         BOOL own = applies && [CPSiteModes hasModeForURL:site];
         if ([item tag] < 0) {
             [item setTitle:[NSString stringWithFormat:@"Use Default (%@)",
-                            [CPSiteModes nameForMode:[CPSiteModes defaultMode]]]];
+                            [CPSiteModes nameForMode:[CPSiteModes defaultModeForURL:site]]]];
             [item setState:(applies && !own) ? NSOnState : NSOffState];
         } else {
             [item setState:(own && (int)[CPSiteModes modeForURL:site] == [item tag]) ? NSOnState : NSOffState];
