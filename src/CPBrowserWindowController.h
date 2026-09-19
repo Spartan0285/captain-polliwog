@@ -7,11 +7,15 @@
 @class CPTab;
 @class CPTabBarView;
 @class CPAddressBar;
+@class CPFindBar;
 
 // A browser window: the toolbar, a tab bar, the selected tab's page, and a
 // status bar. Everything about an individual page lives in CPTab.
 @interface CPBrowserWindowController : NSWindowController
 {
+    CPFindBar           *findBar;           // nil until first shown
+    BOOL                 findBarVisible;
+    NSMutableArray      *closedTabURLs;     // most recent last, for Reopen Closed Tab
     NSMutableArray      *tabs;
     CPTab               *selectedTab;
     CPTabBarView        *tabBar;
@@ -65,5 +69,13 @@
 - (IBAction)closeCurrentTab:(id)sender;
 - (IBAction)selectNextTab:(id)sender;
 - (IBAction)selectPreviousTab:(id)sender;
+- (IBAction)showFindBar:(id)sender;
+- (IBAction)hideFindBar:(id)sender;
+- (IBAction)findNext:(id)sender;
+- (IBAction)findPrevious:(id)sender;
+- (IBAction)useSelectionForFind:(id)sender;
+- (IBAction)printPage:(id)sender;
+- (IBAction)savePageAs:(id)sender;
+- (IBAction)reopenClosedTab:(id)sender;
 
 @end

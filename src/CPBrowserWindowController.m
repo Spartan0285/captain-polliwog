@@ -18,13 +18,22 @@
 #import "CPSettings.h"
 #import "CPDebugSnapshot.h"
 #import "CPTitleBarView.h"
+#import "CPFindBar.h"
 #import <WebKit/WebKit.h>
+
+// In WebKit since Safari 3 (and Tiger's Safari 4 WebKit), but not declared
+// in the 10.4 SDK.
+@interface WebFrameView (CPPrinting)
+- (NSPrintOperation *)printOperationWithPrintInfo:(NSPrintInfo *)printInfo;
+@end
 
 // The single top row: the window's buttons and the toolbar, over the title
 // bar and the top of the content view.
 #define CPBarHeight     38.0f
 #define CPTabBarHeight  22.0f
 #define CPStatusHeight  20.0f
+#define CPFindBarHeight 28.0f
+#define CPClosedTabsKept 20
 
 static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?q=%@";
 
@@ -203,6 +212,8 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         [pageArea addSubview:page];
     }
     selectedWasLoading = [selectedTab isLoading];
+    if (findBarVisible)
+        [findBar refreshMatches];
     [self updateChromeForSelectedTab];
     [tabBar setNeedsDisplay:YES];
 }
@@ -300,6 +311,16 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     // no password).
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugAutoFill"] && ![selectedTab isDiscarded])
         [CPAutoFill fillFormInTab:selectedTab];
+    // CPDebugFind: open the find bar searching for this string.
+    {
+        NSString *find = [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugFind"];
+        if (find != nil && ![selectedTab isDiscarded]) {
+            [self showFindBar:self];
+            [findBar setSearchString:find];
+            [findBar refreshMatches];
+            [[self window] display];
+        }
+    }
     CPWriteWindowSnapshot([self window]);
 
     // CPDebugScript: JavaScript to run in the page, its result logged, for
@@ -345,6 +366,7 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         return nil;
 
     tabs = [[NSMutableArray alloc] init];
+    closedTabURLs = [[NSMutableArray alloc] init];
     [window setDelegate:self];
     [self buildInterface];
     downloadsProgressStep = -2;
@@ -358,6 +380,9 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [tabs release];
+    [closedTabURLs release];
+    if (!findBarVisible)
+        [findBar release];
     [super dealloc];
 }
 
@@ -418,6 +443,11 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     }
 
     [[tab retain] autorelease];
+    if ([tab URL] != nil && ![[tab URL] isEqual:[CPAppDelegate startPageURL]]) {
+        [closedTabURLs addObject:[tab URL]];
+        if ([closedTabURLs count] > CPClosedTabsKept)
+            [closedTabURLs removeObjectAtIndex:0];
+    }
     [tab close];
     [tabs removeObjectAtIndex:index];
     if (tab == selectedTab) {
@@ -877,6 +907,181 @@ static NSMenuItem *CPMenuItem(NSMenu *menu, NSString *title, SEL action, id targ
         [self selectTab:[tabs objectAtIndex:(index + [tabs count] - 1) % [tabs count]]];
 }
 
+#pragma mark Find, print, save
+
+- (void)setFindBarVisible:(BOOL)visible
+{
+    NSRect pageFrame = [pageArea frame];
+
+    if (visible == findBarVisible)
+        return;
+    if (findBar == nil) {
+        findBar = [[CPFindBar alloc] initWithFrame:NSMakeRect(0.0f, NSMaxY(pageFrame) - CPFindBarHeight,
+                                                              NSWidth(pageFrame), CPFindBarHeight)
+                                             owner:(id <CPFindBarOwner>)self];
+        [findBar setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
+    }
+    if (visible) {
+        [findBar setFrame:NSMakeRect(NSMinX(pageFrame), NSMaxY(pageFrame) - CPFindBarHeight,
+                                     NSWidth(pageFrame), CPFindBarHeight)];
+        pageFrame.size.height -= CPFindBarHeight;
+        [[[self window] contentView] addSubview:findBar];
+        [findBar release];
+    } else {
+        [findBar clearMatches];
+        pageFrame.size.height += CPFindBarHeight;
+        [findBar retain];
+        [findBar removeFromSuperview];
+    }
+    [pageArea setFrame:pageFrame];
+    [pageArea setNeedsDisplay:YES];
+    findBarVisible = visible;
+}
+
+- (WebView *)webViewForFindBar
+{
+    return [selectedTab isDiscarded] ? nil : [selectedTab webView];
+}
+
+- (void)findBarShouldClose
+{
+    [self hideFindBar:self];
+}
+
+- (IBAction)showFindBar:(id)sender
+{
+    [self setFindBarVisible:YES];
+    [[self window] makeFirstResponder:[findBar field]];
+    [[[findBar field] currentEditor] selectAll:self];
+    if ([[findBar searchString] length] > 0)
+        [findBar refreshMatches];
+}
+
+- (IBAction)hideFindBar:(id)sender
+{
+    [self setFindBarVisible:NO];
+    if ([self webViewForFindBar] != nil)
+        [[self window] makeFirstResponder:[self webViewForFindBar]];
+}
+
+- (IBAction)findNext:(id)sender
+{
+    [findBar findForward:YES];
+}
+
+- (IBAction)findPrevious:(id)sender
+{
+    [findBar findForward:NO];
+}
+
+- (IBAction)useSelectionForFind:(id)sender
+{
+    WebView *page = [self webViewForFindBar];
+    NSString *selection = [[page selectedDOMRange] toString];
+
+    if ([selection length] == 0) {
+        NSBeep();
+        return;
+    }
+    if (findBar == nil) {
+        [self setFindBarVisible:YES];
+        [self setFindBarVisible:NO];
+    }
+    [findBar setSearchString:selection];
+    if (findBarVisible)
+        [findBar refreshMatches];
+}
+
+- (IBAction)printPage:(id)sender
+{
+    WebView *page = [self webViewForFindBar];
+    NSPrintInfo *info = [[[NSPrintInfo sharedPrintInfo] copy] autorelease];
+    NSPrintOperation *operation;
+
+    if (page == nil)
+        return;
+    // The page as the site laid it out, fitted to the paper's width.
+    [info setHorizontalPagination:NSFitPagination];
+    [info setHorizontallyCentered:NO];
+    [info setVerticallyCentered:NO];
+    if ([[[page mainFrame] frameView] respondsToSelector:@selector(printOperationWithPrintInfo:)])
+        operation = [[[page mainFrame] frameView] printOperationWithPrintInfo:info];
+    else
+        operation = [NSPrintOperation printOperationWithView:[[[page mainFrame] frameView] documentView] printInfo:info];
+    [operation setShowPanels:YES];
+    [operation runOperationModalForWindow:[self window] delegate:nil didRunSelector:NULL contextInfo:NULL];
+}
+
+- (IBAction)savePageAs:(id)sender
+{
+    WebView *page = [self webViewForFindBar];
+    NSSavePanel *panel = [NSSavePanel savePanel];
+    NSPopUpButton *format = [[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0.0f, 0.0f, 180.0f, 26.0f) pullsDown:NO] autorelease];
+    NSView *accessory = [[[NSView alloc] initWithFrame:NSMakeRect(0.0f, 0.0f, 300.0f, 36.0f)] autorelease];
+    NSTextField *label = [[[NSTextField alloc] initWithFrame:NSMakeRect(0.0f, 10.0f, 104.0f, 17.0f)] autorelease];
+    NSMutableString *title = [NSMutableString stringWithString:([selectedTab displayTitle] != nil ? [selectedTab displayTitle] : @"")];
+
+    if (page == nil)
+        return;
+    // Tiger lacks -stringByReplacingOccurrencesOfString:withString:.
+    [title replaceOccurrencesOfString:@"/" withString:@"-" options:0 range:NSMakeRange(0, [title length])];
+    [label setStringValue:@"Format:"];
+    [label setAlignment:NSRightTextAlignment];
+    [label setBezeled:NO];
+    [label setDrawsBackground:NO];
+    [label setEditable:NO];
+    [format setFrameOrigin:NSMakePoint(110.0f, 5.0f)];
+    [format addItemWithTitle:@"Web Archive"];
+    [format addItemWithTitle:@"Page Source"];
+    [format setTarget:self];
+    [format setAction:@selector(saveFormatChanged:)];
+    [accessory addSubview:label];
+    [accessory addSubview:format];
+    [panel setAccessoryView:accessory];
+    [panel setRequiredFileType:@"webarchive"];
+    [panel setCanSelectHiddenExtension:YES];
+    if ([title length] == 0)
+        [title setString:@"Untitled"];
+    [panel beginSheetForDirectory:nil
+                             file:title
+                   modalForWindow:[self window]
+                    modalDelegate:self
+                   didEndSelector:@selector(savePanelDidEnd:returnCode:contextInfo:)
+                      contextInfo:format];
+}
+
+- (void)saveFormatChanged:(NSPopUpButton *)format
+{
+    NSSavePanel *panel = (NSSavePanel *)[format window];
+    [panel setRequiredFileType:([format indexOfSelectedItem] == 0 ? @"webarchive" : @"html")];
+}
+
+- (void)savePanelDidEnd:(NSSavePanel *)panel returnCode:(int)returnCode contextInfo:(void *)contextInfo
+{
+    NSPopUpButton *format = (NSPopUpButton *)contextInfo;
+    WebDataSource *source = [[[self webViewForFindBar] mainFrame] dataSource];
+    NSData *data = nil;
+
+    if (returnCode != NSOKButton || source == nil)
+        return;
+    if ([format indexOfSelectedItem] == 0)
+        data = [[source webArchive] data];
+    else
+        data = [source data];
+    if (data == nil || ![data writeToFile:[panel filename] atomically:YES])
+        NSRunAlertPanel(@"The page couldn't be saved.", @"Captain Polliwog couldn't write \"%@\".",
+                        @"OK", nil, nil, [[panel filename] lastPathComponent]);
+}
+
+- (IBAction)reopenClosedTab:(id)sender
+{
+    NSURL *url = [[[closedTabURLs lastObject] retain] autorelease];
+    if (url == nil)
+        return;
+    [closedTabURLs removeLastObject];
+    [self addTabWithURL:url select:YES];
+}
+
 - (BOOL)validateMenuItem:(NSMenuItem *)item
 {
     SEL action = [item action];
@@ -894,8 +1099,15 @@ static NSMenuItem *CPMenuItem(NSMenu *menu, NSString *title, SEL action, id targ
         return (page != nil && [page canMakeTextSmaller]);
     if (action == @selector(selectNextTab:) || action == @selector(selectPreviousTab:))
         return ([tabs count] > 1);
-    if (action == @selector(autoFillForm:))
+    if (action == @selector(autoFillForm:) || action == @selector(printPage:) || action == @selector(savePageAs:) ||
+        action == @selector(showFindBar:) || action == @selector(useSelectionForFind:))
         return page != nil;
+    if (action == @selector(findNext:) || action == @selector(findPrevious:))
+        return page != nil && [[findBar searchString] length] > 0;
+    if (action == @selector(hideFindBar:))
+        return findBarVisible;
+    if (action == @selector(reopenClosedTab:))
+        return [closedTabURLs count] > 0;
     if (action == @selector(toggleReader:)) {
         [item setState:[selectedTab isShowingReader] ? NSOnState : NSOffState];
         return [selectedTab isShowingReader] || [selectedTab canShowReader];

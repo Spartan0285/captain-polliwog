@@ -120,6 +120,10 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Close Tab", @selector(closeCurrentTab:), @"w");
     CPAddItem(menu, @"Close Window", @selector(performClose:), @"W");
+    [menu addItem:[NSMenuItem separatorItem]];
+    CPAddItem(menu, @"Save As...", @selector(savePageAs:), @"S");
+    [menu addItem:[NSMenuItem separatorItem]];
+    CPAddItem(menu, @"Print...", @selector(printPage:), @"p");
 
     menu = CPAddSubmenu(mainMenu, @"Edit");
     CPAddItem(menu, @"Undo", @selector(undo:), @"z");
@@ -129,6 +133,18 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     CPAddItem(menu, @"Copy", @selector(copy:), @"c");
     CPAddItem(menu, @"Paste", @selector(paste:), @"v");
     CPAddItem(menu, @"Select All", @selector(selectAll:), @"a");
+    [menu addItem:[NSMenuItem separatorItem]];
+    {
+        NSMenuItem *findItem = [menu addItemWithTitle:@"Find" action:NULL keyEquivalent:@""];
+        NSMenu *findMenu = [[[NSMenu alloc] initWithTitle:@"Find"] autorelease];
+        CPAddItem(findMenu, @"Find...", @selector(showFindBar:), @"f");
+        CPAddItem(findMenu, @"Find Next", @selector(findNext:), @"g");
+        CPAddItem(findMenu, @"Find Previous", @selector(findPrevious:), @"G");
+        CPAddItem(findMenu, @"Hide Find Banner", @selector(hideFindBar:), nil);
+        [findMenu addItem:[NSMenuItem separatorItem]];
+        CPAddItem(findMenu, @"Use Selection for Find", @selector(useSelectionForFind:), @"e");
+        [menu setSubmenu:findMenu forItem:findItem];
+    }
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"AutoFill Form", @selector(autoFillForm:), @"A");
 
@@ -156,6 +172,8 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     CPAddItem(menu, @"Back", @selector(goBack:), @"[");
     CPAddItem(menu, @"Forward", @selector(goForward:), @"]");
     CPAddItem(menu, @"Home", @selector(goHome:), @"H");
+    [menu addItem:[NSMenuItem separatorItem]];
+    CPAddItem(menu, @"Reopen Last Closed Tab", @selector(reopenClosedTab:), @"T");
     historyMenu = menu;
 
     menu = CPAddSubmenu(mainMenu, @"Bookmarks");
