@@ -349,6 +349,17 @@ Also on 19 September:
   uncaught page error, and the URL of every failed `fetch`.
 - **Tuning:** the G4 build schedules for the 7447/7450 core (`-mtune=7450`)
   while still running on the 7400.
+- **Speedometer 3.1** is served from a local copy (`browserbench.org` code,
+  one added line that posts the score back). Two engine problems it found:
+  - `JSON.stringify` took every key a Proxy's `ownKeys` listed. The spec
+    keeps only enumerable own properties, and Chart.js's option resolvers
+    list every default, so serializing one walked the whole defaults tree
+    without end: minutes of CPU and a gigabyte of memory.
+  - Text with `font-variant-ligatures: none` or `font-feature-settings`
+    (editors, code views) went down the complex text path, several times
+    slower on a G4. On 10.5 the simple path does no kerning or ligatures
+    anyway, so settings that only turn features off now stay on it.
+    TipTap went from 21.9 s to 3.4 s an iteration.
 
 A lesson from the way: `CommonIdentifiers.h` and `BuiltinNames.h` are
 compiled into WebCore, so adding a name to either shifts what WebCore reads
