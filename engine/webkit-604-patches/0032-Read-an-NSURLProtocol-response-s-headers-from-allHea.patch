@@ -1,7 +1,7 @@
 From 2d991b4fe1c312aaad2d208a200aea156405465c Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 14:25:36 -0400
-Subject: [PATCH 32/43] Read an NSURLProtocol response's headers from
+Subject: [PATCH 32/44] Read an NSURLProtocol response's headers from
  -allHeaderFields
 
 WebCore read headers only from the CFNetwork message behind a response,

@@ -1,7 +1,7 @@
 From 773f591233493314856fd4b5fa48e5bb5b6a4542 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 03:49:14 -0400
-Subject: [PATCH 19/43] WebKitLegacy for Leopard: sub-framework paths, a Growl
+Subject: [PATCH 19/44] WebKitLegacy for Leopard: sub-framework paths, a Growl
  stand-in, and lambda captures GCC 6 misreads
 
 Captures that reuse the name of the variable in their own initializer

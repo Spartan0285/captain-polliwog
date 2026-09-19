@@ -1,0 +1,61 @@
+From 50d010d9cfa69163f13d9a8f6dba5d9b0e3f2891 Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Sat, 19 Sep 2026 00:58:52 -0400
+Subject: [PATCH 44/44] Lexer: read BigInt literals (10n) as numbers
+
+This engine has no BigInt, and pages only run their BigInt code where a
+feature test finds one; reading the literal as its number lets the rest of
+the script parse. eBay's scripts stopped at one.
+---
+ Source/JavaScriptCore/parser/Lexer.cpp | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/Source/JavaScriptCore/parser/Lexer.cpp b/Source/JavaScriptCore/parser/Lexer.cpp
+index ff428b44..623c45cd 100644
+--- a/Source/JavaScriptCore/parser/Lexer.cpp
++++ b/Source/JavaScriptCore/parser/Lexer.cpp
+@@ -2183,6 +2183,9 @@ start:
+             shift();
+ 
+             parseHex(tokenData->doubleValue);
++            // A BigInt literal (10n) reads as its number; see below.
++            if (m_current == 'n')
++                shift();
+             if (isIdentStart(m_current)) {
+                 m_lexErrorMessage = ASCIILiteral("No space between hexadecimal literal and identifier");
+                 token = UNTERMINATED_HEX_NUMBER_ERRORTOK;
+@@ -2203,6 +2206,9 @@ start:
+             shift();
+ 
+             parseBinary(tokenData->doubleValue);
++            // A BigInt literal (10n) reads as its number; see below.
++            if (m_current == 'n')
++                shift();
+             if (isIdentStart(m_current)) {
+                 m_lexErrorMessage = ASCIILiteral("No space between binary literal and identifier");
+                 token = UNTERMINATED_BINARY_NUMBER_ERRORTOK;
+@@ -2224,6 +2230,9 @@ start:
+             shift();
+ 
+             parseOctal(tokenData->doubleValue);
++            // A BigInt literal (10n) reads as its number; see below.
++            if (m_current == 'n')
++                shift();
+             if (isIdentStart(m_current)) {
+                 m_lexErrorMessage = ASCIILiteral("No space between octal literal and identifier");
+                 token = UNTERMINATED_OCTAL_NUMBER_ERRORTOK;
+@@ -2271,6 +2280,11 @@ inNumberAfterDecimalPoint:
+                 token = tokenTypeForIntegerLikeToken(tokenData->doubleValue);
+         }
+ 
++        // BigInt literals (123n): this engine has no BigInt, and a page's
++        // BigInt code only runs where its feature test finds one. Reading
++        // the literal as its number lets the rest of the script parse.
++        if (m_current == 'n')
++            shift();
+         if (UNLIKELY(isIdentStart(m_current))) {
+             m_lexErrorMessage = ASCIILiteral("No identifiers allowed directly after numeric literal");
+             token = atEnd() ? UNTERMINATED_NUMERIC_LITERAL_ERRORTOK : INVALID_NUMERIC_LITERAL_ERRORTOK;
+-- 
+2.50.1 (Apple Git-155)
+

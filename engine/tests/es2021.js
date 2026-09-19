@@ -130,6 +130,9 @@ check("typeof BigInt", typeof BigInt, "undefined");
 check("BigInt == undefined", BigInt == undefined, true);
 check("BigInt() gives a number", BigInt(Number.MAX_SAFE_INTEGER), 9007199254740991);
 check("guarded code falls back", typeof BigInt !== "undefined" ? "bigint path" : "fallback", "fallback");
+// BigInt literals parse (as numbers), so scripts holding them still run.
+check("BigInt literal parses", eval("typeof BigInt !== 'undefined' ? 10n ** 20n : 'fallback'"), "fallback");
+check("BigInt literal value", eval("0x10n + 2n"), 18);
 
 // Syntax that must still be rejected.
 var syntaxErrors = ["1 ||= 2", "f() &&= 1", "a ?? = 1", "1__0", "1_", "0x_1"];

@@ -746,9 +746,11 @@
         }
     }
 
-    /* customElements.upgrade: elements upgrade anyway once in the document */
+    /* customElements.upgrade: elements upgrade anyway once in the document.
+       On the prototype: a property added to the registry itself is lost
+       whenever its wrapper is garbage-collected and made again. */
     if (global.customElements)
-        define(customElements, "upgrade", function upgrade() {});
+        define(global.CustomElementRegistry ? CustomElementRegistry.prototype : Object.getPrototypeOf(customElements), "upgrade", function upgrade() {});
 
     /* PerformanceObserver.observe({ type }) as well as { entryTypes } */
     if (typeof global.PerformanceObserver === "function") {
