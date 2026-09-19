@@ -13,6 +13,7 @@
 #import "CPBookmarks.h"
 #import "CPBookmarksController.h"
 #import "CPDownloadsController.h"
+#import "CPDownload.h"
 #import "CPSiteSettings.h"
 #import "CPSettings.h"
 #import "CPDebugSnapshot.h"
@@ -315,11 +316,15 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     tabs = [[NSMutableArray alloc] init];
     [window setDelegate:self];
     [self buildInterface];
+    downloadsProgressStep = -2;
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(downloadsChanged:)
+                                                 name:CPDownloadDidChangeNotification object:nil];
     return self;
 }
 
 - (void)dealloc
 {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [tabs release];
     [super dealloc];
@@ -649,6 +654,18 @@ static NSMenuItem *CPMenuItem(NSMenu *menu, NSString *title, SEL action, id targ
     [item setTarget:target];
     [item setState:state];
     return item;
+}
+
+// The downloads button shows how far the running downloads have got, as
+// Safari's does. Redrawn only when it moves a twentieth.
+- (void)downloadsChanged:(NSNotification *)notification
+{
+    double progress = [[CPDownloadsController sharedController] overallProgress];
+    int step = progress < -1.5 ? -2 : progress < 0.0 ? -1 : (int)(progress * 20.0);
+    if (step == downloadsProgressStep)
+        return;
+    downloadsProgressStep = step;
+    [downloadsButton setImage:(step == -2 ? [CPIcons downloadsImage] : [CPIcons downloadsImageWithProgress:progress])];
 }
 
 - (IBAction)showShareMenu:(id)sender

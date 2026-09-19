@@ -16,6 +16,8 @@
 + (NSImage *)starImage;
 + (NSImage *)filledStarImage;
 + (NSImage *)downloadsImage;
+// The downloads glyph over a progress bar; fraction < 0 when sizes are unknown.
++ (NSImage *)downloadsImageWithProgress:(double)fraction;
 + (NSImage *)plusImage;
 + (NSImage *)globeImage;
 + (NSImage *)pageSettingsImage;

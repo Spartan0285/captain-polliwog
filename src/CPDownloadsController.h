@@ -22,6 +22,8 @@
 
 - (BOOL)hasActiveDownloads;        // running or waiting their turn
 - (unsigned)activeDownloadCount;
+// All running downloads together, 0-1; -1 if a size is unknown, -2 if none.
+- (double)overallProgress;
 
 - (IBAction)clearFinished:(id)sender;
 

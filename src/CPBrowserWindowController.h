@@ -21,6 +21,7 @@
     NSButton            *reloadButton;      // inside the address bar
     NSButton            *shareButton;
     NSButton            *downloadsButton;
+    int                  downloadsProgressStep;     // what its icon shows, in twentieths
     NSButton            *newTabButton;
     CPAddressBar        *addressBar;
     NSTextField         *addressField;      // the address bar's text

@@ -382,6 +382,33 @@ static NSButton *CPRowButton(NSView *row, int tag, float x, float width, id targ
     return count;
 }
 
+- (double)overallProgress
+{
+    unsigned index;
+    double received = 0.0, expected = 0.0;
+    BOOL any = NO, unknown = NO;
+
+    for (index = 0; index < [downloads count]; index++) {
+        CPDownload *download = [downloads objectAtIndex:index];
+        double fraction;
+        if ([download state] != CPDownloadActive && [download state] != CPDownloadQueued)
+            continue;
+        any = YES;
+        fraction = [download fractionDone];
+        if (fraction < 0.0 && [download state] == CPDownloadActive)
+            unknown = YES;
+        else if (fraction >= 0.0) {
+            received += fraction;
+            expected += 1.0;
+        }
+    }
+    if (!any)
+        return -2.0;
+    if (unknown || expected == 0.0)
+        return -1.0;
+    return received / expected;
+}
+
 - (IBAction)clearFinished:(id)sender
 {
     int index;

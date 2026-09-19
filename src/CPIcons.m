@@ -181,6 +181,33 @@ static NSImage *CPIcon(CPIconKind kind)
 
 @implementation CPIcons
 
++ (NSImage *)downloadsImageWithProgress:(double)fraction
+{
+    NSImage *image = [[[NSImage alloc] initWithSize:NSMakeSize(16.0f, 16.0f)] autorelease];
+    NSBezierPath *arrow = [NSBezierPath bezierPath];
+    NSRect track = NSMakeRect(1.5f, 0.5f, 13.0f, 3.0f);
+
+    [image lockFocus];
+    [[NSColor colorWithCalibratedWhite:0.25f alpha:1.0f] set];
+    [arrow setLineCapStyle:NSRoundLineCapStyle];
+    [arrow setLineJoinStyle:NSRoundLineJoinStyle];
+    [arrow moveToPoint:NSMakePoint(8.0f, 15.0f)];
+    [arrow lineToPoint:NSMakePoint(8.0f, 6.5f)];
+    [arrow moveToPoint:NSMakePoint(4.5f, 10.0f)];
+    [arrow lineToPoint:NSMakePoint(8.0f, 6.5f)];
+    [arrow lineToPoint:NSMakePoint(11.5f, 10.0f)];
+    [arrow setLineWidth:1.5f];
+    [arrow stroke];
+
+    [[NSColor colorWithCalibratedWhite:0.8f alpha:1.0f] set];
+    NSRectFill(track);
+    [[NSColor colorWithCalibratedRed:0.25f green:0.55f blue:0.95f alpha:(fraction < 0.0 ? 0.5f : 1.0f)] set];
+    track.size.width *= (fraction < 0.0 ? 1.0 : MIN(fraction, 1.0));
+    NSRectFill(track);
+    [image unlockFocus];
+    return image;
+}
+
 + (NSImage *)backImage { return CPIcon(CPIconBack); }
 + (NSImage *)forwardImage { return CPIcon(CPIconForward); }
 + (NSImage *)reloadImage { return CPIcon(CPIconReload); }

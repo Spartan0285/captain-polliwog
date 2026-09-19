@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<!-- Newer CSS the engine has been taught: gap in flexbox and grid, logical
+     properties, inset, :has(). Each box turns green when its feature works;
+     window.cssModernResults lists the checks for the debug probe. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Modern CSS</title>
+<style>
+  body { font: 13px Helvetica, sans-serif; margin: 16px; }
+  .row { display: flex; gap: 10px; margin-bottom: 8px; }
+  .row > div, .grid > div { width: 40px; height: 20px; background: #8ab; }
+  .wrap { display: flex; flex-wrap: wrap; gap: 6px 10px; width: 100px; margin-bottom: 8px; }
+  .wrap > div { width: 40px; height: 20px; background: #8ab; }
+  .col { display: flex; flex-direction: column; row-gap: 5px; margin-bottom: 8px; }
+  .col > div { height: 10px; background: #8ab; }
+  .grid { display: grid; grid-template-columns: 40px 40px; column-gap: 17px; row-gap: 3px; margin-bottom: 8px; }
+  .logical { padding-inline: 12px 4px; padding-block: 3px; margin-inline: 5px; border-inline-start: 2px solid #333; inline-size: 50px; background: #eee; }
+  .pos { position: relative; height: 30px; margin: 8px 0; }
+  .pos > div { position: absolute; inset: 5px 10px; background: #8ab; }
+  .has { padding: 4px; margin: 8px 0; background: #c33; color: #fff; }
+  .has:has(> b) { background: #3a3; }
+  .has2:has(+ .after) { outline: 3px solid #3a3; }
+  .nohas:has(i) { background: #c33; }
+  .later:has(.added) { background: #3a3; }
+</style>
+</head>
+<body>
+<div class="row" id="row"><div></div><div></div><div></div></div>
+<div class="wrap" id="wrap"><div></div><div></div><div></div></div>
+<div class="col" id="col"><div></div><div></div></div>
+<div class="grid" id="grid"><div></div><div></div><div></div></div>
+<div class="logical" id="logical">logical</div>
+<div class="pos"><div id="inset"></div></div>
+<div class="has" id="has"><b>:has(&gt; b)</b></div>
+<div class="has2" id="has2">:has(+ .after)</div><div class="after">after</div>
+<div class="nohas" id="nohas">no i here</div>
+<div class="has later" id="later">dynamic :has</div>
+<pre id="out"></pre>
+<script>
+  function box(id) { return document.getElementById(id).getBoundingClientRect(); }
+  function kids(id) { return document.getElementById(id).children; }
+  function x(el) { return Math.round(el.getBoundingClientRect().left); }
+  function y(el) { return Math.round(el.getBoundingClientRect().top); }
+  function cs(id, p) { return getComputedStyle(document.getElementById(id))[p]; }
+  document.querySelector("#later").appendChild(document.createElement("span")).className = "added";
+  setTimeout(function () {
+    var r = [], k;
+    k = kids("row"); r.push(["flex gap", x(k[1]) - x(k[0]) === 50 && x(k[2]) - x(k[1]) === 50]);
+    k = kids("wrap"); r.push(["wrap gap", x(k[1]) - x(k[0]) === 50 && y(k[2]) - y(k[0]) === 26]);
+    k = kids("col"); r.push(["column row-gap", y(k[1]) - y(k[0]) === 15]);
+    k = kids("grid"); r.push(["grid column-gap", x(k[1]) - x(k[0]) === 57 && y(k[2]) - y(k[0]) === 23]);
+    r.push(["padding-inline", cs("logical", "paddingLeft") === "12px" && cs("logical", "paddingRight") === "4px"]);
+    r.push(["padding-block", cs("logical", "paddingTop") === "3px"]);
+    r.push(["margin-inline", cs("logical", "marginLeft") === "5px"]);
+    r.push(["border-inline-start", cs("logical", "borderLeftWidth") === "2px"]);
+    r.push(["inline-size", cs("logical", "width") === "50px"]);
+    r.push(["inset", cs("inset", "top") === "5px" && cs("inset", "left") === "10px"]);
+    r.push([":has(> b)", cs("has", "backgroundColor") === "rgb(51, 170, 51)"]);
+    r.push([":has(+ .after)", cs("has2", "outlineStyle") === "solid"]);
+    r.push([":has() no match", cs("nohas", "backgroundColor") === "rgb(204, 51, 51)"]);
+    r.push([":has() after insert", cs("later", "backgroundColor") === "rgb(51, 170, 51)"]);
+    r.push(["querySelector :has", document.querySelectorAll("div:has(b)").length === 1]);
+    window.cssModernResults = r.map(function (t) { return (t[1] ? "ok " : "FAIL ") + t[0]; }).join(", ");
+    document.getElementById("out").textContent = window.cssModernResults.split(", ").join("\n");
+  }, 100);
+</script>
+</body>
+</html>
