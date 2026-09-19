@@ -45,6 +45,14 @@ extern NSString * const CPBookmarksDidChangeNotification;
 
 - (CPBookmark *)root;
 - (void)addBookmarkWithTitle:(NSString *)title URLString:(NSString *)URLString;
+
+// Favorites: the "Favorites" folder at the top, made when first needed.
+// The star in the address bar adds and removes pages; the start page
+// shows them.
+- (CPBookmark *)favoritesFolder;
+- (BOOL)isFavoriteURLString:(NSString *)URLString;
+- (void)addFavoriteWithTitle:(NSString *)title URLString:(NSString *)URLString;
+- (void)removeFavoriteURLString:(NSString *)URLString;
 - (void)save;
 - (void)changed;
 

@@ -12,5 +12,12 @@
 + (NSImage *)forwardImage;
 + (NSImage *)reloadImage;
 + (NSImage *)stopImage;
++ (NSImage *)shareImage;
++ (NSImage *)starImage;
++ (NSImage *)filledStarImage;
++ (NSImage *)downloadsImage;
++ (NSImage *)plusImage;
++ (NSImage *)globeImage;
++ (NSImage *)pageSettingsImage;
 
 @end

@@ -175,6 +175,15 @@
                 break;
             }
         }
+        var typed = window.__polliwogTypedLogin;
+        if (!password && typed && typed.password) {
+            // Typed here, then cleared or replaced before the page moved on.
+            password = typed.password;
+            if (!captured || !captured.element.value)
+                captured = typed.username ? { element: { value: typed.username } } : captured;
+        }
+        if (typed)
+            window.__polliwogTypedLogin = null;
         var username = captured ? captured.element.value : "";
         if (!username) {
             // Sign-ins done in steps keep the username in a hidden field.

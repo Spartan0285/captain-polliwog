@@ -24,6 +24,10 @@ static NSMutableDictionary *CPFilledLogins = nil;
 // Usernames typed on each host's earlier steps, for sign-ins that ask for
 // the password on another page.
 static NSMutableDictionary *CPTypedUsernames = nil;
+// The login last offered for saving, and when: a sign-in that navigates
+// twice would otherwise be offered twice.
+static NSArray *CPLastOffered = nil;
+static NSDate *CPLastOfferedAt = nil;
 
 #pragma mark Talking to the page
 
@@ -371,6 +375,15 @@ static id CPPrimaryValue(ABMultiValue *multi)
         return;
     if ([webView window] == nil)
         return;
+    {
+        NSArray *offer = [NSArray arrayWithObjects:host, username, password, nil];
+        if ([offer isEqualToArray:CPLastOffered] && CPLastOfferedAt != nil && [CPLastOfferedAt timeIntervalSinceNow] > -120.0)
+            return;
+        [CPLastOffered release];
+        CPLastOffered = [offer retain];
+        [CPLastOfferedAt release];
+        CPLastOfferedAt = [[NSDate date] retain];
+    }
     // After the page's navigation has started, not in the middle of it.
     [self performSelector:@selector(offerToSave:)
                withObject:[NSArray arrayWithObjects:host, username, password, [webView window], nil]

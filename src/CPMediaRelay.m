@@ -6,6 +6,7 @@
 #import "CPAppDelegate.h"
 #import "CPNetworkEngine.h"
 #import "CPDebugSnapshot.h"
+#import "CPSettings.h"
 #include <curl/curl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -257,6 +258,10 @@ static void *CPRelayAccept(void *argument)
     if (started)
         return;
     started = YES;
+    // Without the relay, video from sites that require modern TLS doesn't
+    // play: the Performance setting for video.
+    if (![[CPSettings sharedSettings] playsVideo])
+        return;
 
     for (i = 0; i < 32; i++)
         CPRelayToken[i] = "0123456789abcdef"[arc4random() % 16];

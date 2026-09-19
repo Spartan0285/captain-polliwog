@@ -19,6 +19,15 @@ static NSString * const CPDiskCacheLocationKey = @"CPDiskCacheLocation";
 static NSString * const CPLoadsImagesKey       = @"CPLoadsImages";
 static NSString * const CPReleasesMemoryKey    = @"CPReleasesMemoryUnderPressure";
 static NSString * const CPDownloadsFolderKey   = @"CPDownloadsFolder";
+static NSString * const CPJavaScriptKey        = @"CPJavaScriptEnabled";
+static NSString * const CPCompatibilityKey     = @"CPCompatibilityScripts";
+static NSString * const CPBlocksAdsKey         = @"CPBlocksAdsAndTrackers";
+static NSString * const CPPlaysVideoKey        = @"CPPlaysVideo";
+static NSString * const CPAutoplayKey          = @"CPAutoplaysVideo";
+static NSString * const CPAnimatedImagesKey    = @"CPAnimatedImages";
+static NSString * const CPStopsLongScriptsKey  = @"CPStopsLongScripts";
+static NSString * const CPHomePageKey          = @"CPHomePage";
+static NSString * const CPNewTabPageKey        = @"CPNewTabPage";
 
 static unsigned long long CPPhysicalMemory(void)
 {
@@ -69,6 +78,15 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
     [defaults setObject:[NSNumber numberWithInt:0] forKey:CPDiskCacheMegaKey];
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPLoadsImagesKey];
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPReleasesMemoryKey];
+    [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPJavaScriptKey];
+    [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPCompatibilityKey];
+    [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPBlocksAdsKey];
+    [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPPlaysVideoKey];
+    [defaults setObject:[NSNumber numberWithBool:NO] forKey:CPAutoplayKey];
+    [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPAnimatedImagesKey];
+    [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPStopsLongScriptsKey];
+    [defaults setObject:@"" forKey:CPHomePageKey];
+    [defaults setObject:[NSNumber numberWithInt:CPNewTabShowsStartPage] forKey:CPNewTabPageKey];
     [[NSUserDefaults standardUserDefaults] registerDefaults:defaults];
 }
 
@@ -172,6 +190,39 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
     [self apply];
 }
 
+#define CPBooleanSetting(getter, setter, key) \
+- (BOOL)getter { return [[NSUserDefaults standardUserDefaults] boolForKey:key]; } \
+- (void)setter:(BOOL)flag { [[NSUserDefaults standardUserDefaults] setBool:flag forKey:key]; [self apply]; }
+
+CPBooleanSetting(javaScriptEnabled, setJavaScriptEnabled, CPJavaScriptKey)
+CPBooleanSetting(usesCompatibilityScripts, setUsesCompatibilityScripts, CPCompatibilityKey)
+CPBooleanSetting(blocksAdsAndTrackers, setBlocksAdsAndTrackers, CPBlocksAdsKey)
+CPBooleanSetting(playsVideo, setPlaysVideo, CPPlaysVideoKey)
+CPBooleanSetting(autoplaysVideo, setAutoplaysVideo, CPAutoplayKey)
+CPBooleanSetting(showsAnimatedImages, setShowsAnimatedImages, CPAnimatedImagesKey)
+CPBooleanSetting(stopsLongScripts, setStopsLongScripts, CPStopsLongScriptsKey)
+
+- (NSString *)homePage
+{
+    NSString *page = [[NSUserDefaults standardUserDefaults] stringForKey:CPHomePageKey];
+    return page != nil ? page : @"";
+}
+
+- (void)setHomePage:(NSString *)page
+{
+    [[NSUserDefaults standardUserDefaults] setObject:(page != nil ? page : @"") forKey:CPHomePageKey];
+}
+
+- (CPNewTabPage)newTabPage
+{
+    return (CPNewTabPage)[[NSUserDefaults standardUserDefaults] integerForKey:CPNewTabPageKey];
+}
+
+- (void)setNewTabPage:(CPNewTabPage)page
+{
+    [[NSUserDefaults standardUserDefaults] setInteger:page forKey:CPNewTabPageKey];
+}
+
 - (BOOL)releasesMemoryUnderPressure
 {
     return [[NSUserDefaults standardUserDefaults] boolForKey:CPReleasesMemoryKey];
@@ -270,6 +321,10 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
     [preferences setJavaEnabled:NO];
     [preferences setPlugInsEnabled:NO];
     [preferences setLoadsImagesAutomatically:[self loadsImages]];
+    [preferences setJavaScriptEnabled:[self javaScriptEnabled]];
+    [preferences setAllowsAnimatedImages:[self showsAnimatedImages]];
+    // Newer WebKits: video waits for a click unless autoplay is on.
+    CPCallWithArgument(preferences, @"setMediaPlaybackRequiresUserGesture:", [self autoplaysVideo] ? 0 : 1);
     // WebPreferences saves itself, so a session that ended in private mode
     // would otherwise start the next launch in it without saying so.
     [preferences setPrivateBrowsingEnabled:[[CPPrivateBrowsing sharedPrivateBrowsing] isEnabled]];

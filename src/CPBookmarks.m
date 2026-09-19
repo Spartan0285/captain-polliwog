@@ -253,6 +253,53 @@ static CPBookmark *CPBookmarkFromSafari(NSDictionary *entry, int *count)
     [self changed];
 }
 
+- (CPBookmark *)favoritesFolder
+{
+    NSArray *children = [root children];
+    CPBookmark *folder;
+    unsigned i;
+    for (i = 0; i < [children count]; i++) {
+        folder = [children objectAtIndex:i];
+        if ([folder isFolder] && [[folder title] isEqualToString:@"Favorites"])
+            return folder;
+    }
+    folder = [CPBookmark folderWithTitle:@"Favorites"];
+    [root insertChild:folder atIndex:0];
+    [self changed];
+    return folder;
+}
+
+- (BOOL)isFavoriteURLString:(NSString *)URLString
+{
+    NSArray *favorites = [[self favoritesFolder] children];
+    unsigned i;
+    for (i = 0; i < [favorites count]; i++) {
+        if ([[[favorites objectAtIndex:i] URLString] isEqualToString:URLString])
+            return YES;
+    }
+    return NO;
+}
+
+- (void)addFavoriteWithTitle:(NSString *)title URLString:(NSString *)URLString
+{
+    if (URLString == nil || [self isFavoriteURLString:URLString])
+        return;
+    [[self favoritesFolder] addChild:[CPBookmark bookmarkWithTitle:([title length] ? title : URLString) URLString:URLString]];
+    [self changed];
+}
+
+- (void)removeFavoriteURLString:(NSString *)URLString
+{
+    CPBookmark *folder = [self favoritesFolder];
+    NSArray *favorites = [[[folder children] copy] autorelease];
+    unsigned i;
+    for (i = 0; i < [favorites count]; i++) {
+        if ([[[favorites objectAtIndex:i] URLString] isEqualToString:URLString])
+            [folder removeChild:[favorites objectAtIndex:i]];
+    }
+    [self changed];
+}
+
 - (void)save
 {
     NSMutableArray *plist = [NSMutableArray array];

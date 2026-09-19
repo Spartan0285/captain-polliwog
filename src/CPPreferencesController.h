@@ -11,8 +11,9 @@
     NSTextField   *diskSizeField;
     NSTextField   *diskSizeNote;
     NSTextField   *locationField;
-    NSButton      *imagesCheckbox;
-    NSButton      *memoryReliefCheckbox;
+    NSMutableArray *switchBoxes;       // the Performance tab's switches, by tag
+    NSTextField   *homePageField;
+    NSPopUpButton *newTabPopUp;
     NSTextField   *downloadsField;
     NSPopUpButton *siteModePopUp;
 }
@@ -26,8 +27,10 @@
 - (IBAction)chooseCacheLocation:(id)sender;
 - (IBAction)useDefaultCacheLocation:(id)sender;
 - (IBAction)clearCacheNow:(id)sender;
-- (IBAction)imagesChanged:(id)sender;
-- (IBAction)memoryReliefChanged:(id)sender;
+- (IBAction)switchChanged:(id)sender;
+- (IBAction)homePageChanged:(id)sender;
+- (IBAction)useCurrentPageAsHome:(id)sender;
+- (IBAction)newTabPageChanged:(id)sender;
 - (IBAction)chooseDownloadsFolder:(id)sender;
 - (IBAction)siteModeChanged:(id)sender;
 

@@ -8,6 +8,8 @@
 @class CPTab;
 
 // What a tab tells the window it lives in. The window implements these.
+@class WebPreferences;
+
 @interface NSObject (CPTabOwner)
 - (void)tabDidChange:(CPTab *)tab;
 - (void)tab:(CPTab *)tab showStatusText:(NSString *)text;
@@ -39,6 +41,8 @@
     id        reader;           // a CPReader fetching the page, if any
     BOOL      showingReader;
     BOOL      readerLoadPending;
+    NSImage  *favicon;
+    WebPreferences *preferences; // this tab's own: sites differ in JavaScript and images
 }
 
 - (id)initWithOwner:(id)anOwner;
@@ -75,6 +79,12 @@
 // the page as loaded when it has finished; otherwise the page's HTML is
 // fetched on its own, which is the quick way through a heavy page.
 - (BOOL)isShowingReader;
+// The site's icon, or nil.
+- (NSImage *)favicon;
+// Applies the page's site settings (text size, JavaScript, images) again.
+- (void)applySiteSettings;
+// Opens an address straight in Reader, fetching only its HTML.
+- (void)openReaderForURL:(NSURL *)aURL;
 - (BOOL)canShowReader;
 - (void)toggleReader;
 

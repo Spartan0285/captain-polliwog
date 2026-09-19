@@ -148,9 +148,15 @@
         [[NSColor colorWithCalibratedWhite:0.35f alpha:1.0f] set];
         [cross stroke];
 
-        textFrame = NSMakeRect(NSMaxX(closeBox) + CPTabInset, NSMinY(frame) + 4.0f,
-                               NSMaxX(frame) - NSMaxX(closeBox) - 2.0f * CPTabInset,
-                               NSHeight(frame) - 6.0f);
+        if ([tab favicon] != nil) {
+            NSRect iconFrame = NSMakeRect(NSMaxX(closeBox) + CPTabInset, NSMinY(frame) + floorf((NSHeight(frame) - 16.0f) / 2.0f), 16.0f, 16.0f);
+            [[tab favicon] drawInRect:iconFrame fromRect:NSZeroRect operation:NSCompositeSourceOver fraction:1.0f];
+            textFrame = NSMakeRect(NSMaxX(iconFrame) + 4.0f, NSMinY(frame) + 4.0f,
+                                   NSMaxX(frame) - NSMaxX(iconFrame) - 4.0f - CPTabInset, NSHeight(frame) - 6.0f);
+        } else
+            textFrame = NSMakeRect(NSMaxX(closeBox) + CPTabInset, NSMinY(frame) + 4.0f,
+                                   NSMaxX(frame) - NSMaxX(closeBox) - 2.0f * CPTabInset,
+                                   NSHeight(frame) - 6.0f);
         [[tab displayTitle] drawInRect:textFrame
                         withAttributes:([tab isDiscarded] || [tab isLoading]) ? idleText : activeText];
     }

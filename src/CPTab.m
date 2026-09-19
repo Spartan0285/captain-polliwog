@@ -8,6 +8,10 @@
 #import "CPDownloadsController.h"
 #import "CPReader.h"
 #import "CPAutoFill.h"
+#import "CPFavicons.h"
+#import "CPSiteSettings.h"
+#import "CPStartPage.h"
+#import "CPSettings.h"
 #import "CPSiteModes.h"
 #import "CPScriptWatchdog.h"
 #import "CPUserScripts.h"
@@ -36,6 +40,14 @@ static NSString *CPEscapeHTML(NSString *text)
 - (void)changed;
 - (void)showErrorPage:(NSError *)error forFrame:(WebFrame *)frame;
 - (BOOL)applySiteModeForURL:(NSURL *)aURL;
+- (void)loadIntoWebView:(NSURLRequest *)request;
+- (void)applyPreferencesForURL:(NSURL *)aURL;
+- (void)setFavicon:(NSImage *)icon;
+@end
+
+// In newer WebKits (the engine Captain Polliwog bundles among them).
+@interface WebPreferences (CPNewerWebKit)
+- (void)setMediaPlaybackRequiresUserGesture:(BOOL)flag;
 @end
 
 @implementation CPTab (Private)
@@ -51,6 +63,15 @@ static NSString *CPEscapeHTML(NSString *text)
     [webView setUIDelegate:self];
     [webView setPolicyDelegate:self];
     [webView setApplicationNameForUserAgent:[CPAppDelegate userAgentApplicationName]];
+    {
+        static unsigned tabNumber = 0;
+        if (preferences == nil) {
+            preferences = [[WebPreferences alloc] initWithIdentifier:[NSString stringWithFormat:@"CaptainPolliwogTab%u", ++tabNumber]];
+            [preferences setAutosaves:NO];
+        }
+        [webView setPreferences:preferences];
+        [self applyPreferencesForURL:URL];
+    }
     if (CPDebugLogging()) {
         [webView setResourceLoadDelegate:self];
         if (pendingResources == nil)
@@ -148,6 +169,45 @@ static NSString *CPEscapeHTML(NSString *text)
 
 // Gives the WebView the identity the page's site version calls for: the
 // browser's own, or a phone's. Returns YES if it changed.
+// This tab's preferences: the browser's, with the site's own choices for
+// JavaScript and images on top.
+- (void)applyPreferencesForURL:(NSURL *)aURL
+{
+    WebPreferences *standard = [WebPreferences standardPreferences];
+    if (preferences == nil)
+        return;
+    [preferences setJavaEnabled:NO];
+    [preferences setPlugInsEnabled:NO];
+    [preferences setJavaScriptCanOpenWindowsAutomatically:NO];
+    [preferences setPrivateBrowsingEnabled:[standard privateBrowsingEnabled]];
+    [preferences setAllowsAnimatedImages:[standard allowsAnimatedImages]];
+    [preferences setJavaScriptEnabled:(aURL != nil ? [CPSiteSettings javaScriptEnabledForURL:aURL] : [standard isJavaScriptEnabled])];
+    [preferences setLoadsImagesAutomatically:(aURL != nil ? [CPSiteSettings imagesEnabledForURL:aURL] : [standard loadsImagesAutomatically])];
+    if ([preferences respondsToSelector:@selector(setMediaPlaybackRequiresUserGesture:)])
+        [(id)preferences setMediaPlaybackRequiresUserGesture:![[CPSettings sharedSettings] autoplaysVideo]];
+}
+
+// Loads a request, making the start page afresh rather than reading the
+// placeholder file behind its address.
+- (void)loadIntoWebView:(NSURLRequest *)request
+{
+    if ([[request URL] isEqual:[CPAppDelegate startPageURL]]) {
+        readerLoadPending = NO;
+        [[webView mainFrame] loadHTMLString:[CPStartPage HTML] baseURL:[CPAppDelegate startPageURL]];
+        return;
+    }
+    [[webView mainFrame] loadRequest:request];
+}
+
+- (void)setFavicon:(NSImage *)icon
+{
+    if (icon == favicon)
+        return;
+    [favicon release];
+    favicon = [icon retain];
+    [self changed];
+}
+
 - (BOOL)applySiteModeForURL:(NSURL *)aURL
 {
     NSString *wanted;
@@ -184,6 +244,8 @@ static NSString *CPEscapeHTML(NSString *text)
     [reader cancel];
     [reader release];
     [self destroyWebView];
+    [favicon release];
+    [preferences release];
     [URL release];
     [title release];
     [lastSelected release];
@@ -199,7 +261,7 @@ static NSString *CPEscapeHTML(NSString *text)
         // Coming back from being discarded: reload what was showing.
         if (URL != nil) {
             [self applySiteModeForURL:URL];
-            [[webView mainFrame] loadRequest:[NSURLRequest requestWithURL:URL]];
+            [self loadIntoWebView:[NSURLRequest requestWithURL:URL]];
         }
     }
     return webView;
@@ -244,7 +306,8 @@ static NSString *CPEscapeHTML(NSString *text)
     if (webView == nil)
         [self createWebView];
     [self applySiteModeForURL:[request URL]];
-    [[webView mainFrame] loadRequest:request];
+    [self applyPreferencesForURL:[request URL]];
+    [self loadIntoWebView:request];
     [self changed];
 }
 
@@ -316,6 +379,10 @@ static NSString *CPEscapeHTML(NSString *text)
         [self webView];
         return;
     }
+    if ([URL isEqual:[CPAppDelegate startPageURL]]) {
+        [self loadIntoWebView:[NSURLRequest requestWithURL:URL]];
+        return;
+    }
     [webView reload:nil];
 }
 
@@ -339,6 +406,18 @@ static NSString *CPEscapeHTML(NSString *text)
 }
 
 #pragma mark Progress
+
+- (void)applySiteSettings
+{
+    [self applyPreferencesForURL:URL];
+    if (webView != nil && [webView respondsToSelector:@selector(setTextSizeMultiplier:)])
+        [webView setTextSizeMultiplier:(showingReader || URL == nil ? 1.0f : [CPSiteSettings textSizeForURL:URL])];
+}
+
+- (NSImage *)favicon
+{
+    return favicon;
+}
 
 - (BOOL)isShowingReader
 {
@@ -365,6 +444,17 @@ static NSString *CPEscapeHTML(NSString *text)
     if (CPDebugLogging())
         NSLog(@"Captain Polliwog: reader page for %@ (%u characters)", aURL, [html length]);
     [[[self webView] mainFrame] loadHTMLString:html baseURL:aURL];
+}
+
+- (void)openReaderForURL:(NSURL *)aURL
+{
+    [reader cancel];
+    [reader release];
+    [self setURL:aURL];
+    reader = [[CPReader alloc] initWithDelegate:self];
+    [(CPReader *)reader loadURL:aURL userAgent:[webView customUserAgent]];
+    [self setLoading:YES];
+    [self changed];
 }
 
 - (void)toggleReader
@@ -504,6 +594,9 @@ fromDataSource:(WebDataSource *)dataSource
     unreachableURL = [[frame dataSource] unreachableURL];
     [self setURL:(unreachableURL != nil ? unreachableURL : [[[frame dataSource] request] URL])];
     [self setTitle:nil];
+    [favicon release];
+    favicon = [[CPFavicons iconForURL:URL] retain];
+    [self applySiteSettings];
     [self changed];
 }
 
@@ -527,6 +620,9 @@ fromDataSource:(WebDataSource *)dataSource
          [NSString stringWithFormat:@"window.scrollTo(0, %.0f)", savedScrollOffset]];
         savedScrollOffset = 0.0f;
     }
+
+    if (!showingReader)
+        [CPFavicons loadIconForPage:sender URL:URL target:self action:@selector(setFavicon:)];
 
     if (CPDebugLogging() && loadStarted != nil)
         NSLog(@"Captain Polliwog: page-load %.1fs %@",
@@ -575,6 +671,18 @@ decisionListener:(id<WebPolicyDecisionListener>)listener
     // Leaving a page where a password was typed: offer to save it.
     if (frame == [sender mainFrame] && !readerLoadPending && type != WebNavigationTypeBackForward)
         [CPAutoFill captureLoginInTab:self];
+
+    if (frame == [sender mainFrame] && !readerLoadPending) {
+        // The destination's JavaScript and images, before it commits.
+        [self applyPreferencesForURL:[request URL]];
+        // A site read in Reader by default: its HTML alone, never the page.
+        if (type != WebNavigationTypeBackForward && type != WebNavigationTypeReload && [CPSiteSettings usesReaderForURL:[request URL]]
+            && [[[request HTTPMethod] uppercaseString] isEqualToString:@"GET"]) {
+            [listener ignore];
+            [self openReaderForURL:[request URL]];
+            return;
+        }
+    }
 
     if (type == WebNavigationTypeLinkClicked && (modifiers & NSCommandKeyMask) &&
         [owner respondsToSelector:@selector(tab:openTabWithRequest:inBackground:)]) {

@@ -51,6 +51,13 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
             (webKitVersion != nil ? webKitVersion : @"523.12")];
 }
 
++ (NSURL *)homePageURL
+{
+    NSString *home = [[CPSettings sharedSettings] homePage];
+    NSURL *url = [home length] ? [NSURL URLWithString:home] : nil;
+    return ([[url scheme] length] && [[url host] length]) ? url : [self startPageURL];
+}
+
 + (NSURL *)startPageURL
 {
     NSString *path = [[NSBundle mainBundle] pathForResource:@"start" ofType:@"html"];
@@ -214,7 +221,7 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
 {
     CPBrowserWindowController *controller = [self openBrowserWindow];
     [controller showWindow:self];
-    [controller addTabWithURL:[CPAppDelegate startPageURL] select:YES];
+    [controller addTabWithURL:[CPAppDelegate homePageURL] select:YES];
     [controller openLocation:self];
 }
 

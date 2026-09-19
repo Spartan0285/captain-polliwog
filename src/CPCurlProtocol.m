@@ -7,8 +7,47 @@
 #import "CPNetworkTask.h"
 #import "CPHTTPCache.h"
 #import "CPDebugSnapshot.h"
+#import "CPSettings.h"
 #import <CoreServices/CoreServices.h>
 #include <dlfcn.h>
+
+// Advertising and tracking networks: on a G3 or G4 often the heaviest part
+// of a page, and never what anyone came for. Matched with their
+// subdomains. Only what a page pulls in is refused, never a page itself.
+static const char *CPBlockedDomains[] = {
+    "doubleclick.net", "googlesyndication.com", "googleadservices.com", "google-analytics.com",
+    "googletagservices.com", "adservice.google.com", "adsystem.amazon.com", "amazon-adsystem.com",
+    "scorecardresearch.com", "quantserve.com", "quantcount.com", "taboola.com", "outbrain.com",
+    "criteo.com", "criteo.net", "adnxs.com", "rubiconproject.com", "pubmatic.com", "openx.net",
+    "casalemedia.com", "moatads.com", "adsrvr.org", "bluekai.com", "krxd.net", "demdex.net",
+    "everesttech.net", "rlcdn.com", "agkn.com", "mathtag.com", "turn.com", "yieldmo.com", "teads.tv",
+    "3lift.com", "sharethrough.com", "media.net", "smartadserver.com", "adform.net", "bidswitch.net",
+    "lijit.com", "sovrn.com", "indexww.com", "gumgum.com", "33across.com", "contextweb.com",
+    "zedo.com", "advertising.com", "yieldlab.net", "adroll.com", "hotjar.com", "mouseflow.com",
+    "fullstory.com", "crazyegg.com", "chartbeat.com", "chartbeat.net", "newrelic.com", "nr-data.net",
+    "segment.io", "mixpanel.com", "amplitude.com", "branch.io", "app-measurement.com",
+    "adsafeprotected.com", "doubleverify.com", "serving-sys.com", "flashtalking.com", "innovid.com",
+    "spotxchange.com", "springserve.com", "tremorhub.com", "adcolony.com", "applovin.com",
+    "ads-twitter.com", "ads.linkedin.com", "px.ads.linkedin.com", "analytics.tiktok.com",
+    "bat.bing.com", "clarity.ms", "cloudflareinsights.com", "static.ads-twitter.com",
+    "securepubads.g.doubleclick.net", "pagead2.googlesyndication.com", "imasdk.googleapis.com",
+    NULL
+};
+
+static BOOL CPIsBlocked(NSURLRequest *request)
+{
+    NSString *host = [[[request URL] host] lowercaseString];
+    NSURL *page = [request mainDocumentURL];
+    unsigned i;
+    if (host == nil || (page != nil && [[request URL] isEqual:page]))
+        return NO;
+    for (i = 0; CPBlockedDomains[i] != NULL; i++) {
+        NSString *domain = [NSString stringWithUTF8String:CPBlockedDomains[i]];
+        if ([host isEqualToString:domain] || [host hasSuffix:[@"." stringByAppendingString:domain]])
+            return YES;
+    }
+    return NO;
+}
 
 @implementation CPCurlProtocol
 
@@ -37,7 +76,16 @@
 
 - (void)startLoading
 {
-    NSCachedURLResponse *cached = [CPHTTPCache cachedResponseForRequest:[self request]];
+    NSCachedURLResponse *cached;
+
+    if ([[CPSettings sharedSettings] blocksAdsAndTrackers] && CPIsBlocked([self request])) {
+        if (CPDebugLogging())
+            NSLog(@"Captain Polliwog: blocked %@", [[self request] URL]);
+        [[self client] URLProtocol:self didFailWithError:
+         [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorResourceUnavailable userInfo:nil]];
+        return;
+    }
+    cached = [CPHTTPCache cachedResponseForRequest:[self request]];
 
     if (cached != nil && [CPHTTPCache cachedResponseIsFresh:cached forRequest:[self request]]) {
         if (CPDebugLogging())

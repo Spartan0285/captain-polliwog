@@ -9,10 +9,16 @@
 #import "CPSiteModes.h"
 #import "CPTabBarView.h"
 #import "CPIcons.h"
+#import "CPAddressBar.h"
+#import "CPBookmarks.h"
+#import "CPBookmarksController.h"
+#import "CPDownloadsController.h"
+#import "CPSiteSettings.h"
+#import "CPSettings.h"
 #import "CPDebugSnapshot.h"
 #import <WebKit/WebKit.h>
 
-#define CPBarHeight     34.0f
+#define CPBarHeight     38.0f
 #define CPTabBarHeight  22.0f
 #define CPStatusHeight  20.0f
 
@@ -36,7 +42,9 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 - (NSButton *)addButtonWithImage:(NSImage *)image frame:(NSRect)frame action:(SEL)action toolTip:(NSString *)toolTip
 {
     NSButton *button = [[NSButton alloc] initWithFrame:frame];
-    [button setBezelStyle:NSTexturedSquareBezelStyle];
+    // Plain icons, as Safari's toolbar has had since version 7.
+    [button setBordered:NO];
+    [[button cell] setHighlightsBy:NSContentsCellMask];
     [button setImage:image];
     [button setImagePosition:NSImageOnly];
     [button setTarget:self];
@@ -67,27 +75,47 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     float tabBarTop = height - CPBarHeight - 1.0f;
     NSFont *smallFont = [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
 
+    // Safari's layout: back and forward; the address bar with the site's
+    // icon, Favorites, page settings and reload inside it; share, downloads
+    // and a new tab at the right.
     backButton = [self addButtonWithImage:[CPIcons backImage]
-                                    frame:NSMakeRect(8.0f, height - 29.0f, 32.0f, 24.0f)
+                                    frame:NSMakeRect(10.0f, height - 31.0f, 26.0f, 24.0f)
                                    action:@selector(goBack:)
                                   toolTip:@"Back"];
     forwardButton = [self addButtonWithImage:[CPIcons forwardImage]
-                                       frame:NSMakeRect(41.0f, height - 29.0f, 32.0f, 24.0f)
+                                       frame:NSMakeRect(38.0f, height - 31.0f, 26.0f, 24.0f)
                                       action:@selector(goForward:)
                                      toolTip:@"Forward"];
-    reloadButton = [self addButtonWithImage:[CPIcons reloadImage]
-                                      frame:NSMakeRect(80.0f, height - 29.0f, 32.0f, 24.0f)
-                                     action:@selector(reloadOrStop:)
-                                    toolTip:@"Reload"];
+    newTabButton = [self addButtonWithImage:[CPIcons plusImage]
+                                      frame:NSMakeRect(width - 34.0f, height - 31.0f, 26.0f, 24.0f)
+                                     action:@selector(newTab:)
+                                    toolTip:@"New Tab"];
+    downloadsButton = [self addButtonWithImage:[CPIcons downloadsImage]
+                                         frame:NSMakeRect(width - 62.0f, height - 31.0f, 26.0f, 24.0f)
+                                        action:@selector(showDownloads:)
+                                       toolTip:@"Downloads"];
+    shareButton = [self addButtonWithImage:[CPIcons shareImage]
+                                     frame:NSMakeRect(width - 90.0f, height - 31.0f, 26.0f, 24.0f)
+                                    action:@selector(showShareMenu:)
+                                   toolTip:@"Share"];
+    [newTabButton setAutoresizingMask:(NSViewMinXMargin | NSViewMinYMargin)];
+    [downloadsButton setAutoresizingMask:(NSViewMinXMargin | NSViewMinYMargin)];
+    [shareButton setAutoresizingMask:(NSViewMinXMargin | NSViewMinYMargin)];
 
-    addressField = [[NSTextField alloc] initWithFrame:NSMakeRect(120.0f, height - 28.0f, width - 130.0f, 22.0f)];
-    [addressField setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
-    [[addressField cell] setScrollable:YES];
-    [[addressField cell] setSendsActionOnEndEditing:NO];
+    addressBar = [[CPAddressBar alloc] initWithFrame:NSMakeRect(72.0f, height - 32.0f, width - 72.0f - 98.0f, 26.0f)];
+    [addressBar setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
+    [content addSubview:addressBar];
+    [addressBar release];
+    addressField = [addressBar textField];
     [addressField setTarget:self];
     [addressField setAction:@selector(addressEntered:)];
-    [content addSubview:addressField];
-    [addressField release];
+    reloadButton = [addressBar reloadButton];
+    [reloadButton setTarget:self];
+    [reloadButton setAction:@selector(reloadOrStop:)];
+    [[addressBar favoriteButton] setTarget:self];
+    [[addressBar favoriteButton] setAction:@selector(toggleFavorite:)];
+    [[addressBar pageButton] setTarget:self];
+    [[addressBar pageButton] setAction:@selector(showPageMenu:)];
 
     [self addSeparatorWithFrame:NSMakeRect(0.0f, tabBarTop, width, 1.0f)
                autoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
@@ -164,13 +192,19 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [forwardButton setEnabled:[selectedTab canGoForward]];
     [reloadButton setImage:(isLoading ? [CPIcons stopImage] : [CPIcons reloadImage])];
     [reloadButton setToolTip:(isLoading ? @"Stop" : @"Reload")];
-
-    if (isLoading && progress > 0.0) {
-        [progressBar setHidden:NO];
-        [progressBar setDoubleValue:progress];
-    } else {
-        [progressBar setHidden:YES];
+    [addressBar setIcon:[selectedTab favicon]];
+    [addressBar setProgress:(isLoading ? MAX(progress, 0.08) : 0.0)];
+    {
+        NSURL *url = [selectedTab URL];
+        BOOL web = [CPSiteSettings siteNameForURL:url] != nil;
+        BOOL favorite = web && [[CPBookmarkStore sharedStore] isFavoriteURLString:[url absoluteString]];
+        [[addressBar favoriteButton] setImage:(favorite ? [CPIcons filledStarImage] : [CPIcons starImage])];
+        [[addressBar favoriteButton] setToolTip:(favorite ? @"Remove from Favorites" : @"Add to Favorites")];
+        [[addressBar favoriteButton] setEnabled:web];
+        [[addressBar pageButton] setEnabled:web];
+        [shareButton setEnabled:web];
     }
+    [progressBar setHidden:YES];
 }
 
 // Mouse-over fires constantly; only redraw the status bar when the text changes.
@@ -392,7 +426,7 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [self updateChromeForSelectedTab];
 
     // The test scripts photograph the window once the selected page is in.
-    if (selectedWasLoading && ![tab isLoading] && ![tab isDiscarded]) {
+    if (selectedWasLoading && ![tab isLoading] && ![tab isDiscarded] && ![[tab URL] isEqual:[CPAppDelegate startPageURL]]) {
         if (CPDebugSnapshotPath() != nil) {
             // CPDebugReader: photograph the page's Reader version instead.
             static BOOL switchedToReader = NO;
@@ -472,7 +506,7 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 
 - (IBAction)goHome:(id)sender
 {
-    [self loadURL:[CPAppDelegate startPageURL]];
+    [self loadURL:[CPAppDelegate homePageURL]];
 }
 
 - (IBAction)reload:(id)sender
@@ -535,20 +569,200 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [self updateChromeForSelectedTab];
 }
 
+// Text size steps, kept for each site.
+static float CPTextSizes[] = { 0.7f, 0.8f, 0.9f, 1.0f, 1.1f, 1.2f, 1.35f, 1.5f, 1.75f, 2.0f };
+#define CPTextSizeCount (sizeof(CPTextSizes) / sizeof(CPTextSizes[0]))
+
+- (void)stepTextSize:(int)direction
+{
+    NSURL *url = [selectedTab URL];
+    float size = [CPSiteSettings siteNameForURL:url] != nil ? [CPSiteSettings textSizeForURL:url] : [[selectedTab webView] textSizeMultiplier];
+    unsigned i, index = 3;
+    for (i = 0; i < CPTextSizeCount; i++) {
+        if (CPTextSizes[i] <= size + 0.01f)
+            index = i;
+    }
+    if (direction > 0 && index + 1 < CPTextSizeCount)
+        index++;
+    else if (direction < 0 && index > 0)
+        index--;
+    else if (direction == 0)
+        index = 3;
+    if ([CPSiteSettings siteNameForURL:url] != nil)
+        [CPSiteSettings setTextSize:CPTextSizes[index] forURL:url];
+    [[selectedTab webView] setTextSizeMultiplier:CPTextSizes[index]];
+}
+
 - (IBAction)makeTextLarger:(id)sender
 {
-    [[selectedTab webView] makeTextLarger:sender];
+    [self stepTextSize:1];
 }
 
 - (IBAction)makeTextSmaller:(id)sender
 {
-    [[selectedTab webView] makeTextSmaller:sender];
+    [self stepTextSize:-1];
+}
+
+- (IBAction)actualSize:(id)sender
+{
+    [self stepTextSize:0];
 }
 
 - (IBAction)newTab:(id)sender
 {
-    [self addTabWithURL:[CPAppDelegate startPageURL] select:YES];
+    CPNewTabPage page = [[CPSettings sharedSettings] newTabPage];
+    NSURL *url = page == CPNewTabShowsHomePage ? [CPAppDelegate homePageURL]
+        : page == CPNewTabShowsBlankPage ? [NSURL URLWithString:@"about:blank"] : [CPAppDelegate startPageURL];
+    [self addTabWithURL:url select:YES];
     [self openLocation:sender];
+}
+
+- (IBAction)toggleFavorite:(id)sender
+{
+    NSURL *url = [selectedTab URL];
+    CPBookmarkStore *store = [CPBookmarkStore sharedStore];
+    if ([CPSiteSettings siteNameForURL:url] == nil)
+        return;
+    if ([store isFavoriteURLString:[url absoluteString]])
+        [store removeFavoriteURLString:[url absoluteString]];
+    else
+        [store addFavoriteWithTitle:[selectedTab displayTitle] URLString:[url absoluteString]];
+    [self updateChromeForSelectedTab];
+}
+
+- (void)popUpMenu:(NSMenu *)menu fromButton:(NSButton *)button
+{
+    NSEvent *event = [NSEvent mouseEventWithType:NSLeftMouseDown
+                                        location:[button convertPoint:NSMakePoint(0.0f, -2.0f) toView:nil]
+                                   modifierFlags:0 timestamp:[[NSApp currentEvent] timestamp]
+                                    windowNumber:[[self window] windowNumber] context:nil
+                                     eventNumber:0 clickCount:1 pressure:1.0f];
+    [NSMenu popUpContextMenu:menu withEvent:event forView:button];
+}
+
+static NSMenuItem *CPMenuItem(NSMenu *menu, NSString *title, SEL action, id target, int state)
+{
+    NSMenuItem *item = [menu addItemWithTitle:title action:action keyEquivalent:@""];
+    [item setTarget:target];
+    [item setState:state];
+    return item;
+}
+
+- (IBAction)showShareMenu:(id)sender
+{
+    NSMenu *menu = [[[NSMenu alloc] initWithTitle:@"Share"] autorelease];
+    CPMenuItem(menu, @"Email This Page", @selector(emailPage:), self, NSOffState);
+    CPMenuItem(menu, @"Copy Link", @selector(copyLink:), self, NSOffState);
+    CPMenuItem(menu, @"Copy Title and Link", @selector(copyTitleAndLink:), self, NSOffState);
+    [menu addItem:[NSMenuItem separatorItem]];
+    CPMenuItem(menu, @"Add to Favorites", @selector(toggleFavorite:), self,
+               [[CPBookmarkStore sharedStore] isFavoriteURLString:[[selectedTab URL] absoluteString]] ? NSOnState : NSOffState);
+    CPMenuItem(menu, @"Add Bookmark...", @selector(addBookmark:), [CPBookmarksController sharedController], NSOffState);
+    [menu addItem:[NSMenuItem separatorItem]];
+    CPMenuItem(menu, @"Open in Safari", @selector(openInSafari:), self, NSOffState);
+    [self popUpMenu:menu fromButton:shareButton];
+}
+
+- (void)emailPage:(id)sender
+{
+    NSURL *url = [selectedTab URL];
+    NSString *subject = [(NSString *)CFURLCreateStringByAddingPercentEscapes(NULL, (CFStringRef)[selectedTab displayTitle], NULL,
+                          CFSTR("&=?+#%"), kCFStringEncodingUTF8) autorelease];
+    NSString *body = [(NSString *)CFURLCreateStringByAddingPercentEscapes(NULL, (CFStringRef)[url absoluteString], NULL,
+                       CFSTR("&=?+#%"), kCFStringEncodingUTF8) autorelease];
+    // Mail, or whatever the Mac uses for email.
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:[NSString stringWithFormat:@"mailto:?subject=%@&body=%@", subject, body]]];
+}
+
+- (void)copyLink:(id)sender
+{
+    NSPasteboard *board = [NSPasteboard generalPasteboard];
+    NSURL *url = [selectedTab URL];
+    [board declareTypes:[NSArray arrayWithObjects:NSURLPboardType, NSStringPboardType, nil] owner:nil];
+    [url writeToPasteboard:board];
+    [board setString:[url absoluteString] forType:NSStringPboardType];
+}
+
+- (void)copyTitleAndLink:(id)sender
+{
+    NSPasteboard *board = [NSPasteboard generalPasteboard];
+    [board declareTypes:[NSArray arrayWithObject:NSStringPboardType] owner:nil];
+    [board setString:[NSString stringWithFormat:@"%@\n%@", [selectedTab displayTitle], [[selectedTab URL] absoluteString]]
+             forType:NSStringPboardType];
+}
+
+- (void)openInSafari:(id)sender
+{
+    [[NSWorkspace sharedWorkspace] openURLs:[NSArray arrayWithObject:[selectedTab URL]]
+                    withAppBundleIdentifier:@"com.apple.Safari" options:NSWorkspaceLaunchDefault
+             additionalEventParamDescriptor:nil launchIdentifiers:NULL];
+}
+
+- (IBAction)showPageMenu:(id)sender
+{
+    NSMenu *menu = [[[NSMenu alloc] initWithTitle:@"Page"] autorelease];
+    NSURL *url = [selectedTab URL];
+    NSString *site = [CPSiteSettings siteNameForURL:url];
+    NSMenuItem *item;
+    int mode;
+
+    if (site == nil)
+        return;
+    CPMenuItem(menu, @"Make Text Bigger", @selector(makeTextLarger:), self, NSOffState);
+    CPMenuItem(menu, @"Make Text Smaller", @selector(makeTextSmaller:), self, NSOffState);
+    CPMenuItem(menu, [NSString stringWithFormat:@"Actual Size (now %.0f%%)", [CPSiteSettings textSizeForURL:url] * 100.0f],
+               @selector(actualSize:), self, NSOffState);
+    [menu addItem:[NSMenuItem separatorItem]];
+    CPMenuItem(menu, ([selectedTab isShowingReader] ? @"Hide Reader" : @"Show Reader"), @selector(toggleReader:), self, NSOffState);
+    CPMenuItem(menu, [NSString stringWithFormat:@"Always Use Reader on %@", site], @selector(toggleReaderForSite:), self,
+               [CPSiteSettings usesReaderForURL:url] ? NSOnState : NSOffState);
+    [menu addItem:[NSMenuItem separatorItem]];
+    mode = [CPSiteModes hasModeForURL:url] ? (int)[CPSiteModes modeForURL:url] : -1;
+    item = CPMenuItem(menu, @"Desktop Version", @selector(setSiteMode:), self, mode == CPSiteModeDesktop ? NSOnState : NSOffState);
+    [item setTag:CPSiteModeDesktop];
+    item = CPMenuItem(menu, @"Mobile Version", @selector(setSiteMode:), self, mode == CPSiteModeMobile ? NSOnState : NSOffState);
+    [item setTag:CPSiteModeMobile];
+    item = CPMenuItem(menu, @"Basic Version", @selector(setSiteMode:), self, mode == CPSiteModeBasic ? NSOnState : NSOffState);
+    [item setTag:CPSiteModeBasic];
+    item = CPMenuItem(menu, [NSString stringWithFormat:@"Default Version (%@)", [CPSiteModes nameForMode:[CPSiteModes defaultModeForURL:url]]],
+                      @selector(setSiteMode:), self, mode < 0 ? NSOnState : NSOffState);
+    [item setTag:-1];
+    [menu addItem:[NSMenuItem separatorItem]];
+    CPMenuItem(menu, [NSString stringWithFormat:@"JavaScript on %@", site], @selector(toggleJavaScriptForSite:), self,
+               [CPSiteSettings javaScriptEnabledForURL:url] ? NSOnState : NSOffState);
+    CPMenuItem(menu, [NSString stringWithFormat:@"Images on %@", site], @selector(toggleImagesForSite:), self,
+               [CPSiteSettings imagesEnabledForURL:url] ? NSOnState : NSOffState);
+    [self popUpMenu:menu fromButton:[addressBar pageButton]];
+}
+
+- (IBAction)toggleReaderForSite:(id)sender
+{
+    NSURL *url = [selectedTab URL];
+    BOOL uses = ![CPSiteSettings usesReaderForURL:url];
+    [CPSiteSettings setUsesReader:uses forURL:url];
+    if (uses != [selectedTab isShowingReader])
+        [self toggleReader:sender];
+}
+
+- (IBAction)toggleJavaScriptForSite:(id)sender
+{
+    NSURL *url = [selectedTab URL];
+    [CPSiteSettings setJavaScriptEnabled:![CPSiteSettings javaScriptEnabledForURL:url] forURL:url];
+    [selectedTab applySiteSettings];
+    [selectedTab reload];
+}
+
+- (IBAction)toggleImagesForSite:(id)sender
+{
+    NSURL *url = [selectedTab URL];
+    [CPSiteSettings setImagesEnabled:![CPSiteSettings imagesEnabledForURL:url] forURL:url];
+    [selectedTab applySiteSettings];
+    [selectedTab reload];
+}
+
+- (IBAction)showDownloads:(id)sender
+{
+    [[CPDownloadsController sharedController] showWindow:sender];
 }
 
 - (IBAction)closeCurrentTab:(id)sender

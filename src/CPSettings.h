@@ -17,6 +17,12 @@ typedef enum {
 
 extern NSString * const CPSettingsDidChangeNotification;
 
+typedef enum {
+    CPNewTabShowsStartPage = 0,
+    CPNewTabShowsHomePage = 1,
+    CPNewTabShowsBlankPage = 2
+} CPNewTabPage;
+
 @interface CPSettings : NSObject
 
 + (CPSettings *)sharedSettings;
@@ -38,6 +44,34 @@ extern NSString * const CPSettingsDidChangeNotification;
 
 - (BOOL)loadsImages;
 - (void)setLoadsImages:(BOOL)flag;
+
+// Performance: what can be turned off when a Mac is slow or short of
+// memory. Each has a site-by-site counterpart where that makes sense (see
+// CPSiteSettings).
+- (BOOL)javaScriptEnabled;
+- (void)setJavaScriptEnabled:(BOOL)flag;
+// Resources/polyfills.js, run in every page (takes effect on relaunch).
+- (BOOL)usesCompatibilityScripts;
+- (void)setUsesCompatibilityScripts:(BOOL)flag;
+- (BOOL)blocksAdsAndTrackers;
+- (void)setBlocksAdsAndTrackers:(BOOL)flag;
+// Video and audio in pages (through the media relay).
+- (BOOL)playsVideo;
+- (void)setPlaysVideo:(BOOL)flag;
+- (BOOL)autoplaysVideo;
+- (void)setAutoplaysVideo:(BOOL)flag;
+- (BOOL)showsAnimatedImages;
+- (void)setShowsAnimatedImages:(BOOL)flag;
+// Stop a script that runs 15 seconds without a break.
+- (BOOL)stopsLongScripts;
+- (void)setStopsLongScripts:(BOOL)flag;
+
+// The home page: an address, or empty for the start page (Favorites and
+// Top Sites).
+- (NSString *)homePage;
+- (void)setHomePage:(NSString *)page;
+- (CPNewTabPage)newTabPage;
+- (void)setNewTabPage:(CPNewTabPage)page;
 
 // Whether to empty WebKit's shared memory cache when this Mac runs low.
 - (BOOL)releasesMemoryUnderPressure;

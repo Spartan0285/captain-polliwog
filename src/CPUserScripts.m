@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #import "CPUserScripts.h"
+#import "CPSettings.h"
 #import <WebKit/WebKit.h>
 
 // -[WebView _addUserScriptToGroup:...], private WebKit API (Safari 4 and
@@ -28,6 +29,8 @@ typedef void (*CPAddUserScriptFunction)(id, SEL, NSString *, id, NSString *, NSU
     if (installed)
         return;
     installed = YES;
+    if (![[CPSettings sharedSettings] usesCompatibilityScripts])
+        return;
 
     if (worldClass == Nil || ![worldClass respondsToSelector:@selector(standardWorld)]
         || ![WebView respondsToSelector:addUserScript])

@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #import "CPScriptWatchdog.h"
+#import "CPSettings.h"
 #import <WebKit/WebKit.h>
 #include <dlfcn.h>
 #include <stdbool.h>
@@ -40,6 +41,8 @@ static bool CPStopLongScript(CPJSContextRef context, void *info)
     if (installed)
         return;
     installed = YES;
+    if (![[CPSettings sharedSettings] stopsLongScripts])
+        return;
 
     getGroup = (CPJSContextGetGroupFunction)dlsym(RTLD_DEFAULT, "JSContextGetGroup");
     setLimit = (CPJSSetExecutionTimeLimitFunction)dlsym(RTLD_DEFAULT, "JSContextGroupSetExecutionTimeLimit");

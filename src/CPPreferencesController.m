@@ -8,7 +8,7 @@
 #import "CPDebugSnapshot.h"
 
 #define CPWindowWidth   520.0f
-#define CPWindowHeight  402.0f
+#define CPWindowHeight  470.0f
 
 static NSTextField *CPLabel(NSView *parent, NSRect frame, NSString *text, BOOL small, BOOL rightAligned)
 {
@@ -52,90 +52,136 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
 
 @implementation CPPreferencesController (Private)
 
+// The performance switches: each a setting's getter and setter, a title
+// and what it costs or saves.
+static struct {
+    NSString *getter;           // selector names: @selector isn't constant here
+    NSString *setter;
+    NSString *title;
+    NSString *note;
+} CPSwitches[] = {
+    { @"loadsImages", @"setLoadsImages:", @"Load images", @"Off, pages load far faster and use less memory." },
+    { @"showsAnimatedImages", @"setShowsAnimatedImages:", @"Animate images", @"GIF animations keep the processor busy." },
+    { @"javaScriptEnabled", @"setJavaScriptEnabled:", @"Run JavaScript", @"Most sites need it; Reader never does." },
+    { @"blocksAdsAndTrackers", @"setBlocksAdsAndTrackers:", @"Block ads and trackers", @"Often the heaviest part of a page." },
+    { @"playsVideo", @"setPlaysVideo:", @"Play video and audio", @"Takes effect when Captain Polliwog next opens." },
+    { @"autoplaysVideo", @"setAutoplaysVideo:", @"Let video play by itself", @"Off, video waits for a click." },
+    { @"usesCompatibilityScripts", @"setUsesCompatibilityScripts:", @"Add newer web features", @"Helps modern sites; takes effect on next open." },
+    { @"stopsLongScripts", @"setStopsLongScripts:", @"Stop scripts that run too long", @"Keeps a runaway page from freezing the browser." },
+    { @"releasesMemoryUnderPressure", @"setReleasesMemoryUnderPressure:", @"Free memory when this Mac runs low", @"Pages you return to may redraw more slowly." },
+    { NULL, NULL, nil, nil }
+};
+
 - (void)buildInterface
 {
     NSView *content = [[self window] contentView];
-    float top = CPWindowHeight - 36.0f;
+    NSTabView *tabs = [[NSTabView alloc] initWithFrame:NSMakeRect(10.0f, 10.0f, CPWindowWidth - 20.0f, CPWindowHeight - 20.0f)];
+    NSTabViewItem *item;
+    NSView *view;
+    float top;
+    unsigned i;
 
-    CPLabel(content, NSMakeRect(20.0f, top, 110.0f, 17.0f), @"Save downloads to:", NO, YES);
-    downloadsField = CPLabel(content, NSMakeRect(138.0f, top + 1.0f, 260.0f, 14.0f), @"", YES, NO);
-    [[downloadsField cell] setLineBreakMode:NSLineBreakByTruncatingMiddle];
-    CPButton(content, NSMakeRect(402.0f, top - 5.0f, 100.0f, 24.0f), @"Choose...",
-             self, @selector(chooseDownloadsFolder:));
+    [content addSubview:tabs];
+    [tabs release];
+
+    // General
+    item = [[[NSTabViewItem alloc] initWithIdentifier:@"general"] autorelease];
+    [item setLabel:@"General"];
+    view = [item view];
+    top = CPWindowHeight - 90.0f;
+
+    CPLabel(view, NSMakeRect(10.0f, top, 120.0f, 17.0f), @"Home page:", NO, YES);
+    homePageField = [[NSTextField alloc] initWithFrame:NSMakeRect(138.0f, top - 2.0f, 310.0f, 22.0f)];
+    [homePageField setTarget:self];
+    [homePageField setAction:@selector(homePageChanged:)];
+    [[homePageField cell] setSendsActionOnEndEditing:YES];
+    [[homePageField cell] setScrollable:YES];
+    [view addSubview:homePageField];
+    [homePageField release];
+    CPLabel(view, NSMakeRect(138.0f, top - 22.0f, 320.0f, 14.0f), @"Empty for the start page: Favorites and Top Sites.", YES, NO);
+    CPButton(view, NSMakeRect(134.0f, top - 50.0f, 130.0f, 24.0f), @"Use Current Page", self, @selector(useCurrentPageAsHome:));
+
+    top -= 88.0f;
+    CPLabel(view, NSMakeRect(10.0f, top, 120.0f, 17.0f), @"New tabs open:", NO, YES);
+    newTabPopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(136.0f, top - 4.0f, 200.0f, 26.0f)];
+    [newTabPopUp addItemWithTitle:@"Start Page"];
+    [newTabPopUp addItemWithTitle:@"Home Page"];
+    [newTabPopUp addItemWithTitle:@"Blank Page"];
+    [newTabPopUp setTarget:self];
+    [newTabPopUp setAction:@selector(newTabPageChanged:)];
+    [view addSubview:newTabPopUp];
+    [newTabPopUp release];
 
     top -= 42.0f;
-    CPLabel(content, NSMakeRect(20.0f, top, 110.0f, 17.0f), @"Show websites as:", NO, YES);
-    siteModePopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(138.0f, top - 4.0f, 200.0f, 26.0f)];
+    CPLabel(view, NSMakeRect(10.0f, top, 120.0f, 17.0f), @"Show websites as:", NO, YES);
+    siteModePopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(136.0f, top - 4.0f, 200.0f, 26.0f)];
     [siteModePopUp addItemWithTitle:@"Desktop"];
     [siteModePopUp addItemWithTitle:@"Mobile (lighter)"];
     [siteModePopUp addItemWithTitle:@"Basic (lightest)"];
     [siteModePopUp setTarget:self];
     [siteModePopUp setAction:@selector(siteModeChanged:)];
-    [content addSubview:siteModePopUp];
+    [view addSubview:siteModePopUp];
     [siteModePopUp release];
-    CPLabel(content, NSMakeRect(138.0f, top - 26.0f, 360.0f, 14.0f),
-            @"Choose for a single site in View > Site Version.", YES, NO);
+    CPLabel(view, NSMakeRect(138.0f, top - 26.0f, 330.0f, 14.0f),
+            @"For one site, use the aA button in the address bar.", YES, NO);
 
-    top -= 54.0f;
-    CPLabel(content, NSMakeRect(20.0f, top, 110.0f, 17.0f), @"Memory use:", NO, YES);
-    memoryPopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(138.0f, top - 4.0f, 200.0f, 26.0f)];
+    top -= 62.0f;
+    CPLabel(view, NSMakeRect(10.0f, top, 120.0f, 17.0f), @"Save downloads to:", NO, YES);
+    downloadsField = CPLabel(view, NSMakeRect(138.0f, top + 1.0f, 230.0f, 14.0f), @"", YES, NO);
+    [[downloadsField cell] setLineBreakMode:NSLineBreakByTruncatingMiddle];
+    CPButton(view, NSMakeRect(370.0f, top - 5.0f, 90.0f, 24.0f), @"Choose...", self, @selector(chooseDownloadsFolder:));
+    [tabs addTabViewItem:item];
+
+    // Performance
+    item = [[[NSTabViewItem alloc] initWithIdentifier:@"performance"] autorelease];
+    [item setLabel:@"Performance"];
+    view = [item view];
+    top = CPWindowHeight - 86.0f;
+
+    CPLabel(view, NSMakeRect(10.0f, top, 110.0f, 17.0f), @"Memory use:", NO, YES);
+    memoryPopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(126.0f, top - 4.0f, 170.0f, 26.0f)];
     [memoryPopUp addItemWithTitle:@"Automatic"];
     [memoryPopUp addItemWithTitle:@"256MB machine"];
     [memoryPopUp addItemWithTitle:@"512MB machine"];
     [memoryPopUp addItemWithTitle:@"1GB or more"];
     [memoryPopUp setTarget:self];
     [memoryPopUp setAction:@selector(memoryProfileChanged:)];
-    [content addSubview:memoryPopUp];
+    [view addSubview:memoryPopUp];
     [memoryPopUp release];
+    memoryExplanation = CPLabel(view, NSMakeRect(128.0f, top - 22.0f, 340.0f, 14.0f), @"", YES, NO);
 
-    memoryExplanation = CPLabel(content, NSMakeRect(138.0f, top - 26.0f, 360.0f, 14.0f), @"", YES, NO);
-
-    top -= 62.0f;
-    CPLabel(content, NSMakeRect(20.0f, top, 110.0f, 17.0f), @"Disk cache:", NO, YES);
-    diskSizeField = [[NSTextField alloc] initWithFrame:NSMakeRect(138.0f, top - 2.0f, 60.0f, 22.0f)];
+    top -= 44.0f;
+    CPLabel(view, NSMakeRect(10.0f, top, 110.0f, 17.0f), @"Disk cache:", NO, YES);
+    diskSizeField = [[NSTextField alloc] initWithFrame:NSMakeRect(128.0f, top - 2.0f, 50.0f, 22.0f)];
     [diskSizeField setTarget:self];
     [diskSizeField setAction:@selector(diskSizeChanged:)];
     [[diskSizeField cell] setSendsActionOnEndEditing:YES];
-    [content addSubview:diskSizeField];
+    [view addSubview:diskSizeField];
     [diskSizeField release];
-    CPLabel(content, NSMakeRect(204.0f, top, 30.0f, 17.0f), @"MB", NO, NO);
-    diskSizeNote = CPLabel(content, NSMakeRect(238.0f, top, 260.0f, 14.0f), @"", YES, NO);
+    CPLabel(view, NSMakeRect(182.0f, top, 26.0f, 17.0f), @"MB", NO, NO);
+    diskSizeNote = CPLabel(view, NSMakeRect(208.0f, top, 260.0f, 14.0f), @"", YES, NO);
+    top -= 22.0f;
+    locationField = CPLabel(view, NSMakeRect(128.0f, top, 340.0f, 14.0f), @"", YES, NO);
+    top -= 28.0f;
+    CPButton(view, NSMakeRect(124.0f, top, 86.0f, 24.0f), @"Choose...", self, @selector(chooseCacheLocation:));
+    CPButton(view, NSMakeRect(212.0f, top, 100.0f, 24.0f), @"Use Default", self, @selector(useDefaultCacheLocation:));
+    CPButton(view, NSMakeRect(314.0f, top, 110.0f, 24.0f), @"Empty Cache", self, @selector(clearCacheNow:));
 
     top -= 30.0f;
-    CPLabel(content, NSMakeRect(20.0f, top, 110.0f, 17.0f), @"Location:", NO, YES);
-    locationField = CPLabel(content, NSMakeRect(138.0f, top, 360.0f, 14.0f), @"", YES, NO);
-
-    top -= 28.0f;
-    CPButton(content, NSMakeRect(136.0f, top, 90.0f, 24.0f), @"Choose...",
-             self, @selector(chooseCacheLocation:));
-    CPButton(content, NSMakeRect(230.0f, top, 110.0f, 24.0f), @"Use Default",
-             self, @selector(useDefaultCacheLocation:));
-    CPButton(content, NSMakeRect(344.0f, top, 120.0f, 24.0f), @"Empty Cache",
-             self, @selector(clearCacheNow:));
-
-    top -= 36.0f;
-    imagesCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(138.0f, top, 300.0f, 18.0f)];
-    [imagesCheckbox setButtonType:NSSwitchButton];
-    [imagesCheckbox setTitle:@"Load images"];
-    [imagesCheckbox setTarget:self];
-    [imagesCheckbox setAction:@selector(imagesChanged:)];
-    [content addSubview:imagesCheckbox];
-    [imagesCheckbox release];
-
-    top -= 24.0f;
-    memoryReliefCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(138.0f, top, 360.0f, 18.0f)];
-    [memoryReliefCheckbox setButtonType:NSSwitchButton];
-    [memoryReliefCheckbox setTitle:@"Free memory when this Mac runs low"];
-    [memoryReliefCheckbox setTarget:self];
-    [memoryReliefCheckbox setAction:@selector(memoryReliefChanged:)];
-    [content addSubview:memoryReliefCheckbox];
-    [memoryReliefCheckbox release];
-    CPLabel(content, NSMakeRect(156.0f, top - 16.0f, 340.0f, 14.0f),
-            @"Pages you return to may redraw their images more slowly.", YES, NO);
-
-    CPLabel(content, NSMakeRect(20.0f, 16.0f, CPWindowWidth - 40.0f, 28.0f),
-            @"A cached page skips the download and the secure handshake, "
-            @"which is the slowest part on a G3.", YES, NO);
+    for (i = 0; CPSwitches[i].title != nil; i++) {
+        NSButton *box = [[NSButton alloc] initWithFrame:NSMakeRect(18.0f, top, 250.0f, 18.0f)];
+        [box setButtonType:NSSwitchButton];
+        [box setTitle:CPSwitches[i].title];
+        [box setTag:i];
+        [box setTarget:self];
+        [box setAction:@selector(switchChanged:)];
+        [view addSubview:box];
+        [switchBoxes addObject:box];
+        [box release];
+        CPLabel(view, NSMakeRect(272.0f, top + 1.0f, 200.0f, 14.0f), CPSwitches[i].note, YES, NO);
+        top -= 22.0f;
+    }
+    [tabs addTabViewItem:item];
 }
 
 - (void)refresh
@@ -166,8 +212,13 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
                                   (double)[settings diskCacheBytesInUse] / (1024.0 * 1024.0)]];
     [locationField setStringValue:([location length] > 0) ? [settings resolvedDiskCachePath]
                                                           : @"Default (inside your Library folder)"];
-    [imagesCheckbox setState:([settings loadsImages] ? NSOnState : NSOffState)];
-    [memoryReliefCheckbox setState:([settings releasesMemoryUnderPressure] ? NSOnState : NSOffState)];
+    {
+        unsigned i;
+        for (i = 0; i < [switchBoxes count]; i++)
+            [[switchBoxes objectAtIndex:i] setState:([settings performSelector:NSSelectorFromString(CPSwitches[i].getter)] ? NSOnState : NSOffState)];
+    }
+    [homePageField setStringValue:[settings homePage]];
+    [newTabPopUp selectItemAtIndex:(int)[settings newTabPage]];
     [downloadsField setStringValue:[[settings downloadsFolder] stringByAbbreviatingWithTildeInPath]];
 }
 
@@ -198,6 +249,7 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
     if (self == nil)
         return nil;
 
+    switchBoxes = [[NSMutableArray alloc] init];
     [self buildInterface];
     [self refresh];
     return self;
@@ -270,22 +322,48 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
     [self refresh];
 }
 
-- (IBAction)memoryReliefChanged:(id)sender
-{
-    [[CPSettings sharedSettings] setReleasesMemoryUnderPressure:([memoryReliefCheckbox state] == NSOnState)];
-    [self refresh];
-}
-
 - (IBAction)siteModeChanged:(id)sender
 {
     [CPSiteModes setDefaultMode:(CPSiteMode)[siteModePopUp indexOfSelectedItem]];
     [self refresh];
 }
 
-- (IBAction)imagesChanged:(id)sender
+- (IBAction)switchChanged:(id)sender
 {
-    [[CPSettings sharedSettings] setLoadsImages:([imagesCheckbox state] == NSOnState)];
+    int index = [sender tag];
+    BOOL on = [sender state] == NSOnState;
+    NSMethodSignature *signature = [[CPSettings sharedSettings] methodSignatureForSelector:NSSelectorFromString(CPSwitches[index].setter)];
+    NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
+    [invocation setTarget:[CPSettings sharedSettings]];
+    [invocation setSelector:NSSelectorFromString(CPSwitches[index].setter)];
+    [invocation setArgument:&on atIndex:2];
+    [invocation invoke];
     [self refresh];
+}
+
+- (IBAction)homePageChanged:(id)sender
+{
+    NSString *home = [[homePageField stringValue] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if ([home length] && [home rangeOfString:@"://"].location == NSNotFound)
+        home = [@"http://" stringByAppendingString:home];
+    [[CPSettings sharedSettings] setHomePage:home];
+    [self refresh];
+}
+
+- (IBAction)useCurrentPageAsHome:(id)sender
+{
+    id controller = [[NSApp mainWindow] windowController];
+    NSURL *url = nil;
+    if ([controller respondsToSelector:@selector(selectedTab)])
+        url = [[controller performSelector:@selector(selectedTab)] URL];
+    if ([[url scheme] hasPrefix:@"http"])
+        [[CPSettings sharedSettings] setHomePage:[url absoluteString]];
+    [self refresh];
+}
+
+- (IBAction)newTabPageChanged:(id)sender
+{
+    [[CPSettings sharedSettings] setNewTabPage:(CPNewTabPage)[newTabPopUp indexOfSelectedItem]];
 }
 
 @end

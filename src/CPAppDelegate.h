@@ -13,6 +13,8 @@
 
 + (NSString *)userAgentApplicationName;
 + (NSURL *)startPageURL;
+// The home page setting's address, or the start page.
++ (NSURL *)homePageURL;
 
 - (void)buildMainMenu;
 - (CPBrowserWindowController *)openBrowserWindow;

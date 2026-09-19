@@ -480,6 +480,33 @@
 
     var ElementPrototype = global.Element && Element.prototype;
 
+    /* AutoFill: the last password typed on this page, with the username
+       before it, kept so Captain Polliwog can offer to save the login even
+       when the page clears or replaces the field before it moves on (as
+       Google's sign-in does). The page's own data, kept in the page. */
+    (function () {
+        function record(event) {
+            var target = event.target;
+            if (!target || target.tagName !== "INPUT" || String(target.type).toLowerCase() !== "password" || !target.value)
+                return;
+            var username = "", inputs = document.getElementsByTagName("input");
+            for (var i = 0; i < inputs.length && inputs[i] !== target; i++) {
+                var type = String(inputs[i].type).toLowerCase();
+                if ((type === "email" || type === "text" || type === "hidden") && inputs[i].value
+                    && (type !== "hidden" || /mail|user|login|identifier/i.test(inputs[i].name || "")))
+                    username = inputs[i].value;
+            }
+            try {
+                Object.defineProperty(global, "__polliwogTypedLogin", {
+                    value: { password: target.value, username: username }, configurable: true, writable: true
+                });
+            } catch (e) {
+            }
+        }
+        document.addEventListener("change", record, true);
+        document.addEventListener("input", record, true);
+    })();
+
     define(ElementPrototype, "toggleAttribute", function toggleAttribute(name, force) {
         var has = this.hasAttribute(name);
         if (force === undefined ? has : !force) {
