@@ -1,7 +1,7 @@
 From 4de0053a8b4575cf73bee9b03f9759f724714766 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 04:01:41 -0400
-Subject: [PATCH 23/47] WebKitLegacy for PowerPC: .m files as Objective-C, the
+Subject: [PATCH 23/49] WebKitLegacy for PowerPC: .m files as Objective-C, the
  Growl provider, and no plug-in host process
 
 ---
@@ -75,5 +75,5 @@ index b288aaed..8949a346 100644
  WEBKIT_CREATE_FORWARDING_HEADERS(WebKitLegacy DIRECTORIES ${WebKitLegacy_FORWARDING_HEADERS_DIRECTORIES} FILES ${WebKitLegacy_FORWARDING_HEADERS_FILES})
  WEBKIT_CREATE_FORWARDING_HEADERS(WebKit DIRECTORIES ${FORWARDING_HEADERS_DIR}/WebKitLegacy)
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

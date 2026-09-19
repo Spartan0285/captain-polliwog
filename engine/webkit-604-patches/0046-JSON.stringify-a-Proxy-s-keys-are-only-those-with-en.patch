@@ -1,7 +1,7 @@
 From 79f59bc8dc697481bf3dc4ea690b230e09b22334 Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Sat, 19 Sep 2026 08:15:31 -0400
-Subject: [PATCH 46/47] JSON.stringify: a Proxy's keys are only those with
+Subject: [PATCH 46/49] JSON.stringify: a Proxy's keys are only those with
  enumerable own properties
 
 JSON took every key a Proxy's ownKeys trap listed, but EnumerableOwnPropertyNames
@@ -65,5 +65,5 @@ index e23ac812..4cb9d5c5 100644
              objectStartVisitMember:
              FALLTHROUGH;
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

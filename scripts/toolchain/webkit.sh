@@ -10,7 +10,9 @@
 # slower, because every WebCore file reads thousands of headers through it.
 #
 # Variants:
-#   leopard-g4  Leopard, G4 (AltiVec): reproduces Leopard WebKit's ppc7400 build.
+#   leopard-g4      Leopard, G4 (AltiVec): reproduces Leopard WebKit's ppc7400 build.
+#   leopard-g4-jit  The same with JavaScriptCore's baseline JIT (work in
+#                   progress), in its own build directory.
 set -e
 ACTION=$1 VARIANT=$2
 shift 2 || true
@@ -25,9 +27,11 @@ OTS="/opt/ppc/ots/lib/libots.a;/opt/ppc/ots/lib/libwoff2.a;/opt/ppc/ots/lib/libb
 case $VARIANT in
     # 7400 instructions (every G4), scheduled for the 7447/7450 "G4e" core
     # that later G4 Macs, the iBook and aluminum PowerBooks among them, have.
-    leopard-g4) TARGET=10.5; CPU="-mcpu=7400 -mtune=7450 -maltivec" ;;
-    *) echo "usage: $0 configure|build leopard-g4 [targets...]" >&2; exit 1 ;;
+    leopard-g4|leopard-g4-jit) TARGET=10.5; CPU="-mcpu=7400 -mtune=7450 -maltivec" ;;
+    *) echo "usage: $0 configure|build leopard-g4[-jit] [targets...]" >&2; exit 1 ;;
 esac
+JIT=OFF
+[ "$VARIANT" = leopard-g4-jit ] && JIT=ON
 # WebCore is about 30MB of code, past the reach of PowerPC's branch
 # instruction; ld64 bridges that with branch islands, but only within one
 # section. Fewer cold and hot sections for the linker to fold back into
@@ -47,7 +51,7 @@ configure)
         -DCMAKE_TOOLCHAIN_FILE=/opt/ppc/share/ppc-darwin.cmake \
         -DCMAKE_OSX_DEPLOYMENT_TARGET=$TARGET -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_FLAGS="$CPU" -DCMAKE_CXX_FLAGS="$CPU -D_GLIBCXX_USE_C99_MATH_TR1=1" \
-        -DENABLE_JIT=OFF -DENABLE_DFG_JIT=OFF -DENABLE_FTL_JIT=OFF -DENABLE_API_TESTS=OFF \
+        -DENABLE_JIT=$JIT -DENABLE_DFG_JIT=OFF -DENABLE_SAMPLING_PROFILER=OFF -DENABLE_FTL_JIT=OFF -DENABLE_API_TESTS=OFF \
         -DPOLLIWOG_ENABLE_WEBKIT2=OFF \
         -DICU_INCLUDE_DIR=/opt/ppc/icu/include \
         -DICU_LIBRARY=$ICU -DICU_I18N_LIBRARY=$ICU -DICU_DATA_LIBRARY=$ICU \

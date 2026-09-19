@@ -1,7 +1,7 @@
 From 935f0550eef3c360899fc8bb84ba277907ebe299 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 02:14:05 -0400
-Subject: [PATCH 15/47] XSLT: accept libxml2 2.12's const error pointer
+Subject: [PATCH 15/49] XSLT: accept libxml2 2.12's const error pointer
 
 libxml2 2.12 made xmlStructuredErrorFunc take a const xmlError*, as
 upstream WebKit adapted to in 2023.
@@ -43,5 +43,5 @@ index e125c604..cfca2411 100644
      PageConsoleClient* console = static_cast<PageConsoleClient*>(userData);
      if (!console)
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

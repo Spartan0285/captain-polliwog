@@ -1,0 +1,2111 @@
+From 5b292b578f559eb8bb5d9ec29aef5f2b650d363e Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Sat, 19 Sep 2026 10:19:24 -0400
+Subject: [PATCH 48/49] JSC: native LLInt for 32-bit PowerPC
+
+An offlineasm PPC backend (Darwin ABI, cctools syntax) and ENABLE(C_LOOP),
+split from !ENABLE(JIT) so the assembly LLInt runs with the JIT off.
+Big-endian JSValue returns are swapped at the C/JS boundaries, and
+getHostCallReturnValue is defined in the LLInt for PPC.
+---
+ Source/JavaScriptCore/CMakeLists.txt          |   1 +
+ .../assembler/MaxFrameExtentForSlowPathCall.h |   9 +-
+ Source/JavaScriptCore/bytecode/Opcode.h       |   2 +-
+ Source/JavaScriptCore/heap/Heap.cpp           |   2 +-
+ .../JavaScriptCore/interpreter/CLoopStack.cpp |   4 +-
+ .../JavaScriptCore/interpreter/CLoopStack.h   |   4 +-
+ .../interpreter/CLoopStackInlines.h           |   4 +-
+ .../interpreter/Interpreter.cpp               |   2 +-
+ .../JavaScriptCore/interpreter/Interpreter.h  |   6 +-
+ Source/JavaScriptCore/jit/FPRInfo.h           |  58 ++
+ Source/JavaScriptCore/jit/GPRInfo.h           |   1 +
+ .../JavaScriptCore/jit/HostCallReturnValue.h  |  12 +-
+ Source/JavaScriptCore/jit/RegisterSet.cpp     |  15 +-
+ Source/JavaScriptCore/llint/LLIntCLoop.cpp    |   4 +-
+ Source/JavaScriptCore/llint/LLIntCLoop.h      |   4 +-
+ Source/JavaScriptCore/llint/LLIntData.cpp     |  10 +-
+ Source/JavaScriptCore/llint/LLIntData.h       |   4 +-
+ .../llint/LLIntOfflineAsmConfig.h             |   9 +-
+ Source/JavaScriptCore/llint/LLIntOpcode.h     |   4 +-
+ .../JavaScriptCore/llint/LLIntSlowPaths.cpp   |   6 +-
+ Source/JavaScriptCore/llint/LLIntSlowPaths.h  |   2 +-
+ Source/JavaScriptCore/llint/LLIntThunks.cpp   |   6 +-
+ .../llint/LowLevelInterpreter.asm             |  57 +-
+ .../llint/LowLevelInterpreter.cpp             |   2 +-
+ .../llint/LowLevelInterpreter.h               |   4 +-
+ .../llint/LowLevelInterpreter32_64.asm        |  51 +-
+ Source/JavaScriptCore/offlineasm/backends.rb  |   3 +
+ .../JavaScriptCore/offlineasm/instructions.rb |   9 +-
+ Source/JavaScriptCore/offlineasm/ppc.rb       | 920 ++++++++++++++++++
+ Source/JavaScriptCore/runtime/JSCJSValue.h    |   6 +-
+ .../runtime/JSCJSValueInlines.h               |   2 +-
+ Source/JavaScriptCore/runtime/VM.cpp          |  12 +-
+ Source/JavaScriptCore/runtime/VM.h            |  10 +-
+ Source/JavaScriptCore/runtime/VMInlines.h     |   4 +-
+ Source/WTF/wtf/Platform.h                     |  17 +
+ 35 files changed, 1191 insertions(+), 75 deletions(-)
+ create mode 100644 Source/JavaScriptCore/offlineasm/ppc.rb
+
+diff --git a/Source/JavaScriptCore/CMakeLists.txt b/Source/JavaScriptCore/CMakeLists.txt
+index 4b9f7b90..f801cdfa 100644
+--- a/Source/JavaScriptCore/CMakeLists.txt
++++ b/Source/JavaScriptCore/CMakeLists.txt
+@@ -1134,6 +1134,7 @@ set(OFFLINE_ASM
+     offlineasm/config.rb
+     offlineasm/instructions.rb
+     offlineasm/mips.rb
++    offlineasm/ppc.rb
+     offlineasm/offsets.rb
+     offlineasm/opt.rb
+     offlineasm/parser.rb
+diff --git a/Source/JavaScriptCore/assembler/MaxFrameExtentForSlowPathCall.h b/Source/JavaScriptCore/assembler/MaxFrameExtentForSlowPathCall.h
+index c6f53b34..9230a0c3 100644
+--- a/Source/JavaScriptCore/assembler/MaxFrameExtentForSlowPathCall.h
++++ b/Source/JavaScriptCore/assembler/MaxFrameExtentForSlowPathCall.h
+@@ -35,7 +35,7 @@ namespace JSC {
+ // that can be used for outgoing args when calling a slow path C function
+ // from JS code.
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ static const size_t maxFrameExtentForSlowPathCall = 0;
+ 
+ #elif CPU(X86_64) && OS(WINDOWS)
+@@ -62,6 +62,11 @@ static const size_t maxFrameExtentForSlowPathCall = 24;
+ // Though args are in registers, there need to be space on the stack for all args.
+ static const size_t maxFrameExtentForSlowPathCall = 40;
+ 
++#elif CPU(PPC)
++// Darwin: the callee may write the 24-byte linkage area and the 32-byte
++// parameter area above its sp; arguments beyond eight words follow them.
++static const size_t maxFrameExtentForSlowPathCall = 72;
++
+ #else
+ #error "Unsupported CPU: need value for maxFrameExtentForSlowPathCall"
+ 
+@@ -69,7 +74,7 @@ static const size_t maxFrameExtentForSlowPathCall = 40;
+ 
+ COMPILE_ASSERT(!(maxFrameExtentForSlowPathCall % sizeof(Register)), extent_must_be_in_multiples_of_registers);
+ 
+-#if ENABLE(JIT)
++#if !ENABLE(C_LOOP)
+ // Make sure that cfr - maxFrameExtentForSlowPathCall bytes will make the stack pointer aligned
+ COMPILE_ASSERT((maxFrameExtentForSlowPathCall % 16) == 16 - sizeof(CallerFrameAndPC), extent_must_align_stack_from_callframe_pointer);
+ #endif
+diff --git a/Source/JavaScriptCore/bytecode/Opcode.h b/Source/JavaScriptCore/bytecode/Opcode.h
+index 79b5d7f3..357145da 100644
+--- a/Source/JavaScriptCore/bytecode/Opcode.h
++++ b/Source/JavaScriptCore/bytecode/Opcode.h
+@@ -58,7 +58,7 @@ namespace JSC {
+ #undef OPCODE_ID_ENUM
+ 
+ const int maxOpcodeLength = 9;
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ const int numOpcodeIDs = NUMBER_OF_BYTECODE_IDS + NUMBER_OF_CLOOP_BYTECODE_HELPER_IDS + NUMBER_OF_BYTECODE_HELPER_IDS;
+ #else
+ const int numOpcodeIDs = NUMBER_OF_BYTECODE_IDS + NUMBER_OF_BYTECODE_HELPER_IDS;
+diff --git a/Source/JavaScriptCore/heap/Heap.cpp b/Source/JavaScriptCore/heap/Heap.cpp
+index 5abf741c..9b306711 100644
+--- a/Source/JavaScriptCore/heap/Heap.cpp
++++ b/Source/JavaScriptCore/heap/Heap.cpp
+@@ -625,7 +625,7 @@ void Heap::gatherStackRoots(ConservativeRoots& roots)
+ 
+ void Heap::gatherJSStackRoots(ConservativeRoots& roots)
+ {
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+     m_vm->interpreter->cloopStack().gatherConservativeRoots(roots, *m_jitStubRoutines, *m_codeBlocks);
+ #else
+     UNUSED_PARAM(roots);
+diff --git a/Source/JavaScriptCore/interpreter/CLoopStack.cpp b/Source/JavaScriptCore/interpreter/CLoopStack.cpp
+index f688e88b..bc4aa608 100644
+--- a/Source/JavaScriptCore/interpreter/CLoopStack.cpp
++++ b/Source/JavaScriptCore/interpreter/CLoopStack.cpp
+@@ -29,7 +29,7 @@
+ #include "config.h"
+ #include "CLoopStack.h"
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ 
+ #include "CLoopStackInlines.h"
+ #include "ConservativeRoots.h"
+@@ -161,4 +161,4 @@ size_t CLoopStack::committedByteCount()
+ 
+ } // namespace JSC
+ 
+-#endif // !ENABLE(JIT)
++#endif // ENABLE(C_LOOP)
+diff --git a/Source/JavaScriptCore/interpreter/CLoopStack.h b/Source/JavaScriptCore/interpreter/CLoopStack.h
+index 6298a48e..c60268ba 100644
+--- a/Source/JavaScriptCore/interpreter/CLoopStack.h
++++ b/Source/JavaScriptCore/interpreter/CLoopStack.h
+@@ -28,7 +28,7 @@
+ 
+ #pragma once
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ 
+ #include "Register.h"
+ #include <wtf/Noncopyable.h>
+@@ -110,4 +110,4 @@ namespace JSC {
+ 
+ } // namespace JSC
+ 
+-#endif // !ENABLE(JIT)
++#endif // ENABLE(C_LOOP)
+diff --git a/Source/JavaScriptCore/interpreter/CLoopStackInlines.h b/Source/JavaScriptCore/interpreter/CLoopStackInlines.h
+index 44e385bd..165b2f11 100644
+--- a/Source/JavaScriptCore/interpreter/CLoopStackInlines.h
++++ b/Source/JavaScriptCore/interpreter/CLoopStackInlines.h
+@@ -25,7 +25,7 @@
+ 
+ #pragma once
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ 
+ #include "CLoopStack.h"
+ #include "CallFrame.h"
+@@ -78,4 +78,4 @@ inline void CLoopStack::setCLoopStackLimit(Register* newTopOfStack)
+ 
+ } // namespace JSC
+ 
+-#endif // !ENABLE(JIT)
++#endif // ENABLE(C_LOOP)
+diff --git a/Source/JavaScriptCore/interpreter/Interpreter.cpp b/Source/JavaScriptCore/interpreter/Interpreter.cpp
+index e3492fca..600696f0 100644
+--- a/Source/JavaScriptCore/interpreter/Interpreter.cpp
++++ b/Source/JavaScriptCore/interpreter/Interpreter.cpp
+@@ -316,7 +316,7 @@ void setupForwardArgumentsFrameAndSetThis(CallFrame* execCaller, CallFrame* exec
+ 
+ Interpreter::Interpreter(VM& vm)
+     : m_vm(vm)
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+     , m_cloopStack(vm)
+ #endif
+ {
+diff --git a/Source/JavaScriptCore/interpreter/Interpreter.h b/Source/JavaScriptCore/interpreter/Interpreter.h
+index 7ab3656c..4ea38321 100644
+--- a/Source/JavaScriptCore/interpreter/Interpreter.h
++++ b/Source/JavaScriptCore/interpreter/Interpreter.h
+@@ -36,7 +36,7 @@
+ #include "StackAlignment.h"
+ #include <wtf/HashMap.h>
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ #include "CLoopStack.h"
+ #endif
+ 
+@@ -95,7 +95,7 @@ namespace JSC {
+         Interpreter(VM &);
+         ~Interpreter();
+         
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+         CLoopStack& cloopStack() { return m_cloopStack; }
+ #endif
+         
+@@ -143,7 +143,7 @@ namespace JSC {
+         void dumpRegisters(CallFrame*);
+         
+         VM& m_vm;
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+         CLoopStack m_cloopStack;
+ #endif
+         
+diff --git a/Source/JavaScriptCore/jit/FPRInfo.h b/Source/JavaScriptCore/jit/FPRInfo.h
+index ec0ab125..0b499acc 100644
+--- a/Source/JavaScriptCore/jit/FPRInfo.h
++++ b/Source/JavaScriptCore/jit/FPRInfo.h
+@@ -349,6 +349,64 @@ public:
+ 
+ #endif // CPU(MIPS)
+ 
++#if CPU(PPC)
++
++// Darwin PowerPC: f0 is the MacroAssembler's scratch register, f1-f13 are
++// volatile and pass arguments (f1 and f2 return a double).
++class FPRInfo {
++public:
++    typedef FPRReg RegisterType;
++    static const unsigned numberOfRegisters = 7;
++
++    // Temporary registers.
++    static const FPRReg fpRegT0 = PPCRegisters::f1;
++    static const FPRReg fpRegT1 = PPCRegisters::f2;
++    static const FPRReg fpRegT2 = PPCRegisters::f3;
++    static const FPRReg fpRegT3 = PPCRegisters::f4;
++    static const FPRReg fpRegT4 = PPCRegisters::f5;
++    static const FPRReg fpRegT5 = PPCRegisters::f6;
++    static const FPRReg fpRegT6 = PPCRegisters::f7;
++
++    static const FPRReg returnValueFPR = PPCRegisters::f1;
++
++    static const FPRReg argumentFPR0 = PPCRegisters::f1;
++    static const FPRReg argumentFPR1 = PPCRegisters::f2;
++
++    static FPRReg toRegister(unsigned index)
++    {
++        static const FPRReg registerForIndex[numberOfRegisters] = {
++            fpRegT0, fpRegT1, fpRegT2, fpRegT3, fpRegT4, fpRegT5, fpRegT6 };
++
++        ASSERT(index < numberOfRegisters);
++        return registerForIndex[index];
++    }
++
++    static unsigned toIndex(FPRReg reg)
++    {
++        ASSERT(reg != InvalidFPRReg);
++        if (reg < PPCRegisters::f1 || reg > PPCRegisters::f7)
++            return InvalidIndex;
++        return reg - PPCRegisters::f1;
++    }
++
++    static const char* debugName(FPRReg reg)
++    {
++        ASSERT(reg != InvalidFPRReg);
++        ASSERT(reg < 32);
++        static const char* nameForRegister[32] = {
++            "f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7",
++            "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15",
++            "f16", "f17", "f18", "f19", "f20", "f21", "f22", "f23",
++            "f24", "f25", "f26", "f27", "f28", "f29", "f30", "f31"
++        };
++        return nameForRegister[reg];
++    }
++
++    static const unsigned InvalidIndex = 0xffffffff;
++};
++
++#endif // CPU(PPC)
++
+ #endif // ENABLE(JIT)
+ 
+ } // namespace JSC
+diff --git a/Source/JavaScriptCore/jit/GPRInfo.h b/Source/JavaScriptCore/jit/GPRInfo.h
+index 46ccc76b..6891c7e1 100644
+--- a/Source/JavaScriptCore/jit/GPRInfo.h
++++ b/Source/JavaScriptCore/jit/GPRInfo.h
+@@ -825,6 +825,7 @@ public:
+ 
+ #if CPU(PPC)
+ #define NUMBER_OF_ARGUMENT_REGISTERS 8u
++#define NUMBER_OF_CALLEE_SAVES_REGISTERS 0u
+ 
+ class GPRInfo {
+ public:
+diff --git a/Source/JavaScriptCore/jit/HostCallReturnValue.h b/Source/JavaScriptCore/jit/HostCallReturnValue.h
+index 62eb2a56..fdd863fb 100644
+--- a/Source/JavaScriptCore/jit/HostCallReturnValue.h
++++ b/Source/JavaScriptCore/jit/HostCallReturnValue.h
+@@ -27,7 +27,9 @@
+ 
+ #include "JSCJSValue.h"
+ 
+-#if ENABLE(JIT)
++// The native LLInt without the JIT (32-bit PowerPC) defines
++// getHostCallReturnValue in LowLevelInterpreter.asm.
++#if !ENABLE(C_LOOP)
+ 
+ #if CALLING_CONVENTION_IS_STDCALL
+ #define HOST_CALL_RETURN_VALUE_OPTION CDECL
+@@ -39,7 +41,7 @@ namespace JSC {
+ 
+ extern "C" EncodedJSValue HOST_CALL_RETURN_VALUE_OPTION getHostCallReturnValue() REFERENCED_FROM_ASM WTF_INTERNAL;
+ 
+-#if COMPILER(GCC_OR_CLANG)
++#if COMPILER(GCC_OR_CLANG) && ENABLE(JIT)
+ 
+ // This is a public declaration only to convince CLANG not to elide it.
+ extern "C" EncodedJSValue HOST_CALL_RETURN_VALUE_OPTION getHostCallReturnValueWithExecState(ExecState*) REFERENCED_FROM_ASM WTF_INTERNAL;
+@@ -49,12 +51,12 @@ inline void initializeHostCallReturnValue()
+     getHostCallReturnValueWithExecState(0);
+ }
+ 
+-#else // COMPILER(GCC_OR_CLANG)
++#else // COMPILER(GCC_OR_CLANG) && ENABLE(JIT)
+ 
+ inline void initializeHostCallReturnValue() { }
+ 
+-#endif // COMPILER(GCC_OR_CLANG)
++#endif // COMPILER(GCC_OR_CLANG) && ENABLE(JIT)
+ 
+ } // namespace JSC
+ 
+-#endif // ENABLE(JIT)
++#endif // !ENABLE(C_LOOP)
+diff --git a/Source/JavaScriptCore/jit/RegisterSet.cpp b/Source/JavaScriptCore/jit/RegisterSet.cpp
+index 62e831be..6a2797d0 100644
+--- a/Source/JavaScriptCore/jit/RegisterSet.cpp
++++ b/Source/JavaScriptCore/jit/RegisterSet.cpp
+@@ -90,6 +90,12 @@ RegisterSet RegisterSet::macroScratchRegisters()
+     return RegisterSet(MacroAssembler::s_scratchRegister);
+ #elif CPU(ARM64)
+     return RegisterSet(MacroAssembler::dataTempRegister, MacroAssembler::memoryTempRegister);
++#elif CPU(PPC)
++    RegisterSet result;
++    result.set(MacroAssembler::tempRegister);
++    result.set(MacroAssembler::addressTempRegister);
++    result.set(MacroAssembler::emergencyTempRegister);
++    return result;
+ #elif CPU(MIPS)
+     RegisterSet result;
+     result.set(MacroAssembler::immTempRegister);
+@@ -157,6 +163,11 @@ RegisterSet RegisterSet::calleeSaveRegisters()
+         reg = static_cast<ARM64Registers::FPRegisterID>(reg + 1))
+         result.set(reg);
+ #elif CPU(MIPS)
++#elif CPU(PPC)
++    for (unsigned reg = PPCRegisters::r13; reg <= PPCRegisters::r31; ++reg)
++        result.set(static_cast<PPCRegisters::RegisterID>(reg));
++    for (unsigned reg = PPCRegisters::f14; reg <= PPCRegisters::f31; ++reg)
++        result.set(static_cast<PPCRegisters::FPRegisterID>(reg));
+ #else
+     UNREACHABLE_FOR_PLATFORM();
+ #endif
+@@ -225,7 +236,7 @@ RegisterSet RegisterSet::llintBaselineCalleeSaveRegisters()
+     ASSERT(GPRInfo::regCS9 == GPRInfo::tagMaskRegister);
+     result.set(GPRInfo::regCS8);
+     result.set(GPRInfo::regCS9);
+-#elif CPU(MIPS)
++#elif CPU(MIPS) || CPU(PPC)
+ #else
+     UNREACHABLE_FOR_PLATFORM();
+ #endif
+@@ -260,7 +271,7 @@ RegisterSet RegisterSet::dfgCalleeSaveRegisters()
+     ASSERT(GPRInfo::regCS9 == GPRInfo::tagMaskRegister);
+     result.set(GPRInfo::regCS8);
+     result.set(GPRInfo::regCS9);
+-#elif CPU(MIPS)
++#elif CPU(MIPS) || CPU(PPC)
+ #else
+     UNREACHABLE_FOR_PLATFORM();
+ #endif
+diff --git a/Source/JavaScriptCore/llint/LLIntCLoop.cpp b/Source/JavaScriptCore/llint/LLIntCLoop.cpp
+index e3c6c6ce..c84b189c 100644
+--- a/Source/JavaScriptCore/llint/LLIntCLoop.cpp
++++ b/Source/JavaScriptCore/llint/LLIntCLoop.cpp
+@@ -26,7 +26,7 @@
+ #include "config.h"
+ #include "LLIntCLoop.h"
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ 
+ #include "LLIntData.h"
+ 
+@@ -41,4 +41,4 @@ void CLoop::initialize()
+ } // namespace LLInt
+ } // namespace JSC
+ 
+-#endif // !ENABLE(JIT)
++#endif // ENABLE(C_LOOP)
+diff --git a/Source/JavaScriptCore/llint/LLIntCLoop.h b/Source/JavaScriptCore/llint/LLIntCLoop.h
+index a3159145..02b2f24d 100644
+--- a/Source/JavaScriptCore/llint/LLIntCLoop.h
++++ b/Source/JavaScriptCore/llint/LLIntCLoop.h
+@@ -25,7 +25,7 @@
+ 
+ #pragma once
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ 
+ #include "JSCJSValue.h"
+ #include "Opcode.h"
+@@ -44,4 +44,4 @@ public:
+ 
+ using JSC::LLInt::CLoop;
+ 
+-#endif // !ENABLE(JIT)
++#endif // ENABLE(C_LOOP)
+diff --git a/Source/JavaScriptCore/llint/LLIntData.cpp b/Source/JavaScriptCore/llint/LLIntData.cpp
+index 8b615a1a..0465f0ac 100644
+--- a/Source/JavaScriptCore/llint/LLIntData.cpp
++++ b/Source/JavaScriptCore/llint/LLIntData.cpp
+@@ -51,7 +51,7 @@ Instruction* Data::s_exceptionInstructions = 0;
+ Opcode Data::s_opcodeMap[numOpcodeIDs] = { };
+ OpcodeStatsArray* Data::s_opcodeStatsArray = nullptr;
+ 
+-#if ENABLE(JIT)
++#if !ENABLE(C_LOOP)
+ extern "C" void llint_entry(void*);
+ #endif
+ 
+@@ -59,7 +59,7 @@ void initialize()
+ {
+     Data::s_exceptionInstructions = new Instruction[maxOpcodeLength + 1];
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+     CLoop::initialize();
+ 
+ #else // ENABLE(JIT)
+@@ -136,17 +136,19 @@ void Data::performAssertions(VM& vm)
+     STATIC_ASSERT(ValueUndefined == (TagBitTypeOther | TagBitUndefined));
+     STATIC_ASSERT(ValueNull == TagBitTypeOther);
+ #endif
+-#if (CPU(X86_64) && !OS(WINDOWS)) || CPU(ARM64) || !ENABLE(JIT)
++#if (CPU(X86_64) && !OS(WINDOWS)) || CPU(ARM64) || ENABLE(C_LOOP)
+     STATIC_ASSERT(!maxFrameExtentForSlowPathCall);
+ #elif CPU(ARM)
+     STATIC_ASSERT(maxFrameExtentForSlowPathCall == 24);
+ #elif CPU(X86) || CPU(MIPS)
+     STATIC_ASSERT(maxFrameExtentForSlowPathCall == 40);
++#elif CPU(PPC)
++    STATIC_ASSERT(maxFrameExtentForSlowPathCall == 72);
+ #elif CPU(X86_64) && OS(WINDOWS)
+     STATIC_ASSERT(maxFrameExtentForSlowPathCall == 64);
+ #endif
+ 
+-#if !ENABLE(JIT) || USE(JSVALUE32_64)
++#if ENABLE(C_LOOP) || USE(JSVALUE32_64)
+     ASSERT(!CodeBlock::llintBaselineCalleeSaveSpaceAsVirtualRegisters());
+ #elif (CPU(X86_64) && !OS(WINDOWS))  || CPU(ARM64)
+     ASSERT(CodeBlock::llintBaselineCalleeSaveSpaceAsVirtualRegisters() == 3);
+diff --git a/Source/JavaScriptCore/llint/LLIntData.h b/Source/JavaScriptCore/llint/LLIntData.h
+index 441a2cfc..21f64f24 100644
+--- a/Source/JavaScriptCore/llint/LLIntData.h
++++ b/Source/JavaScriptCore/llint/LLIntData.h
+@@ -34,7 +34,7 @@ namespace JSC {
+ class VM;
+ struct Instruction;
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ typedef OpcodeID LLIntCode;
+ #else
+ typedef void (*LLIntCode)();
+@@ -103,7 +103,7 @@ ALWAYS_INLINE void* getCodePtr(OpcodeID id)
+     return reinterpret_cast<void*>(getOpcode(id));
+ }
+ 
+-#if ENABLE(JIT)
++#if !ENABLE(C_LOOP)
+ ALWAYS_INLINE LLIntCode getCodeFunctionPtr(OpcodeID codeId)
+ {
+     return reinterpret_cast<LLIntCode>(getCodePtr(codeId));
+diff --git a/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h b/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h
+index 49acae75..91086129 100644
+--- a/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h
++++ b/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h
+@@ -28,7 +28,7 @@
+ #include "LLIntCommon.h"
+ #include <wtf/Assertions.h>
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ #define OFFLINE_ASM_C_LOOP 1
+ #define OFFLINE_ASM_X86 0
+ #define OFFLINE_ASM_X86_WIN 0
+@@ -42,6 +42,7 @@
+ #define OFFLINE_ASM_ARMv7k 0
+ #define OFFLINE_ASM_ARMv7s 0
+ #define OFFLINE_ASM_MIPS 0
++#define OFFLINE_ASM_PPC 0
+ 
+ #else // ENABLE(JIT)
+ 
+@@ -108,6 +109,12 @@
+ #define OFFLINE_ASM_MIPS 0
+ #endif
+ 
++#if CPU(PPC)
++#define OFFLINE_ASM_PPC 1
++#else
++#define OFFLINE_ASM_PPC 0
++#endif
++
+ #if CPU(ARM64)
+ #define OFFLINE_ASM_ARM64 1
+ #else
+diff --git a/Source/JavaScriptCore/llint/LLIntOpcode.h b/Source/JavaScriptCore/llint/LLIntOpcode.h
+index 85905e37..33986f43 100644
+--- a/Source/JavaScriptCore/llint/LLIntOpcode.h
++++ b/Source/JavaScriptCore/llint/LLIntOpcode.h
+@@ -25,7 +25,7 @@
+ 
+ #pragma once
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ 
+ #define FOR_EACH_LLINT_NOJIT_NATIVE_HELPER(macro) \
+     FOR_EACH_CLOOP_BYTECODE_HELPER_ID(macro)
+@@ -35,7 +35,7 @@
+ #define FOR_EACH_LLINT_NOJIT_NATIVE_HELPER(macro) \
+     // Nothing to do here. Use the JIT impl instead.
+ 
+-#endif // !ENABLE(JIT)
++#endif // ENABLE(C_LOOP)
+ 
+ 
+ #define FOR_EACH_LLINT_NATIVE_HELPER(macro) \
+diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+index 7a2836c0..9cc537ea 100644
+--- a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
++++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+@@ -501,7 +501,7 @@ LLINT_SLOW_PATH_DECL(stack_check)
+     dataLogF("Num vars = %u.\n", exec->codeBlock()->m_numVars);
+ 
+     dataLogF("Current OS stack end is at %p.\n", vm.softStackLimit());
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+     dataLogF("Current C Loop stack end is at %p.\n", vm.cloopStackLimit());
+ #endif
+ 
+@@ -513,7 +513,7 @@ LLINT_SLOW_PATH_DECL(stack_check)
+     // For JIT enabled builds which uses the C stack, the stack is not growable.
+     // Hence, if we get here, then we know a stack overflow is imminent. So, just
+     // throw the StackOverflowError unconditionally.
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+     Register* topOfFrame = exec->topOfFrame();
+     if (LIKELY(topOfFrame < reinterpret_cast<Register*>(exec))) {
+         ASSERT(!vm.interpreter->cloopStack().containsAddress(topOfFrame));
+@@ -1656,7 +1656,7 @@ extern "C" SlowPathReturnType llint_throw_stack_overflow_error(VM* vm, ProtoCall
+     return encodeResult(0, 0);
+ }
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ extern "C" SlowPathReturnType llint_stack_check_at_vm_entry(VM* vm, Register* newTopOfStack)
+ {
+     bool success = vm->ensureStackCapacityFor(newTopOfStack);
+diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.h b/Source/JavaScriptCore/llint/LLIntSlowPaths.h
+index 84fb03e3..eb7cbebb 100644
+--- a/Source/JavaScriptCore/llint/LLIntSlowPaths.h
++++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.h
+@@ -127,7 +127,7 @@ LLINT_SLOW_PATH_HIDDEN_DECL(slow_path_check_if_exception_is_uncatchable_and_noti
+ LLINT_SLOW_PATH_HIDDEN_DECL(slow_path_log_shadow_chicken_prologue);
+ LLINT_SLOW_PATH_HIDDEN_DECL(slow_path_log_shadow_chicken_tail);
+ extern "C" SlowPathReturnType llint_throw_stack_overflow_error(VM*, ProtoCallFrame*) WTF_INTERNAL;
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ extern "C" SlowPathReturnType llint_stack_check_at_vm_entry(VM*, Register*) WTF_INTERNAL;
+ #endif
+ extern "C" NO_RETURN_DUE_TO_CRASH void llint_crash() WTF_INTERNAL;
+diff --git a/Source/JavaScriptCore/llint/LLIntThunks.cpp b/Source/JavaScriptCore/llint/LLIntThunks.cpp
+index 36f6486e..d5ab8308 100644
+--- a/Source/JavaScriptCore/llint/LLIntThunks.cpp
++++ b/Source/JavaScriptCore/llint/LLIntThunks.cpp
+@@ -100,7 +100,9 @@ MacroAssemblerCodeRef moduleProgramEntryThunkGenerator(VM* vm)
+ 
+ } // namespace LLInt
+ 
+-#else // ENABLE(JIT)
++#endif // ENABLE(JIT)
++
++#if ENABLE(C_LOOP)
+ 
+ // Non-JIT (i.e. C Loop LLINT) case:
+ 
+@@ -125,6 +127,6 @@ extern "C" VMEntryRecord* vmEntryRecord(VMEntryFrame* entryFrame)
+ }
+ 
+ 
+-#endif // ENABLE(JIT)
++#endif // ENABLE(C_LOOP)
+ 
+ } // namespace JSC
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+index da6e5d0b..0a9af886 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+@@ -72,7 +72,7 @@
+ #  registers on all architectures.
+ #
+ #  - lr is defined on non-X86 architectures (ARM64, ARMv7, ARM,
+-#  ARMv7_TRADITIONAL, MIPS and CLOOP) and holds the return PC
++#  ARMv7_TRADITIONAL, MIPS, PPC and CLOOP) and holds the return PC
+ #
+ #  - pc holds the (native) program counter on 32-bits ARM architectures (ARM,
+ #  ARMv7, ARMv7_TRADITIONAL)
+@@ -231,6 +231,13 @@ elsif X86 or X86_WIN
+     const maxFrameExtentForSlowPathCall = 40
+ elsif MIPS
+     const maxFrameExtentForSlowPathCall = 40
++elsif PPC
++    # The Darwin ABI's linkage area (24 bytes: the callee saves lr at 8) and
++    # parameter area (32 bytes, where the callee may spill r3-r10), plus room
++    # for four stack arguments. cfr - 72 is 16-byte aligned.
++    const maxFrameExtentForSlowPathCall = 72
++    # What cCall2 and cCall4 reserve below an aligned sp.
++    const PPCCCallAreaSize = 64
+ elsif X86_64_WIN
+     const maxFrameExtentForSlowPathCall = 64
+ end
+@@ -513,6 +520,10 @@ elsif ARM or ARMv7_TRADITIONAL or ARMv7
+     const CalleeSaveRegisterCount = 7
+ elsif MIPS
+     const CalleeSaveRegisterCount = 1
++elsif PPC
++    # r13 (cfr) is the only callee-save register the LLInt and baseline JIT
++    # use, and the function prologue saves it as the caller's frame.
++    const CalleeSaveRegisterCount = 0
+ elsif X86 or X86_WIN
+     const CalleeSaveRegisterCount = 3
+ end
+@@ -524,7 +535,7 @@ const CalleeRegisterSaveSize = CalleeSaveRegisterCount * PtrSize
+ const VMEntryTotalFrameSize = (CalleeRegisterSaveSize + sizeof VMEntryRecord + StackAlignment - 1) & ~StackAlignmentMask
+ 
+ macro pushCalleeSaves()
+-    if C_LOOP or ARM64 or X86_64 or X86_64_WIN
++    if C_LOOP or ARM64 or X86_64 or X86_64_WIN or PPC
+     elsif ARM or ARMv7_TRADITIONAL
+         emit "push {r4-r10}"
+     elsif ARMv7
+@@ -546,7 +557,7 @@ macro pushCalleeSaves()
+ end
+ 
+ macro popCalleeSaves()
+-    if C_LOOP or ARM64 or X86_64 or X86_64_WIN
++    if C_LOOP or ARM64 or X86_64 or X86_64_WIN or PPC
+     elsif ARM or ARMv7_TRADITIONAL
+         emit "pop {r4-r10}"
+     elsif ARMv7
+@@ -566,7 +577,7 @@ macro popCalleeSaves()
+ end
+ 
+ macro preserveCallerPCAndCFR()
+-    if C_LOOP or ARM or ARMv7 or ARMv7_TRADITIONAL or MIPS
++    if C_LOOP or ARM or ARMv7 or ARMv7_TRADITIONAL or MIPS or PPC
+         push lr
+         push cfr
+     elsif X86 or X86_WIN or X86_64 or X86_64_WIN
+@@ -581,7 +592,7 @@ end
+ 
+ macro restoreCallerPCAndCFR()
+     move cfr, sp
+-    if C_LOOP or ARM or ARMv7 or ARMv7_TRADITIONAL or MIPS
++    if C_LOOP or ARM or ARMv7 or ARMv7_TRADITIONAL or MIPS or PPC
+         pop cfr
+         pop lr
+     elsif X86 or X86_WIN or X86_64 or X86_64_WIN
+@@ -719,7 +730,7 @@ macro restoreCalleeSavesFromVMEntryFrameCalleeSavesBuffer(vm, temp)
+ end
+ 
+ macro preserveReturnAddressAfterCall(destinationRegister)
+-    if C_LOOP or ARM or ARMv7 or ARMv7_TRADITIONAL or ARM64 or MIPS
++    if C_LOOP or ARM or ARMv7 or ARMv7_TRADITIONAL or ARM64 or MIPS or PPC
+         # In C_LOOP case, we're only preserving the bytecode vPC.
+         move lr, destinationRegister
+     elsif X86 or X86_WIN or X86_64 or X86_64_WIN
+@@ -734,7 +745,7 @@ macro functionPrologue()
+         push cfr
+     elsif ARM64
+         push cfr, lr
+-    elsif C_LOOP or ARM or ARMv7 or ARMv7_TRADITIONAL or MIPS
++    elsif C_LOOP or ARM or ARMv7 or ARMv7_TRADITIONAL or MIPS or PPC
+         push lr
+         push cfr
+     end
+@@ -746,7 +757,7 @@ macro functionEpilogue()
+         pop cfr
+     elsif ARM64
+         pop lr, cfr
+-    elsif C_LOOP or ARM or ARMv7 or ARMv7_TRADITIONAL or MIPS
++    elsif C_LOOP or ARM or ARMv7 or ARMv7_TRADITIONAL or MIPS or PPC
+         pop cfr
+         pop lr
+     end
+@@ -832,7 +843,7 @@ macro prepareForTailCall(callee, temp1, temp2, temp3)
+     addi StackAlignment - 1 + CallFrameHeaderSize, temp2
+     andi ~StackAlignmentMask, temp2
+ 
+-    if ARM or ARMv7_TRADITIONAL or ARMv7 or ARM64 or C_LOOP or MIPS
++    if ARM or ARMv7_TRADITIONAL or ARMv7 or ARM64 or C_LOOP or MIPS or PPC
+         addp 2 * PtrSize, sp
+         subi 2 * PtrSize, temp2
+         loadp PtrSize[cfr], lr
+@@ -964,7 +975,7 @@ macro prologue(codeBlockGetter, codeBlockSetter, osrSlowPath, traceSlowPath)
+         # pop the callerFrame since we will jump to a function that wants to save it
+         if ARM64
+             pop lr, cfr
+-        elsif ARM or ARMv7 or ARMv7_TRADITIONAL or MIPS
++        elsif ARM or ARMv7 or ARMv7_TRADITIONAL or MIPS or PPC
+             pop cfr
+             pop lr
+         else
+@@ -1113,6 +1124,22 @@ if not C_LOOP
+         storep address, VM::m_lastStackTop[vm]
+         ret
+     
++    if PPC
++        # EncodedJSValue getHostCallReturnValue(): the LLInt "calls" this
++        # after a slow path has called a host function for it, to return
++        # vm.hostCallReturnValue as if the host function had returned it. sp
++        # is the callee's frame + CallerFrameAndPCSize. (The JIT platforms
++        # define this in JITOperations.cpp.)
++        global _getHostCallReturnValue
++        _getHostCallReturnValue:
++            loadp Callee + PayloadOffset - CallerFrameAndPCSize[sp], t2
++            andp MarkedBlockMask, t2
++            loadp MarkedBlock::m_vm[t2], t2
++            loadi VM::hostCallReturnValue + TagOffset[t2], r1
++            loadi VM::hostCallReturnValue + PayloadOffset[t2], r0
++            ret
++    end
++
+     # VMEntryRecord* vmEntryRecord(const VMEntryFrame* entryFrame)
+     global _vmEntryRecord
+     _vmEntryRecord:
+@@ -1147,6 +1174,12 @@ else
+             la _relativePCBase, pcBase
+             setcallreg pcBase # needed to set $t9 to the right value for the .cpload created by the label.
+         _relativePCBase:
++        elsif PPC
++            # bcl 20, 31 is the branch-and-link to the next instruction that
++            # the G4's link stack predictor recognises; lr is kept in r0.
++            ppcbcl _relativePCBase
++        _relativePCBase:
++            ppcpcfinish pcBase
+         end
+ end
+ 
+@@ -1177,6 +1210,10 @@ macro setEntryAddress(index, label)
+         addp t4, t1, t4
+         move index, t3
+         storep t4, [a0, t3, 4]
++    elsif PPC
++        ppclabeloffset label, _relativePCBase, t1, t4
++        move index, t3
++        storep t4, [a0, t3, 4]
+     end
+ end
+ 
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+index a0f09d4c..6b63a4a7 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+@@ -29,7 +29,7 @@
+ #include "LLIntOfflineAsmConfig.h"
+ #include <wtf/InlineASM.h>
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ #include "CLoopStackInlines.h"
+ #include "CodeBlock.h"
+ #include "CommonSlowPaths.h"
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.h b/Source/JavaScriptCore/llint/LowLevelInterpreter.h
+index 83008e12..e4c90743 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.h
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.h
+@@ -27,7 +27,7 @@
+ 
+ #include "Opcode.h"
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ 
+ namespace JSC {
+ 
+@@ -44,4 +44,4 @@ FOR_EACH_CORE_OPCODE_ID(LLINT_OPCODE_ALIAS)
+ 
+ } // namespace JSC
+ 
+-#endif // !ENABLE(JIT)
++#endif // ENABLE(C_LOOP)
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter32_64.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter32_64.asm
+index db7cf759..a5536e53 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter32_64.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter32_64.asm
+@@ -51,6 +51,12 @@ end
+ macro cCall2(function)
+     if ARM or ARMv7 or ARMv7_TRADITIONAL or MIPS
+         call function
++    elsif PPC
++        # A C callee may store into the caller's linkage and parameter areas
++        # (up to 56 bytes above sp), so give it room of its own.
++        subp PPCCCallAreaSize, sp
++        call function
++        addp PPCCCallAreaSize, sp
+     elsif X86 or X86_WIN
+         subp 8, sp
+         push a1
+@@ -75,6 +81,10 @@ end
+ macro cCall4(function)
+     if ARM or ARMv7 or ARMv7_TRADITIONAL or MIPS
+         call function
++    elsif PPC
++        subp PPCCCallAreaSize, sp
++        call function
++        addp PPCCCallAreaSize, sp
+     elsif X86 or X86_WIN
+         push a3
+         push a2
+@@ -129,7 +139,7 @@ macro doVMEntry(makeCall)
+     storep t4, VMEntryRecord::m_prevTopVMEntryFrame[sp]
+ 
+     # Align stack pointer
+-    if X86_WIN or MIPS
++    if X86_WIN or MIPS or PPC
+         addp CallFrameAlignSlots * SlotSize, sp, t3
+         andp ~StackAlignmentMask, t3
+         subp t3, CallFrameAlignSlots * SlotSize, sp
+@@ -280,6 +290,19 @@ macro makeJavaScriptCall(entry, temp, unused)
+     end
+     checkStackPointerAlignment(temp, 0xbad0dc03)
+     subp CallerFrameAndPCSize, sp
++    if PPC
++        swapJSValueReturnForC()
++    end
++end
++
++# On big-endian PowerPC a C function returning an EncodedJSValue puts the
++# high word, the tag, in r3 (r0 here) and the payload in r4 (r1), which is
++# the opposite of how JS code returns a value (payload in r0, tag in r1).
++# Slow paths' SlowPathReturnType pairs, a then b, already arrive as r0, r1.
++macro swapJSValueReturnForC()
++    move r0, t2
++    move r1, r0
++    move t2, r1
+ end
+ 
+ macro makeHostFunctionCall(entry, temp1, temp2)
+@@ -298,6 +321,13 @@ macro makeHostFunctionCall(entry, temp1, temp2)
+         push a0
+         call temp1
+         addp 8, sp
++    elsif PPC
++        # The host function's linkage and parameter areas must not overlap
++        # the call frame it is given.
++        move sp, a0
++        subp maxFrameExtentForSlowPathCall, sp
++        call temp1
++        addp maxFrameExtentForSlowPathCall, sp
+     else
+         move sp, a0
+         call temp1
+@@ -2064,8 +2094,14 @@ macro nativeCallTrampoline(executableOffsetToFunction)
+         andp MarkedBlockMask, t3
+         loadp MarkedBlock::m_vm[t3], t3
+         addp 8, sp
+-    elsif ARM or ARMv7 or ARMv7_TRADITIONAL or C_LOOP or MIPS
+-        subp 8, sp # align stack pointer
++    elsif ARM or ARMv7 or ARMv7_TRADITIONAL or C_LOOP or MIPS or PPC
++        if PPC
++            # Align, and leave the native function room for the linkage and
++            # parameter areas it may write above its sp.
++            subp maxFrameExtentForSlowPathCall, sp
++        else
++            subp 8, sp # align stack pointer
++        end
+         # t1 already contains the Callee.
+         andp MarkedBlockMask, t1
+         loadp MarkedBlock::m_vm[t1], t1
+@@ -2079,10 +2115,17 @@ macro nativeCallTrampoline(executableOffsetToFunction)
+         else
+             call executableOffsetToFunction[t1]
+         end
++        if PPC
++            swapJSValueReturnForC()
++        end
+         loadp Callee + PayloadOffset[cfr], t3
+         andp MarkedBlockMask, t3
+         loadp MarkedBlock::m_vm[t3], t3
+-        addp 8, sp
++        if PPC
++            addp maxFrameExtentForSlowPathCall, sp
++        else
++            addp 8, sp
++        end
+     else
+         error
+     end
+diff --git a/Source/JavaScriptCore/offlineasm/backends.rb b/Source/JavaScriptCore/offlineasm/backends.rb
+index ba163359..09b32a7b 100644
+--- a/Source/JavaScriptCore/offlineasm/backends.rb
++++ b/Source/JavaScriptCore/offlineasm/backends.rb
+@@ -27,6 +27,7 @@ require "arm64"
+ require "ast"
+ require "x86"
+ require "mips"
++require "ppc"
+ require "cloop"
+ 
+ BACKENDS =
+@@ -40,6 +41,7 @@ BACKENDS =
+      "ARMv7_TRADITIONAL",
+      "ARM64",
+      "MIPS",
++     "PPC",
+      "C_LOOP"
+     ]
+ 
+@@ -59,6 +61,7 @@ WORKING_BACKENDS =
+      "ARMv7_TRADITIONAL",
+      "ARM64",
+      "MIPS",
++     "PPC",
+      "C_LOOP"
+     ]
+ 
+diff --git a/Source/JavaScriptCore/offlineasm/instructions.rb b/Source/JavaScriptCore/offlineasm/instructions.rb
+index 9dd4dc70..df0f5e66 100644
+--- a/Source/JavaScriptCore/offlineasm/instructions.rb
++++ b/Source/JavaScriptCore/offlineasm/instructions.rb
+@@ -291,6 +291,13 @@ MIPS_INSTRUCTIONS =
+     "pichdr"
+     ]
+ 
++PPC_INSTRUCTIONS =
++    [
++     "ppcbcl",         # ppcbcl label: save lr in r0, then bcl to the label (the next instruction)
++     "ppcpcfinish",    # ppcpcfinish reg: reg = the pc bcl left in lr; restore lr from r0
++     "ppclabeloffset", # ppclabeloffset label, base, baseReg, dest: dest = baseReg + (label - base)
++    ]
++
+ CXX_INSTRUCTIONS =
+     [
+      "cloopCrash",              # no operands
+@@ -308,7 +315,7 @@ CXX_INSTRUCTIONS =
+      "cloopDo",              # no operands
+     ]
+ 
+-INSTRUCTIONS = MACRO_INSTRUCTIONS + X86_INSTRUCTIONS + ARM_INSTRUCTIONS + ARM64_INSTRUCTIONS + RISC_INSTRUCTIONS + MIPS_INSTRUCTIONS + CXX_INSTRUCTIONS
++INSTRUCTIONS = MACRO_INSTRUCTIONS + X86_INSTRUCTIONS + ARM_INSTRUCTIONS + ARM64_INSTRUCTIONS + RISC_INSTRUCTIONS + MIPS_INSTRUCTIONS + PPC_INSTRUCTIONS + CXX_INSTRUCTIONS
+ 
+ INSTRUCTION_SET = INSTRUCTIONS.to_set
+ 
+diff --git a/Source/JavaScriptCore/offlineasm/ppc.rb b/Source/JavaScriptCore/offlineasm/ppc.rb
+new file mode 100644
+index 00000000..e59a911c
+--- /dev/null
++++ b/Source/JavaScriptCore/offlineasm/ppc.rb
+@@ -0,0 +1,920 @@
++# Copyright (C) 2026 Captain Polliwog contributors. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++# 1. Redistributions of source code must retain the above copyright
++#    notice, this list of conditions and the following disclaimer.
++# 2. Redistributions in binary form must reproduce the above copyright
++#    notice, this list of conditions and the following disclaimer in the
++#    documentation and/or other materials provided with the distribution.
++#
++# THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
++# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
++# OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++# IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
++# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
++# NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++require "config"
++require "ast"
++require "opt"
++require "risc"
++
++# 32-bit PowerPC, Darwin ABI, big-endian, for Apple's assembler (cctools).
++#
++# GPR conventions, to match the baseline JIT (jit/GPRInfo.h):
++#
++#  r3 => t0, a0, r0
++#  r4 => t1, a1, r1
++#  r5 => t2, a2
++#  r6 => t3, a3
++#  r7 => t4       (the LLInt PC; caller-saved, as on MIPS)
++#  r8 => t5
++#  r9, r10, r11, r12, r2 => temporaries for the lowering passes
++#  r13 => cfr     (callee-save in the C ABI; saved on VM entry)
++#  r1 => sp
++#  r0 => scratch used only inside single emitted sequences. It is never a
++#        base register: as rA of a load, store or addi it reads as zero.
++#  lr => lr       (moved through r0: mflr/mtlr)
++#
++# FPR conventions:
++#
++#  f1 => ft0, fa0, fr
++#  f2 => ft1, fa1
++#  f3 => ft2
++#  f4 => ft3
++#  f5 => ft4
++#  f6 => ft5
++#  f7, f8 => temporaries
++#  f0, f13 => scratch inside single emitted sequences
++#
++# Only cr0 is used, which is volatile in the ABI, as are f0-f13 and r0-r12.
++#
++# Integer <-> double conversions go through the red zone below the stack
++# pointer (224 bytes on Darwin), which signal handlers leave alone.
++
++class SpecialRegister
++    def ppcOperand
++        @name
++    end
++end
++
++PPC_TEMP_GPRS = [SpecialRegister.new("r9"), SpecialRegister.new("r10"), SpecialRegister.new("r11"),
++                 SpecialRegister.new("r12"), SpecialRegister.new("r2")]
++PPC_TEMP_FPRS = [SpecialRegister.new("f7"), SpecialRegister.new("f8")]
++
++def ppcFitsSigned16(value)
++    value.is_a? Integer and value >= -0x8000 and value <= 0x7fff
++end
++
++def ppcFitsUnsigned16(value)
++    value.is_a? Integer and value >= 0 and value <= 0xffff
++end
++
++def ppcSigned32(value)
++    value &= 0xffffffff
++    value >= 0x80000000 ? value - 0x100000000 : value
++end
++
++def ppcSigned16(value)
++    value &= 0xffff
++    value >= 0x8000 ? value - 0x10000 : value
++end
++
++def ppcMoveImmediate(value, register)
++    raise "Non-integer immediate #{value}" unless value.is_a? Integer
++    value = ppcSigned32(value)
++    if ppcFitsSigned16(value)
++        $asm.puts "li #{register}, #{value}"
++    else
++        $asm.puts "lis #{register}, #{ppcSigned16(value >> 16)}"
++        if (value & 0xffff) != 0
++            $asm.puts "ori #{register}, #{register}, #{value & 0xffff}"
++        end
++    end
++end
++
++class RegisterID
++    def ppcOperand
++        case name
++        when "t0", "a0", "r0"
++            "r3"
++        when "t1", "a1", "r1"
++            "r4"
++        when "t2", "a2"
++            "r5"
++        when "t3", "a3"
++            "r6"
++        when "t4"
++            "r7"
++        when "t5"
++            "r8"
++        when "cfr"
++            "r13"
++        when "sp"
++            "r1"
++        when "lr"
++            "lr"
++        else
++            raise "Bad register #{name} for PPC at #{codeOriginString}"
++        end
++    end
++end
++
++class FPRegisterID
++    def ppcOperand
++        case name
++        when "ft0", "fa0", "fr"
++            "f1"
++        when "ft1", "fa1"
++            "f2"
++        when "ft2"
++            "f3"
++        when "ft3"
++            "f4"
++        when "ft4"
++            "f5"
++        when "ft5"
++            "f6"
++        else
++            raise "Bad register #{name} for PPC at #{codeOriginString}"
++        end
++    end
++end
++
++class Immediate
++    def ppcOperand
++        raise "Invalid immediate #{value} at #{codeOriginString}" unless ppcFitsSigned16(value)
++        "#{value}"
++    end
++end
++
++class Address
++    def ppcOperand
++        raise "Bad offset #{offset.value} at #{codeOriginString}" unless ppcFitsSigned16(offset.value)
++        "#{offset.value}(#{base.ppcOperand})"
++    end
++end
++
++class BaseIndex
++    # Only the X-form: base + index, no scale, no offset.
++    def ppcOperand
++        raise "Malformed BaseIndex at #{codeOriginString}" unless scaleShift == 0 and offset.value == 0
++        "#{base.ppcOperand}, #{index.ppcOperand}"
++    end
++end
++
++class AbsoluteAddress
++    def ppcOperand
++        raise "Unconverted absolute address at #{codeOriginString}"
++    end
++end
++
++class LocalLabelReference
++    def register?
++        false
++    end
++end
++
++#
++# Lowering of branches on the result of arithmetic. PowerPC's overflow bit
++# is sticky, so overflow is found from signs as MIPS does:
++#
++#   baddio a, b, label          (b = b + a; branch on signed overflow)
++#
++# becomes
++#
++#   addi a, b, tr
++#   xori tr, b, t1              # t1 = result ^ b
++#   xori tr, a, t2              # t2 = result ^ a
++#   andi t1, t2                 # negative iff both operands' signs differ from the result's
++#   bilt t2, 0, label
++#   move tr, b
++#
++# and baddiz a, b, label becomes addi a, b then bieq b, 0, label.
++#
++
++def ppcLowerSimpleBranchOps(list)
++    newList = []
++    list.each {
++        | node |
++        if node.is_a? Instruction
++            annotation = node.annotation
++            case node.opcode
++            when /^b(addi|subi|ori|addp|subp|orp)(o|s|z|nz)$/
++                # Take both groups before sub(), which resets them.
++                condition = $2
++                op = $1.sub(/p$/, "i")
++                operands = node.operands
++                # result = first OP second: baddio a, b, d is d = a + b and
++                # bsubio a, b, d is d = a - b; baddio a, b is b = b + a and
++                # bsubio a, b is b = b - a.
++                label = operands[-1]
++                if operands.size == 4
++                    source = operands[1]
++                    target = operands[0]
++                    destination = operands[2]
++                else
++                    source = operands[0]
++                    target = operands[1]
++                    destination = operands[1]
++                end
++
++                # A memory destination: load, operate, store back.
++                address = nil
++                if destination.address?
++                    address = destination
++                    loaded = Tmp.new(node.codeOrigin, :gpr)
++                    newList << Instruction.new(node.codeOrigin, "loadi", [address, loaded], annotation)
++                    target = loaded if target == address
++                    destination = loaded
++                end
++                if target.address?
++                    loaded = Tmp.new(node.codeOrigin, :gpr)
++                    newList << Instruction.new(node.codeOrigin, "loadi", [target, loaded], annotation)
++                    target = loaded
++                end
++                if source.address?
++                    loaded = Tmp.new(node.codeOrigin, :gpr)
++                    newList << Instruction.new(node.codeOrigin, "loadi", [source, loaded], annotation)
++                    source = loaded
++                end
++
++                if condition == "o"
++                    raise "No overflow branch for #{node.opcode}" if op == "ori"
++                    result = Tmp.new(node.codeOrigin, :gpr)
++                    t1 = Tmp.new(node.codeOrigin, :gpr)
++                    t2 = Tmp.new(node.codeOrigin, :gpr)
++                    newList << Instruction.new(node.codeOrigin, op, [target, source, result], annotation)
++                    if op == "addi"
++                        newList << Instruction.new(node.codeOrigin, "xori", [result, target, t1])
++                        newList << Instruction.new(node.codeOrigin, "xori", [result, source, t2])
++                    else
++                        # result = target - source; overflow iff target and source differ
++                        # in sign and the result's sign differs from target's.
++                        newList << Instruction.new(node.codeOrigin, "xori", [target, source, t1])
++                        newList << Instruction.new(node.codeOrigin, "xori", [target, result, t2])
++                    end
++                    newList << Instruction.new(node.codeOrigin, "andi", [t1, t2])
++                    if address
++                        # Store even on overflow: the caller branches away anyway.
++                        newList << Instruction.new(node.codeOrigin, "move", [result, destination])
++                        newList << Instruction.new(node.codeOrigin, "storei", [destination, address])
++                        newList << Instruction.new(node.codeOrigin, "bilt", [t2, Immediate.new(node.codeOrigin, 0), label])
++                    else
++                        newList << Instruction.new(node.codeOrigin, "bilt", [t2, Immediate.new(node.codeOrigin, 0), label])
++                        newList << Instruction.new(node.codeOrigin, "move", [result, destination])
++                    end
++                else
++                    newList << Instruction.new(node.codeOrigin, op, [target, source, destination], annotation)
++                    if address
++                        newList << Instruction.new(node.codeOrigin, "storei", [destination, address])
++                    end
++                    branch = case condition
++                             when "s" then "bilt"
++                             when "z" then "bieq"
++                             when "nz" then "bineq"
++                             end
++                    newList << Instruction.new(node.codeOrigin, branch, [destination, Immediate.new(node.codeOrigin, 0), label])
++                end
++            else
++                newList << node
++            end
++        else
++            newList << node
++        end
++    }
++    newList
++end
++
++#
++# Actual lowering code follows.
++#
++
++class Sequence
++    def getModifiedListPPC
++        result = @list
++
++        result.each {
++            | node |
++            unless node.is_a? Instruction or
++                    node.is_a? Label or
++                    node.is_a? LocalLabel or
++                    node.is_a? Skip
++                raise "Unexpected #{node.inspect} at #{node.codeOrigin}"
++            end
++        }
++
++        result = ppcLowerSimpleBranchOps(result)
++        result = riscLowerSimpleBranchOps(result)
++        result = riscLowerHardBranchOps(result)
++        result = riscLowerShiftOps(result)
++        result = riscLowerMalformedAddresses(result) {
++            | node, address |
++            if address.is_a? BaseIndex
++                if node.is_a? Instruction and (node.opcode == "leap" or node.opcode == "leai")
++                    address.offset.value == 0
++                else
++                    address.scaleShift == 0 and address.offset.value == 0
++                end
++            elsif address.is_a? Address
++                ppcFitsSigned16(address.offset.value)
++            else
++                false
++            end
++        }
++        result = riscLowerMalformedAddressesDouble(result)
++        result = riscLowerMisplacedImmediates(result, ["storeb", "storeh", "storei", "storep"])
++        result = riscLowerMisplacedAddresses(result)
++        result = riscLowerRegisterReuse(result)
++        result = assignRegistersToTemporaries(result, :gpr, PPC_TEMP_GPRS)
++        result = assignRegistersToTemporaries(result, :fpr, PPC_TEMP_FPRS)
++        return result
++    end
++end
++
++def ppcOperands(operands)
++    operands.map{|v| v.ppcOperand}.join(", ")
++end
++
++# An operand for a register-or-immediate instruction: the register, or the
++# immediate put in r0 when it doesn't fit the instruction's immediate form.
++def ppcRegister(operand)
++    if operand.immediate?
++        ppcMoveImmediate(operand.value, "r0")
++        "r0"
++    else
++        operand.ppcOperand
++    end
++end
++
++# The three operands of an arithmetic instruction: (a, b, destination),
++# meaning destination = b OP a (and b = b OP a with two operands).
++def ppcArithOperands(operands)
++    if operands.size == 3
++        [operands[0], operands[1], operands[2]]
++    else
++        raise "Expected 2 or 3 operands" unless operands.size == 2
++        [operands[0], operands[1], operands[1]]
++    end
++end
++
++def emitPPCAdd(operands)
++    a, b, d = ppcArithOperands(operands)
++    a, b = b, a if b.immediate?
++    raise "Both operands immediate" if b.immediate?
++    if a.immediate?
++        value = ppcSigned32(a.value)
++        if value == 0
++            $asm.puts "mr #{d.ppcOperand}, #{b.ppcOperand}" unless d == b
++        elsif ppcFitsSigned16(value)
++            $asm.puts "addi #{d.ppcOperand}, #{b.ppcOperand}, #{value}"
++        elsif (value & 0xffff) == 0
++            $asm.puts "addis #{d.ppcOperand}, #{b.ppcOperand}, #{ppcSigned16(value >> 16)}"
++        else
++            $asm.puts "addis #{d.ppcOperand}, #{b.ppcOperand}, #{ppcSigned16((value + 0x8000) >> 16)}"
++            $asm.puts "addi #{d.ppcOperand}, #{d.ppcOperand}, #{ppcSigned16(value)}"
++        end
++    else
++        $asm.puts "add #{d.ppcOperand}, #{b.ppcOperand}, #{a.ppcOperand}"
++    end
++end
++
++# subi a, b (b = b - a), or subi a, b, d (d = a - b), as on ARM.
++def emitPPCSub(operands)
++    if operands.size == 3
++        m, s, d = operands[0], operands[1], operands[2]
++    else
++        m, s, d = operands[1], operands[0], operands[1]
++    end
++    if s.immediate?
++        emitPPCAdd([Immediate.new(s.codeOrigin, -ppcSigned32(s.value)), m, d])
++    elsif m.immediate?
++        if ppcFitsSigned16(ppcSigned32(m.value))
++            $asm.puts "subfic #{d.ppcOperand}, #{s.ppcOperand}, #{ppcSigned32(m.value)}"
++        else
++            $asm.puts "subf #{d.ppcOperand}, #{s.ppcOperand}, #{ppcRegister(m)}"
++        end
++    else
++        # subf d, s, m is d = m - s.
++        $asm.puts "subf #{d.ppcOperand}, #{s.ppcOperand}, #{m.ppcOperand}"
++    end
++end
++
++# and/or/xor, which have unsigned 16-bit immediate forms for either half.
++def emitPPCLogical(opcode, operands)
++    a, b, d = ppcArithOperands(operands)
++    a, b = b, a if b.immediate?
++    raise "Both operands immediate" if b.immediate?
++    if a.immediate?
++        value = a.value & 0xffffffff
++        low = value & 0xffff
++        high = value >> 16
++        case opcode
++        when "and"
++            if high == 0
++                $asm.puts "andi. #{d.ppcOperand}, #{b.ppcOperand}, #{low}"
++            elsif low == 0
++                $asm.puts "andis. #{d.ppcOperand}, #{b.ppcOperand}, #{high}"
++            else
++                ppcMoveImmediate(value, "r0")
++                $asm.puts "and #{d.ppcOperand}, #{b.ppcOperand}, r0"
++            end
++        else
++            if high == 0
++                $asm.puts "#{opcode}i #{d.ppcOperand}, #{b.ppcOperand}, #{low}"
++            elsif low == 0
++                $asm.puts "#{opcode}is #{d.ppcOperand}, #{b.ppcOperand}, #{high}"
++            else
++                $asm.puts "#{opcode}is #{d.ppcOperand}, #{b.ppcOperand}, #{high}"
++                $asm.puts "#{opcode}i #{d.ppcOperand}, #{d.ppcOperand}, #{low}"
++            end
++        end
++    else
++        $asm.puts "#{opcode} #{d.ppcOperand}, #{b.ppcOperand}, #{a.ppcOperand}"
++    end
++end
++
++def emitPPCMul(operands)
++    a, b, d = ppcArithOperands(operands)
++    a, b = b, a if b.immediate?
++    if a.immediate? and ppcFitsSigned16(ppcSigned32(a.value))
++        $asm.puts "mulli #{d.ppcOperand}, #{b.ppcOperand}, #{ppcSigned32(a.value)}"
++    else
++        $asm.puts "mullw #{d.ppcOperand}, #{b.ppcOperand}, #{ppcRegister(a)}"
++    end
++end
++
++# lshifti amount, value (value <<= amount), or
++# lshifti value, amount, destination (destination = value << amount).
++def emitPPCShift(kind, operands)
++    if operands.size == 3
++        b, a, d = operands[0], operands[1], operands[2]
++    else
++        a, b, d = operands[0], operands[1], operands[1]
++    end
++    raise "Shifting an immediate" if b.immediate?
++    if a.immediate?
++        amount = a.value & 31
++        if amount == 0
++            $asm.puts "mr #{d.ppcOperand}, #{b.ppcOperand}" unless d == b
++            return
++        end
++        case kind
++        when "left"
++            $asm.puts "slwi #{d.ppcOperand}, #{b.ppcOperand}, #{amount}"
++        when "arithmetic"
++            $asm.puts "srawi #{d.ppcOperand}, #{b.ppcOperand}, #{amount}"
++        when "logical"
++            $asm.puts "srwi #{d.ppcOperand}, #{b.ppcOperand}, #{amount}"
++        end
++    else
++        # The amount was masked to 0..31 by riscLowerShiftOps; PowerPC's
++        # shifts would otherwise honour a sixth bit.
++        opcode = { "left" => "slw", "arithmetic" => "sraw", "logical" => "srw" }[kind]
++        $asm.puts "#{opcode} #{d.ppcOperand}, #{b.ppcOperand}, #{a.ppcOperand}"
++    end
++end
++
++def emitPPCMove(source, destination)
++    if destination.is_a? RegisterID and destination.name == "lr"
++        if source.immediate?
++            ppcMoveImmediate(source.value, "r0")
++            $asm.puts "mtlr r0"
++        else
++            $asm.puts "mtlr #{source.ppcOperand}"
++        end
++    elsif source.is_a? RegisterID and source.name == "lr"
++        $asm.puts "mflr #{destination.ppcOperand}"
++    elsif source.immediate?
++        ppcMoveImmediate(source.value, destination.ppcOperand)
++    elsif source != destination
++        $asm.puts "mr #{destination.ppcOperand}, #{source.ppcOperand}"
++    end
++end
++
++def ppcIsLR(operand)
++    operand.is_a? RegisterID and operand.name == "lr"
++end
++
++# Loads: opcode and its X-form (register + register) counterpart.
++def emitPPCLoad(dform, xform, address, destination, extend = nil)
++    target = ppcIsLR(destination) ? "r0" : destination.ppcOperand
++    if address.is_a? BaseIndex
++        $asm.puts "#{xform} #{target}, #{address.ppcOperand}"
++    else
++        $asm.puts "#{dform} #{target}, #{address.ppcOperand}"
++    end
++    $asm.puts "#{extend} #{target}, #{target}" if extend
++    $asm.puts "mtlr r0" if ppcIsLR(destination)
++end
++
++def emitPPCStore(dform, xform, source, address)
++    if ppcIsLR(source)
++        $asm.puts "mflr r0"
++        value = "r0"
++    else
++        value = source.ppcOperand
++    end
++    if address.is_a? BaseIndex
++        $asm.puts "#{xform} #{value}, #{address.ppcOperand}"
++    else
++        $asm.puts "#{dform} #{value}, #{address.ppcOperand}"
++    end
++end
++
++$ppcInvertedCondition = {
++    "eq" => "ne", "ne" => "eq", "lt" => "ge", "ge" => "lt", "gt" => "le", "le" => "gt"
++}
++
++# A conditional branch on cr0. Conditional branches reach +-32KB, so one to
++# a global label (anywhere in the interpreter) jumps around an unconditional
++# branch, which reaches +-32MB.
++def emitPPCBranch(condition, label)
++    if label.is_a? LocalLabelReference
++        $asm.puts "b#{condition} #{label.asmLabel}"
++    else
++        skip = LocalLabel.unique("ppcbranch")
++        $asm.puts "b#{$ppcInvertedCondition[condition]} #{LocalLabelReference.new(codeOrigin, skip).asmLabel}"
++        $asm.puts "b #{label.asmLabel}"
++        skip.lower("PPC")
++    end
++end
++
++# Compare a with b into cr0; returns the condition possibly flipped if the
++# operands had to be swapped.
++$ppcSwappedCondition = {
++    "eq" => "eq", "ne" => "ne", "lt" => "gt", "gt" => "lt", "le" => "ge", "ge" => "le"
++}
++
++def emitPPCCompare(a, b, condition, unsigned)
++    if a.immediate? and not b.immediate?
++        a, b = b, a
++        condition = $ppcSwappedCondition[condition]
++    end
++    raise "Comparing two immediates" if a.immediate?
++    compare = unsigned ? "cmplw" : "cmpw"
++    if b.immediate?
++        value = unsigned ? (b.value & 0xffffffff) : ppcSigned32(b.value)
++        if (unsigned and ppcFitsUnsigned16(value)) or (not unsigned and ppcFitsSigned16(value))
++            $asm.puts "#{compare}i cr0, #{a.ppcOperand}, #{value}"
++        else
++            ppcMoveImmediate(b.value, "r0")
++            $asm.puts "#{compare} cr0, #{a.ppcOperand}, r0"
++        end
++    else
++        $asm.puts "#{compare} cr0, #{a.ppcOperand}, #{b.ppcOperand}"
++    end
++    condition
++end
++
++# Sets cr0 from value & mask: eq when zero, lt when negative. operands is
++# [value] or [value, mask].
++def emitPPCTest(operands)
++    value = operands[0]
++    mask = operands.size > 1 ? operands[1] : nil
++    if mask.nil? or (mask.immediate? and ppcSigned32(mask.value) == -1)
++        $asm.puts "cmpwi cr0, #{value.ppcOperand}, 0"
++    elsif mask.immediate?
++        bits = mask.value & 0xffffffff
++        if (bits >> 16) == 0
++            $asm.puts "andi. r0, #{value.ppcOperand}, #{bits}"
++        elsif (bits & 0xffff) == 0
++            $asm.puts "andis. r0, #{value.ppcOperand}, #{bits >> 16}"
++        else
++            ppcMoveImmediate(bits, "r0")
++            $asm.puts "and. r0, #{value.ppcOperand}, r0"
++        end
++    else
++        $asm.puts "and. r0, #{value.ppcOperand}, #{mask.ppcOperand}"
++    end
++end
++
++# destination = condition on cr0 ? 1 : 0
++def emitPPCSetFromCondition(condition, destination)
++    done = LocalLabel.unique("ppcset")
++    $asm.puts "li #{destination.ppcOperand}, 1"
++    $asm.puts "b#{condition} #{LocalLabelReference.new(codeOrigin, done).asmLabel}"
++    $asm.puts "li #{destination.ppcOperand}, 0"
++    done.lower("PPC")
++end
++
++# Double comparison branches: fcmpu sets lt, gt, eq or un (bit 3) in cr0.
++def emitPPCDoubleBranch(operands, orBits, condition)
++    $asm.puts "fcmpu cr0, #{operands[0].ppcOperand}, #{operands[1].ppcOperand}"
++    orBits.each {
++        | pair |
++        $asm.puts "cror #{pair[0]}, #{pair[0]}, #{pair[1]}"
++    }
++    emitPPCBranch(condition, operands[2])
++end
++
++# Converts the int in gpr to a double in fpr (no fcfid on 32-bit PowerPC):
++# the double with high word 0x43300000 and low word (x ^ 0x80000000) is
++# 2^52 + 2^31 + x.
++def emitPPCIntToDouble(gpr, fpr)
++    $asm.puts "lis r0, 0x4330"
++    $asm.puts "stw r0, -8(r1)"
++    $asm.puts "xoris r0, #{gpr}, 0x8000"
++    $asm.puts "stw r0, -4(r1)"
++    $asm.puts "lfd #{fpr}, -8(r1)"
++    $asm.puts "lis r0, 0x4330"
++    $asm.puts "stw r0, -16(r1)"
++    $asm.puts "lis r0, -32768"
++    $asm.puts "stw r0, -12(r1)"
++    $asm.puts "lfd f13, -16(r1)"
++    $asm.puts "fsub #{fpr}, #{fpr}, f13"
++end
++
++def emitPPCDoubleToInt(fpr, gpr)
++    $asm.puts "fctiwz f0, #{fpr}"
++    $asm.puts "stfd f0, -8(r1)"
++    $asm.puts "lwz #{gpr}, -4(r1)"
++end
++
++def emitPPCDoubleArith(opcode, operands)
++    if operands.size == 3
++        $asm.puts "#{opcode} #{operands[2].ppcOperand}, #{operands[0].ppcOperand}, #{operands[1].ppcOperand}"
++    else
++        $asm.puts "#{opcode} #{operands[1].ppcOperand}, #{operands[1].ppcOperand}, #{operands[0].ppcOperand}"
++    end
++end
++
++class Address
++    def ppcEmitLea(destination)
++        emitPPCAdd([Immediate.new(codeOrigin, offset.value), base, destination])
++    end
++end
++
++class BaseIndex
++    def ppcEmitLea(destination)
++        if scaleShift == 0
++            $asm.puts "add #{destination.ppcOperand}, #{base.ppcOperand}, #{index.ppcOperand}"
++        else
++            $asm.puts "slwi r0, #{index.ppcOperand}, #{scaleShift}"
++            $asm.puts "add #{destination.ppcOperand}, #{base.ppcOperand}, r0"
++        end
++        if offset.value != 0
++            emitPPCAdd([Immediate.new(codeOrigin, offset.value), destination, destination])
++        end
++    end
++end
++
++class Instruction
++    def lowerPPC
++        $asm.codeOrigin codeOriginString if $enableCodeOriginComments
++        $asm.annotation annotation if $enableInstrAnnotations
++
++        case opcode
++        when "addi", "addp", "addis", "addps"
++            emitPPCAdd(operands)
++        when "subi", "subp", "subis"
++            emitPPCSub(operands)
++        when "andi", "andp"
++            emitPPCLogical("and", operands)
++        when "ori", "orp", "oris"
++            emitPPCLogical("or", operands)
++        when "xori", "xorp"
++            emitPPCLogical("xor", operands)
++        when "muli", "mulp"
++            emitPPCMul(operands)
++        when "lshifti", "lshiftp"
++            emitPPCShift("left", operands)
++        when "rshifti", "rshiftp"
++            emitPPCShift("arithmetic", operands)
++        when "urshifti", "urshiftp"
++            emitPPCShift("logical", operands)
++        when "negi", "negp"
++            $asm.puts "neg #{operands[0].ppcOperand}, #{operands[0].ppcOperand}"
++        when "noti"
++            $asm.puts "not #{operands[0].ppcOperand}, #{operands[0].ppcOperand}"
++        when "loadi", "loadis", "loadp"
++            emitPPCLoad("lwz", "lwzx", operands[0], operands[1])
++        when "storei", "storep"
++            emitPPCStore("stw", "stwx", operands[0], operands[1])
++        when "loadb"
++            emitPPCLoad("lbz", "lbzx", operands[0], operands[1])
++        when "loadbs"
++            emitPPCLoad("lbz", "lbzx", operands[0], operands[1], "extsb")
++        when "storeb"
++            emitPPCStore("stb", "stbx", operands[0], operands[1])
++        when "loadh"
++            emitPPCLoad("lhz", "lhzx", operands[0], operands[1])
++        when "loadhs"
++            emitPPCLoad("lha", "lhax", operands[0], operands[1])
++        when "storeh"
++            emitPPCStore("sth", "sthx", operands[0], operands[1])
++        when "loadd"
++            if operands[0].is_a? BaseIndex
++                $asm.puts "lfdx #{operands[1].ppcOperand}, #{operands[0].ppcOperand}"
++            else
++                $asm.puts "lfd #{operands[1].ppcOperand}, #{operands[0].ppcOperand}"
++            end
++        when "stored"
++            if operands[1].is_a? BaseIndex
++                $asm.puts "stfdx #{operands[0].ppcOperand}, #{operands[1].ppcOperand}"
++            else
++                $asm.puts "stfd #{operands[0].ppcOperand}, #{operands[1].ppcOperand}"
++            end
++        when "moved"
++            $asm.puts "fmr #{operands[1].ppcOperand}, #{operands[0].ppcOperand}"
++        when "addd"
++            emitPPCDoubleArith("fadd", operands)
++        when "subd"
++            emitPPCDoubleArith("fsub", operands)
++        when "muld"
++            emitPPCDoubleArith("fmul", operands)
++        when "divd"
++            emitPPCDoubleArith("fdiv", operands)
++        when "sqrtd"
++            raise "The G3 and G4 have no fsqrt, at #{codeOriginString}"
++        when "ci2d"
++            emitPPCIntToDouble(operands[0].ppcOperand, operands[1].ppcOperand)
++        when "td2i"
++            emitPPCDoubleToInt(operands[0].ppcOperand, operands[1].ppcOperand)
++        when "bcd2i"
++            # Branch unless the double is exactly an int32 (and not -0).
++            emitPPCDoubleToInt(operands[0].ppcOperand, operands[1].ppcOperand)
++            emitPPCIntToDouble(operands[1].ppcOperand, "f0")
++            $asm.puts "fcmpu cr0, f0, #{operands[0].ppcOperand}"
++            emitPPCBranch("ne", operands[2])
++            $asm.puts "cmpwi cr0, #{operands[1].ppcOperand}, 0"
++            emitPPCBranch("eq", operands[2])
++        when "btd2i", "movdz"
++            raise "PPC does not support #{opcode}, at #{codeOriginString}"
++        when "fii2d"
++            # fii2d lowWord, highWord, fpr
++            $asm.puts "stw #{operands[1].ppcOperand}, -8(r1)"
++            $asm.puts "stw #{operands[0].ppcOperand}, -4(r1)"
++            $asm.puts "lfd #{operands[2].ppcOperand}, -8(r1)"
++        when "fd2ii"
++            # fd2ii fpr, lowWord, highWord
++            $asm.puts "stfd #{operands[0].ppcOperand}, -8(r1)"
++            $asm.puts "lwz #{operands[1].ppcOperand}, -4(r1)"
++            $asm.puts "lwz #{operands[2].ppcOperand}, -8(r1)"
++        when "bdeq"
++            emitPPCDoubleBranch(operands, [], "eq")
++        when "bdneq"
++            emitPPCDoubleBranch(operands, [[2, 3]], "ne")
++        when "bdgt"
++            emitPPCDoubleBranch(operands, [], "gt")
++        when "bdgteq"
++            emitPPCDoubleBranch(operands, [[2, 1]], "eq")
++        when "bdlt"
++            emitPPCDoubleBranch(operands, [], "lt")
++        when "bdlteq"
++            emitPPCDoubleBranch(operands, [[2, 0]], "eq")
++        when "bdequn"
++            emitPPCDoubleBranch(operands, [[2, 3]], "eq")
++        when "bdnequn"
++            emitPPCDoubleBranch(operands, [], "ne")
++        when "bdgtun"
++            emitPPCDoubleBranch(operands, [[1, 3]], "gt")
++        when "bdgtequn"
++            emitPPCDoubleBranch(operands, [], "ge")
++        when "bdltun"
++            emitPPCDoubleBranch(operands, [[0, 3]], "lt")
++        when "bdltequn"
++            emitPPCDoubleBranch(operands, [], "le")
++        when "pop"
++            operands.each {
++                | op |
++                if ppcIsLR(op)
++                    $asm.puts "lwz r0, 0(r1)"
++                    $asm.puts "addi r1, r1, 4"
++                    $asm.puts "mtlr r0"
++                else
++                    $asm.puts "lwz #{op.ppcOperand}, 0(r1)"
++                    $asm.puts "addi r1, r1, 4"
++                end
++            }
++        when "push"
++            operands.each {
++                | op |
++                if ppcIsLR(op)
++                    $asm.puts "mflr r0"
++                    $asm.puts "stwu r0, -4(r1)"
++                else
++                    $asm.puts "stwu #{op.ppcOperand}, -4(r1)"
++                end
++            }
++        when "move"
++            emitPPCMove(operands[0], operands[1])
++        when "nop"
++            $asm.puts "nop"
++        when "bieq", "bpeq", "bbeq"
++            emitPPCBranch(emitPPCCompare(operands[0], operands[1], "eq", false), operands[2])
++        when "bineq", "bpneq", "bbneq"
++            emitPPCBranch(emitPPCCompare(operands[0], operands[1], "ne", false), operands[2])
++        when "bia", "bpa", "bba"
++            emitPPCBranch(emitPPCCompare(operands[0], operands[1], "gt", true), operands[2])
++        when "biaeq", "bpaeq", "bbaeq"
++            emitPPCBranch(emitPPCCompare(operands[0], operands[1], "ge", true), operands[2])
++        when "bib", "bpb", "bbb"
++            emitPPCBranch(emitPPCCompare(operands[0], operands[1], "lt", true), operands[2])
++        when "bibeq", "bpbeq", "bbbeq"
++            emitPPCBranch(emitPPCCompare(operands[0], operands[1], "le", true), operands[2])
++        when "bigt", "bpgt", "bbgt"
++            emitPPCBranch(emitPPCCompare(operands[0], operands[1], "gt", false), operands[2])
++        when "bigteq", "bpgteq", "bbgteq"
++            emitPPCBranch(emitPPCCompare(operands[0], operands[1], "ge", false), operands[2])
++        when "bilt", "bplt", "bblt"
++            emitPPCBranch(emitPPCCompare(operands[0], operands[1], "lt", false), operands[2])
++        when "bilteq", "bplteq", "bblteq"
++            emitPPCBranch(emitPPCCompare(operands[0], operands[1], "le", false), operands[2])
++        when "btiz", "btpz", "btbz"
++            emitPPCTest(operands[0..-2])
++            emitPPCBranch("eq", operands[-1])
++        when "btinz", "btpnz", "btbnz"
++            emitPPCTest(operands[0..-2])
++            emitPPCBranch("ne", operands[-1])
++        when "btis", "btps", "btbs"
++            emitPPCTest(operands[0..-2])
++            emitPPCBranch("lt", operands[-1])
++        when "cieq", "cpeq", "cbeq"
++            emitPPCSetFromCondition(emitPPCCompare(operands[0], operands[1], "eq", false), operands[2])
++        when "cineq", "cpneq", "cbneq"
++            emitPPCSetFromCondition(emitPPCCompare(operands[0], operands[1], "ne", false), operands[2])
++        when "cia", "cpa", "cba"
++            emitPPCSetFromCondition(emitPPCCompare(operands[0], operands[1], "gt", true), operands[2])
++        when "ciaeq", "cpaeq", "cbaeq"
++            emitPPCSetFromCondition(emitPPCCompare(operands[0], operands[1], "ge", true), operands[2])
++        when "cib", "cpb", "cbb"
++            emitPPCSetFromCondition(emitPPCCompare(operands[0], operands[1], "lt", true), operands[2])
++        when "cibeq", "cpbeq", "cbbeq"
++            emitPPCSetFromCondition(emitPPCCompare(operands[0], operands[1], "le", true), operands[2])
++        when "cigt", "cpgt", "cbgt"
++            emitPPCSetFromCondition(emitPPCCompare(operands[0], operands[1], "gt", false), operands[2])
++        when "cigteq", "cpgteq", "cbgteq"
++            emitPPCSetFromCondition(emitPPCCompare(operands[0], operands[1], "ge", false), operands[2])
++        when "cilt", "cplt", "cblt"
++            emitPPCSetFromCondition(emitPPCCompare(operands[0], operands[1], "lt", false), operands[2])
++        when "cilteq", "cplteq", "cblteq"
++            emitPPCSetFromCondition(emitPPCCompare(operands[0], operands[1], "le", false), operands[2])
++        when "tis", "tbs", "tps"
++            emitPPCTest(operands[0..-2])
++            emitPPCSetFromCondition("lt", operands[-1])
++        when "tiz", "tbz", "tpz"
++            emitPPCTest(operands[0..-2])
++            emitPPCSetFromCondition("eq", operands[-1])
++        when "tinz", "tbnz", "tpnz"
++            emitPPCTest(operands[0..-2])
++            emitPPCSetFromCondition("ne", operands[-1])
++        when "jmp"
++            if operands[0].label?
++                $asm.puts "b #{operands[0].asmLabel}"
++            else
++                $asm.puts "mtctr #{operands[0].ppcOperand}"
++                $asm.puts "bctr"
++            end
++        when "call"
++            if operands[0].label?
++                $asm.puts "bl #{operands[0].asmLabel}"
++            else
++                # Darwin passes the target of a call through a pointer in r12
++                # as well.
++                $asm.puts "mr r12, #{operands[0].ppcOperand}" unless operands[0].ppcOperand == "r12"
++                $asm.puts "mtctr r12"
++                $asm.puts "bctrl"
++            end
++        when "break"
++            $asm.puts "trap"
++        when "ret"
++            $asm.puts "blr"
++        when "peek"
++            $asm.puts "lwz #{operands[1].ppcOperand}, #{operands[0].value * 4}(r1)"
++        when "poke"
++            $asm.puts "stw #{operands[1].ppcOperand}, #{operands[0].value * 4}(r1)"
++        when "leai", "leap"
++            operands[0].ppcEmitLea(operands[1])
++        when "smulli"
++            raise "Wrong number of arguments to smulli at #{codeOriginString}" unless operands.length == 4
++            $asm.puts "mulhw r0, #{operands[0].ppcOperand}, #{ppcRegister(operands[1])}"
++            $asm.puts "mullw #{operands[2].ppcOperand}, #{operands[0].ppcOperand}, #{operands[1].ppcOperand}"
++            $asm.puts "mr #{operands[3].ppcOperand}, r0"
++        when "memfence"
++            $asm.puts "sync"
++        when "ppcbcl"
++            # The first half of finding the PC: save lr, branch-and-link to
++            # the next instruction, which is the label given.
++            $asm.puts "mflr r0"
++            $asm.puts "bcl 20, 31, #{operands[0].asmLabel}"
++        when "ppcpcfinish"
++            $asm.puts "mflr #{operands[0].ppcOperand}"
++            $asm.puts "mtlr r0"
++        when "ppclabeloffset"
++            # ppclabeloffset label, base, baseRegister, destination:
++            # destination = baseRegister + (label - base)
++            difference = "#{operands[0].asmLabel} - #{operands[1].asmLabel}"
++            $asm.puts "addis #{operands[3].ppcOperand}, #{operands[2].ppcOperand}, ha16(#{difference})"
++            $asm.puts "addi #{operands[3].ppcOperand}, #{operands[3].ppcOperand}, lo16(#{difference})"
++        else
++            lowerDefault
++        end
++    end
++end
+diff --git a/Source/JavaScriptCore/runtime/JSCJSValue.h b/Source/JavaScriptCore/runtime/JSCJSValue.h
+index 978b03b3..3c5280cd 100644
+--- a/Source/JavaScriptCore/runtime/JSCJSValue.h
++++ b/Source/JavaScriptCore/runtime/JSCJSValue.h
+@@ -58,7 +58,7 @@ class OSRExitCompiler;
+ class SpeculativeJIT;
+ }
+ #endif
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ namespace LLInt {
+ class CLoop;
+ }
+@@ -141,7 +141,7 @@ class JSValue {
+     friend class DFG::OSRExitCompiler;
+     friend class DFG::SpeculativeJIT;
+ #endif
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+     friend class LLInt::CLoop;
+ #endif
+ 
+@@ -344,7 +344,7 @@ public:
+     uint32_t tag() const;
+     int32_t payload() const;
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+     // This should only be used by the LLInt C Loop interpreter who needs
+     // synthesize JSValue from its "register"s holding tag and payload
+     // values.
+diff --git a/Source/JavaScriptCore/runtime/JSCJSValueInlines.h b/Source/JavaScriptCore/runtime/JSCJSValueInlines.h
+index 046bd480..5838f630 100644
+--- a/Source/JavaScriptCore/runtime/JSCJSValueInlines.h
++++ b/Source/JavaScriptCore/runtime/JSCJSValueInlines.h
+@@ -340,7 +340,7 @@ inline JSValue::JSValue(int i)
+     u.asBits.payload = i;
+ }
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ inline JSValue::JSValue(int32_t tag, int32_t payload)
+ {
+     u.asBits.tag = tag;
+diff --git a/Source/JavaScriptCore/runtime/VM.cpp b/Source/JavaScriptCore/runtime/VM.cpp
+index fe3956d0..56d3dbc0 100644
+--- a/Source/JavaScriptCore/runtime/VM.cpp
++++ b/Source/JavaScriptCore/runtime/VM.cpp
+@@ -118,7 +118,7 @@
+ #include <wtf/text/AtomicStringTable.h>
+ #include <wtf/text/SymbolRegistry.h>
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ #include "CLoopStack.h"
+ #include "CLoopStackInlines.h"
+ #endif
+@@ -631,7 +631,7 @@ size_t VM::updateSoftReservedZoneSize(size_t softReservedZoneSize)
+ {
+     size_t oldSoftReservedZoneSize = m_currentSoftReservedZoneSize;
+     m_currentSoftReservedZoneSize = softReservedZoneSize;
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+     interpreter->cloopStack().setSoftReservedZoneSize(softReservedZoneSize);
+ #endif
+ 
+@@ -873,7 +873,7 @@ void QueuedTask::run()
+ void sanitizeStackForVM(VM* vm)
+ {
+     logSanitizeStack(vm);
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+     vm->interpreter->cloopStack().sanitizeStack();
+ #else
+     sanitizeStackForVMImpl(vm);
+@@ -882,7 +882,7 @@ void sanitizeStackForVM(VM* vm)
+ 
+ size_t VM::committedStackByteCount()
+ {
+-#if ENABLE(JIT)
++#if !ENABLE(C_LOOP)
+     // When using the C stack, we don't know how many stack pages are actually
+     // committed. So, we use the current stack usage as an estimate.
+     ASSERT(wtfThreadData().stack().isGrowingDownward());
+@@ -894,7 +894,7 @@ size_t VM::committedStackByteCount()
+ #endif
+ }
+ 
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+ bool VM::ensureStackCapacityForCLoop(Register* newTopOfStack)
+ {
+     return interpreter->cloopStack().ensureCapacityFor(newTopOfStack);
+@@ -904,7 +904,7 @@ bool VM::isSafeToRecurseSoftCLoop() const
+ {
+     return interpreter->cloopStack().isSafeToRecurse();
+ }
+-#endif // !ENABLE(JIT)
++#endif // ENABLE(C_LOOP)
+ 
+ #if ENABLE(EXCEPTION_SCOPE_VERIFICATION)
+ void VM::verifyExceptionCheckNeedIsSatisfied(unsigned recursionDepth, ExceptionEventLocation& location)
+diff --git a/Source/JavaScriptCore/runtime/VM.h b/Source/JavaScriptCore/runtime/VM.h
+index 771e2ad9..a5b1d010 100644
+--- a/Source/JavaScriptCore/runtime/VM.h
++++ b/Source/JavaScriptCore/runtime/VM.h
+@@ -508,7 +508,7 @@ public:
+     void* stackLimit() { return m_stackLimit; }
+     void* softStackLimit() { return m_softStackLimit; }
+     void** addressOfSoftStackLimit() { return &m_softStackLimit; }
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+     void* cloopStackLimit() { return m_cloopStackLimit; }
+     void setCLoopStackLimit(void* limit) { m_cloopStackLimit = limit; }
+ #endif
+@@ -716,10 +716,10 @@ private:
+         m_exception = nullptr;
+     }
+ 
+-#if !ENABLE(JIT)    
++#if ENABLE(C_LOOP)    
+     bool ensureStackCapacityForCLoop(Register* newTopOfStack);
+     bool isSafeToRecurseSoftCLoop() const;
+-#endif // !ENABLE(JIT)
++#endif // ENABLE(C_LOOP)
+ 
+     JS_EXPORT_PRIVATE void throwException(ExecState*, Exception*);
+     JS_EXPORT_PRIVATE JSValue throwException(ExecState*, JSValue);
+@@ -746,7 +746,7 @@ private:
+     size_t m_currentSoftReservedZoneSize;
+     void* m_stackLimit { nullptr };
+     void* m_softStackLimit { nullptr };
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+     void* m_cloopStackLimit { nullptr };
+ #endif
+     void* m_lastStackTop;
+@@ -815,7 +815,7 @@ inline Heap* WeakSet::heap() const
+     return &m_vm->heap;
+ }
+ 
+-#if ENABLE(JIT)
++#if !ENABLE(C_LOOP)
+ extern "C" void sanitizeStackForVMImpl(VM*);
+ #endif
+ 
+diff --git a/Source/JavaScriptCore/runtime/VMInlines.h b/Source/JavaScriptCore/runtime/VMInlines.h
+index 5a776195..2e36721f 100644
+--- a/Source/JavaScriptCore/runtime/VMInlines.h
++++ b/Source/JavaScriptCore/runtime/VMInlines.h
+@@ -33,7 +33,7 @@ namespace JSC {
+     
+ bool VM::ensureStackCapacityFor(Register* newTopOfStack)
+ {
+-#if ENABLE(JIT)
++#if !ENABLE(C_LOOP)
+     ASSERT(wtfThreadData().stack().isGrowingDownward());
+     return newTopOfStack >= m_softStackLimit;
+ #else
+@@ -45,7 +45,7 @@ bool VM::ensureStackCapacityFor(Register* newTopOfStack)
+ bool VM::isSafeToRecurseSoft() const
+ {
+     bool safe = isSafeToRecurse(m_softStackLimit);
+-#if !ENABLE(JIT)
++#if ENABLE(C_LOOP)
+     safe = safe && isSafeToRecurseSoftCLoop();
+ #endif
+     return safe;
+diff --git a/Source/WTF/wtf/Platform.h b/Source/WTF/wtf/Platform.h
+index 6475944d..5190bf0a 100644
+--- a/Source/WTF/wtf/Platform.h
++++ b/Source/WTF/wtf/Platform.h
+@@ -586,9 +586,15 @@
+ #endif
+ 
+ #if CPU(PPC)
++/* Captain Polliwog: the LLInt runs natively through the offlineasm PPC
++   backend rather than as the C loop (see ENABLE(C_LOOP) below). The
++   baseline JIT is not ported yet; the DFG and the sampling profiler are
++   not ported. */
+ #define ENABLE_ASSEMBLER 1
+ #define ENABLE_YARR_JIT 1
+ #define ENABLE_JIT 0
++#define ENABLE_DFG_JIT 0
++#define ENABLE_SAMPLING_PROFILER 0
+ #endif
+ #if CPU(PPC64)
+ #define ENABLE_ASSEMBLER 0
+@@ -756,6 +762,17 @@
+ #define ENABLE_JIT 1
+ #endif
+ 
++/* ENABLE(C_LOOP): the LLInt runs as portable C++ instead of as assembly
++   generated by offlineasm. Upstream 604 ties this to !ENABLE(JIT); 32-bit
++   PowerPC runs the assembly LLInt with the JIT off. */
++#if !defined(ENABLE_C_LOOP)
++#if ENABLE(JIT) || CPU(PPC)
++#define ENABLE_C_LOOP 0
++#else
++#define ENABLE_C_LOOP 1
++#endif
++#endif
++
+ /* The FTL *does not* work on 32-bit platforms. Disable it even if someone asked us to enable it. */
+ #if USE(JSVALUE32_64)
+ #undef ENABLE_FTL_JIT
+-- 
+2.54.0 (Apple Git-157)
+

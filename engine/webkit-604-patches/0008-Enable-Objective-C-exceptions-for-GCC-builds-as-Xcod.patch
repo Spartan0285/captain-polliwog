@@ -1,7 +1,7 @@
 From 2ecdcbf63d4d3394f4129ed5ce681320eb19beb3 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Thu, 17 Sep 2026 23:57:47 -0400
-Subject: [PATCH 08/47] Enable Objective-C exceptions for GCC builds, as Xcode
+Subject: [PATCH 08/49] Enable Objective-C exceptions for GCC builds, as Xcode
  does
 
 ---
@@ -27,5 +27,5 @@ index 17f2d3ff..eeba321e 100644
      set(POLLIWOG_ENABLE_WEBKIT2 ON)
  endif ()
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

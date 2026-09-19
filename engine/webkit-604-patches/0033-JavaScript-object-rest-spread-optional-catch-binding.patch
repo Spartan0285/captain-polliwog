@@ -1,7 +1,7 @@
 From d0cab375bb66b7645dc22e1aa228d98641b62641 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 14:27:29 -0400
-Subject: [PATCH 33/47] JavaScript: object rest/spread, optional catch binding,
+Subject: [PATCH 33/49] JavaScript: object rest/spread, optional catch binding,
  globalThis
 
 Object rest/spread was implemented in 604 behind a flag, which Safari
@@ -134,5 +134,5 @@ index 4eb60d80..5bea8280 100644
          return;
      }
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

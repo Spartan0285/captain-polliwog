@@ -1,0 +1,3455 @@
+From a6110b07647c427835245241479fcf51563f4bf6 Mon Sep 17 00:00:00 2001
+From: Captain Polliwog build <build@captainpolliwog.invalid>
+Date: Sat, 19 Sep 2026 11:49:34 -0400
+Subject: [PATCH 49/49] JSC: PowerPC baseline JIT, work in progress
+
+A new assembler and macro assembler (PPCAssemblerJIT.h,
+MacroAssemblerPPCJIT.h) used only when ENABLE(JIT), plus the PowerPC paths
+in CCallHelpers, AssemblyHelpers, the native call thunks and the frame
+shuffler. Big-endian fixes: JSValue results come back tag first in r3, and
+the callee and argument count header slots keep their payloads at +4. The
+JIT is off unless the build enables it (the leopard-g4-jit variant); the
+regular expression and CSS JITs keep using PPCAssembler.h.
+---
+ .../JavaScriptCore/assembler/MacroAssembler.h |    4 +
+ .../assembler/MacroAssemblerPPCJIT.h          | 2024 +++++++++++++++++
+ .../JavaScriptCore/assembler/PPCAssembler.cpp |   16 +-
+ .../assembler/PPCAssemblerJIT.h               |  719 ++++++
+ Source/JavaScriptCore/bytecode/InlineAccess.h |    6 +-
+ Source/JavaScriptCore/jit/AssemblyHelpers.cpp |    2 +-
+ Source/JavaScriptCore/jit/AssemblyHelpers.h   |   65 +-
+ Source/JavaScriptCore/jit/CCallHelpers.h      |   75 +
+ .../JavaScriptCore/jit/CallFrameShuffler.cpp  |    6 +-
+ .../jit/ExecutableAllocator.cpp               |    4 +-
+ Source/JavaScriptCore/jit/GPRInfo.h           |   11 +-
+ Source/JavaScriptCore/jit/JITInlines.h        |    6 +
+ Source/JavaScriptCore/jit/JITOpcodes32_64.cpp |   16 +
+ Source/JavaScriptCore/jit/RegisterSet.cpp     |    2 +-
+ Source/JavaScriptCore/jit/ThunkGenerators.cpp |   21 +-
+ .../JavaScriptCore/offlineasm/instructions.rb |    1 +
+ Source/JavaScriptCore/offlineasm/ppc.rb       |   84 +
+ .../JavaScriptCore/runtime/MachineContext.h   |    6 +
+ Source/WTF/wtf/Platform.h                     |    7 +-
+ 19 files changed, 3058 insertions(+), 17 deletions(-)
+ create mode 100644 Source/JavaScriptCore/assembler/MacroAssemblerPPCJIT.h
+ create mode 100644 Source/JavaScriptCore/assembler/PPCAssemblerJIT.h
+
+diff --git a/Source/JavaScriptCore/assembler/MacroAssembler.h b/Source/JavaScriptCore/assembler/MacroAssembler.h
+index 53346e46..6696346d 100644
+--- a/Source/JavaScriptCore/assembler/MacroAssembler.h
++++ b/Source/JavaScriptCore/assembler/MacroAssembler.h
+@@ -56,7 +56,11 @@ namespace JSC { typedef MacroAssemblerX86 MacroAssemblerBase; };
+ namespace JSC { typedef MacroAssemblerX86_64 MacroAssemblerBase; };
+ 
+ #elif CPU(PPC)
++#if ENABLE(JIT)
++#include "MacroAssemblerPPCJIT.h"
++#else
+ #include "MacroAssemblerPPC.h"
++#endif
+ namespace JSC { typedef MacroAssemblerPPC MacroAssemblerBase; };
+ 
+ #else
+diff --git a/Source/JavaScriptCore/assembler/MacroAssemblerPPCJIT.h b/Source/JavaScriptCore/assembler/MacroAssemblerPPCJIT.h
+new file mode 100644
+index 00000000..08ec82f7
+--- /dev/null
++++ b/Source/JavaScriptCore/assembler/MacroAssemblerPPCJIT.h
+@@ -0,0 +1,2024 @@
++/*
++ * Copyright (C) 2026 Captain Polliwog contributors. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
++ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
++ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++ * IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
++ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
++ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++// The 32-bit PowerPC macro assembler for the baseline JIT. See
++// PPCAssemblerJIT.h for how jumps, calls and patchable constants are laid out.
++//
++// Scratch registers, none of which the JIT allocates (jit/GPRInfo.h):
++//   r0   tempRegister: data and immediates. Never a base address (as the base
++//        of a load, store or addi, r0 reads as zero).
++//   r12  addressTempRegister: computed addresses; also holds the target of
++//        every call, as Darwin expects.
++//   r11  dataTempRegister2: a second data temporary.
++//   f0, f13  floating point temporaries.
++// The red zone below the stack pointer (224 bytes on Darwin, and untouched by
++// signal handlers) is used for moves between GPRs and FPRs at -8(r1).
++
++#if ENABLE(ASSEMBLER) && CPU(PPC)
++
++#include "AbstractMacroAssembler.h"
++#include "PPCAssemblerJIT.h"
++
++namespace JSC {
++
++class MacroAssemblerPPC : public AbstractMacroAssembler<PPCAssembler> {
++public:
++    typedef PPCRegisters::FPRegisterID FPRegisterID;
++    static const unsigned numGPRs = 32;
++    static const unsigned numFPRs = 32;
++
++    static const RegisterID tempRegister = PPCRegisters::r0;
++    static const RegisterID addressTempRegister = PPCRegisters::r12;
++    static const RegisterID dataTempRegister2 = PPCRegisters::r11;
++    static const FPRegisterID fpTempRegister = PPCRegisters::f0;
++    static const FPRegisterID fpTempRegister2 = PPCRegisters::f13;
++
++    static const RegisterID stackPointerRegister = PPCRegisters::r1;
++    static const RegisterID framePointerRegister = PPCRegisters::r13;
++
++    static const Scale ScalePtr = TimesFour;
++    static const int MaximumCompactPtrAlignedAddressOffset = 0x7FFFFFFF;
++
++    static bool isCompactPtrAlignedAddressOffset(ptrdiff_t value)
++    {
++        return value >= -2147483647 - 1 && value <= 2147483647;
++    }
++
++    // Conditions are a bit of cr0 (LT, GT or EQ), whether to branch when it
++    // is set or clear, and for comparisons, whether they are unsigned.
++    enum {
++        ConditionSet = 4,
++        ConditionUnsigned = 8,
++    };
++
++    enum RelationalCondition {
++        Equal = PPCAssembler::EQ | ConditionSet,
++        NotEqual = PPCAssembler::EQ,
++        Above = PPCAssembler::GT | ConditionSet | ConditionUnsigned,
++        AboveOrEqual = PPCAssembler::LT | ConditionUnsigned,
++        Below = PPCAssembler::LT | ConditionSet | ConditionUnsigned,
++        BelowOrEqual = PPCAssembler::GT | ConditionUnsigned,
++        GreaterThan = PPCAssembler::GT | ConditionSet,
++        GreaterThanOrEqual = PPCAssembler::LT,
++        LessThan = PPCAssembler::LT | ConditionSet,
++        LessThanOrEqual = PPCAssembler::GT
++    };
++
++    enum ResultCondition {
++        Overflow = 16,
++        Signed = PPCAssembler::LT | ConditionSet,
++        PositiveOrZero = PPCAssembler::LT,
++        Zero = PPCAssembler::EQ | ConditionSet,
++        NonZero = PPCAssembler::EQ
++    };
++
++    enum DoubleCondition {
++        // These conditions will only evaluate to true if the comparison is ordered - i.e. neither operand is NaN.
++        DoubleEqual,
++        DoubleNotEqual,
++        DoubleGreaterThan,
++        DoubleGreaterThanOrEqual,
++        DoubleLessThan,
++        DoubleLessThanOrEqual,
++        // If either operand is NaN, these conditions always evaluate to true.
++        DoubleEqualOrUnordered,
++        DoubleNotEqualOrUnordered,
++        DoubleGreaterThanOrUnordered,
++        DoubleGreaterThanOrEqualOrUnordered,
++        DoubleLessThanOrUnordered,
++        DoubleLessThanOrEqualOrUnordered
++    };
++
++    static RelationalCondition invert(RelationalCondition cond)
++    {
++        return static_cast<RelationalCondition>(cond ^ ConditionSet);
++    }
++
++    static bool isInt16(int32_t value) { return value >= -32768 && value <= 32767; }
++    static bool isUInt16(int32_t value) { return !(value & 0xffff0000); }
++    // The high half for addis, adjusted for the sign of the low half.
++    static int16_t ha16(int32_t value) { return static_cast<int16_t>((value + 0x8000) >> 16); }
++    static int16_t lo16(int32_t value) { return static_cast<int16_t>(value & 0xffff); }
++
++    // Integer arithmetic operations.
++
++    void add32(RegisterID src, RegisterID dest)
++    {
++        m_assembler.add(dest, dest, src);
++    }
++
++    void add32(RegisterID op1, RegisterID op2, RegisterID dest)
++    {
++        m_assembler.add(dest, op1, op2);
++    }
++
++    void add32(TrustedImm32 imm, RegisterID dest)
++    {
++        add32(imm, dest, dest);
++    }
++
++    void add32(TrustedImm32 imm, RegisterID src, RegisterID dest)
++    {
++        ASSERT(src != tempRegister);
++        int32_t value = imm.m_value;
++        if (isInt16(value)) {
++            if (value || src != dest)
++                m_assembler.addi(dest, src, value);
++            return;
++        }
++        if (!lo16(value)) {
++            m_assembler.addis(dest, src, value >> 16);
++            return;
++        }
++        m_assembler.addis(dest, src, ha16(value));
++        m_assembler.addi(dest, dest, lo16(value));
++    }
++
++    void add32(RegisterID src, TrustedImm32 imm, RegisterID dest)
++    {
++        add32(imm, src, dest);
++    }
++
++    void add32(TrustedImm32 imm, Address address)
++    {
++        Address resolved = resolveAddress(address);
++        m_assembler.lwz(dataTempRegister2, resolved.base, resolved.offset);
++        add32(imm, dataTempRegister2);
++        m_assembler.stw(dataTempRegister2, resolved.base, resolved.offset);
++    }
++
++    void add32(TrustedImm32 imm, AbsoluteAddress address)
++    {
++        add32(imm, absoluteAddress(address.m_ptr));
++    }
++
++    void add32(Address src, RegisterID dest)
++    {
++        load32(src, tempRegister);
++        add32(tempRegister, dest);
++    }
++
++    void add32(AbsoluteAddress src, RegisterID dest)
++    {
++        load32(src.m_ptr, tempRegister);
++        add32(tempRegister, dest);
++    }
++
++    void add32(RegisterID src, Address dest)
++    {
++        Address resolved = resolveAddress(dest);
++        m_assembler.lwz(tempRegister, resolved.base, resolved.offset);
++        m_assembler.add(tempRegister, tempRegister, src);
++        m_assembler.stw(tempRegister, resolved.base, resolved.offset);
++    }
++
++    // A 64-bit add of a sign-extended immediate to the (big-endian) 64-bit
++    // integer at the address.
++    void add64(TrustedImm32 imm, AbsoluteAddress address)
++    {
++        m_assembler.lis(addressTempRegister, ha16(reinterpret_cast<int32_t>(address.m_ptr)));
++        m_assembler.addi(addressTempRegister, addressTempRegister, lo16(reinterpret_cast<int32_t>(address.m_ptr)));
++        m_assembler.lwz(tempRegister, addressTempRegister, 4);
++        move(imm, dataTempRegister2);
++        // addc/adde: low word with carry out, then the high word.
++        m_assembler.emitInst(PPCAssembler::formXO(tempRegister, tempRegister, dataTempRegister2, false, 10)); // addc
++        m_assembler.stw(tempRegister, addressTempRegister, 4);
++        m_assembler.lwz(tempRegister, addressTempRegister, 0);
++        m_assembler.srawi(dataTempRegister2, dataTempRegister2, 31);
++        m_assembler.emitInst(PPCAssembler::formXO(tempRegister, tempRegister, dataTempRegister2, false, 138)); // adde
++        m_assembler.stw(tempRegister, addressTempRegister, 0);
++    }
++
++    void and32(RegisterID src, RegisterID dest)
++    {
++        m_assembler.and_(dest, dest, src);
++    }
++
++    void and32(RegisterID op1, RegisterID op2, RegisterID dest)
++    {
++        m_assembler.and_(dest, op1, op2);
++    }
++
++    void and32(TrustedImm32 imm, RegisterID dest)
++    {
++        and32(imm, dest, dest);
++    }
++
++    void and32(TrustedImm32 imm, RegisterID src, RegisterID dest)
++    {
++        int32_t value = imm.m_value;
++        if (value == -1)
++            move(src, dest);
++        else if (isUInt16(value))
++            m_assembler.andi_rc(dest, src, value);
++        else if (!(value & 0xffff))
++            m_assembler.andis_rc(dest, src, static_cast<uint32_t>(value) >> 16);
++        else if (int mask = contiguousMask(value)) {
++            // rlwinm with a mask of consecutive ones, e.g. ~7 or 0x7fffffff.
++            m_assembler.rlwinm(dest, src, 0, (mask >> 8) & 31, mask & 31);
++        } else {
++            move(imm, tempRegister);
++            m_assembler.and_(dest, src, tempRegister);
++        }
++    }
++
++    void and32(Address src, RegisterID dest)
++    {
++        load32(src, tempRegister);
++        and32(tempRegister, dest);
++    }
++
++    void countLeadingZeros32(RegisterID src, RegisterID dest)
++    {
++        m_assembler.cntlzw(dest, src);
++    }
++
++    void lshift32(RegisterID shiftAmount, RegisterID dest)
++    {
++        lshift32(dest, shiftAmount, dest);
++    }
++
++    void lshift32(RegisterID src, RegisterID shiftAmount, RegisterID dest)
++    {
++        // JavaScript uses the low five bits of the amount; slw uses six.
++        m_assembler.andi_rc(tempRegister, shiftAmount, 31);
++        m_assembler.slw(dest, src, tempRegister);
++    }
++
++    void lshift32(TrustedImm32 imm, RegisterID dest)
++    {
++        lshift32(dest, imm, dest);
++    }
++
++    void lshift32(RegisterID src, TrustedImm32 imm, RegisterID dest)
++    {
++        int amount = imm.m_value & 31;
++        if (amount)
++            m_assembler.slwi(dest, src, amount);
++        else
++            move(src, dest);
++    }
++
++    void mul32(RegisterID src, RegisterID dest)
++    {
++        m_assembler.mullw(dest, dest, src);
++    }
++
++    void mul32(RegisterID op1, RegisterID op2, RegisterID dest)
++    {
++        m_assembler.mullw(dest, op1, op2);
++    }
++
++    void mul32(TrustedImm32 imm, RegisterID src, RegisterID dest)
++    {
++        if (isInt16(imm.m_value))
++            m_assembler.mulli(dest, src, imm.m_value);
++        else {
++            move(imm, tempRegister);
++            m_assembler.mullw(dest, src, tempRegister);
++        }
++    }
++
++    void neg32(RegisterID srcDest)
++    {
++        m_assembler.neg(srcDest, srcDest);
++    }
++
++    void or32(RegisterID src, RegisterID dest)
++    {
++        m_assembler.or_(dest, dest, src);
++    }
++
++    void or32(RegisterID op1, RegisterID op2, RegisterID dest)
++    {
++        m_assembler.or_(dest, op1, op2);
++    }
++
++    void or32(TrustedImm32 imm, RegisterID dest)
++    {
++        or32(imm, dest, dest);
++    }
++
++    void or32(TrustedImm32 imm, RegisterID src, RegisterID dest)
++    {
++        uint32_t value = imm.m_value;
++        if (!value) {
++            move(src, dest);
++            return;
++        }
++        if (value >> 16) {
++            m_assembler.oris(dest, src, value >> 16);
++            if (value & 0xffff)
++                m_assembler.ori(dest, dest, value & 0xffff);
++        } else
++            m_assembler.ori(dest, src, value);
++    }
++
++    void or32(TrustedImm32 imm, Address address)
++    {
++        Address resolved = resolveAddress(address);
++        m_assembler.lwz(tempRegister, resolved.base, resolved.offset);
++        or32(imm, tempRegister);
++        m_assembler.stw(tempRegister, resolved.base, resolved.offset);
++    }
++
++    void or32(TrustedImm32 imm, AbsoluteAddress address)
++    {
++        or32(imm, absoluteAddress(address.m_ptr));
++    }
++
++    void or32(RegisterID src, AbsoluteAddress address)
++    {
++        Address resolved = absoluteAddress(address.m_ptr);
++        m_assembler.lwz(tempRegister, resolved.base, resolved.offset);
++        m_assembler.or_(tempRegister, tempRegister, src);
++        m_assembler.stw(tempRegister, resolved.base, resolved.offset);
++    }
++
++    void or32(Address src, RegisterID dest)
++    {
++        load32(src, tempRegister);
++        or32(tempRegister, dest);
++    }
++
++    void rshift32(RegisterID shiftAmount, RegisterID dest)
++    {
++        rshift32(dest, shiftAmount, dest);
++    }
++
++    void rshift32(RegisterID src, RegisterID shiftAmount, RegisterID dest)
++    {
++        m_assembler.andi_rc(tempRegister, shiftAmount, 31);
++        m_assembler.sraw(dest, src, tempRegister);
++    }
++
++    void rshift32(TrustedImm32 imm, RegisterID dest)
++    {
++        rshift32(dest, imm, dest);
++    }
++
++    void rshift32(RegisterID src, TrustedImm32 imm, RegisterID dest)
++    {
++        m_assembler.srawi(dest, src, imm.m_value & 31);
++    }
++
++    void urshift32(RegisterID shiftAmount, RegisterID dest)
++    {
++        urshift32(dest, shiftAmount, dest);
++    }
++
++    void urshift32(RegisterID src, RegisterID shiftAmount, RegisterID dest)
++    {
++        m_assembler.andi_rc(tempRegister, shiftAmount, 31);
++        m_assembler.srw(dest, src, tempRegister);
++    }
++
++    void urshift32(TrustedImm32 imm, RegisterID dest)
++    {
++        urshift32(dest, imm, dest);
++    }
++
++    void urshift32(RegisterID src, TrustedImm32 imm, RegisterID dest)
++    {
++        int amount = imm.m_value & 31;
++        if (amount)
++            m_assembler.srwi(dest, src, amount);
++        else
++            move(src, dest);
++    }
++
++    void sub32(RegisterID src, RegisterID dest)
++    {
++        m_assembler.subf(dest, src, dest);
++    }
++
++    // dest = op1 - op2
++    void sub32(RegisterID op1, RegisterID op2, RegisterID dest)
++    {
++        m_assembler.subf(dest, op2, op1);
++    }
++
++    void sub32(TrustedImm32 imm, RegisterID dest)
++    {
++        sub32(dest, imm, dest);
++    }
++
++    void sub32(RegisterID src, TrustedImm32 imm, RegisterID dest)
++    {
++        if (imm.m_value == INT_MIN) {
++            move(imm, tempRegister);
++            m_assembler.subf(dest, tempRegister, src);
++            return;
++        }
++        add32(TrustedImm32(-imm.m_value), src, dest);
++    }
++
++    void sub32(TrustedImm32 imm, Address address)
++    {
++        Address resolved = resolveAddress(address);
++        m_assembler.lwz(dataTempRegister2, resolved.base, resolved.offset);
++        sub32(imm, dataTempRegister2);
++        m_assembler.stw(dataTempRegister2, resolved.base, resolved.offset);
++    }
++
++    void sub32(TrustedImm32 imm, AbsoluteAddress address)
++    {
++        sub32(imm, absoluteAddress(address.m_ptr));
++    }
++
++    void sub32(Address src, RegisterID dest)
++    {
++        load32(src, tempRegister);
++        sub32(tempRegister, dest);
++    }
++
++    void xor32(RegisterID src, RegisterID dest)
++    {
++        m_assembler.xor_(dest, dest, src);
++    }
++
++    void xor32(RegisterID op1, RegisterID op2, RegisterID dest)
++    {
++        m_assembler.xor_(dest, op1, op2);
++    }
++
++    void xor32(TrustedImm32 imm, RegisterID dest)
++    {
++        xor32(imm, dest, dest);
++    }
++
++    void xor32(TrustedImm32 imm, RegisterID src, RegisterID dest)
++    {
++        uint32_t value = imm.m_value;
++        if (value == 0xffffffff) {
++            m_assembler.nor(dest, src, src);
++            return;
++        }
++        if (!value) {
++            move(src, dest);
++            return;
++        }
++        if (value >> 16) {
++            m_assembler.xoris(dest, src, value >> 16);
++            if (value & 0xffff)
++                m_assembler.xori(dest, dest, value & 0xffff);
++        } else
++            m_assembler.xori(dest, src, value);
++    }
++
++    void xor32(Address src, RegisterID dest)
++    {
++        load32(src, tempRegister);
++        xor32(tempRegister, dest);
++    }
++
++    void not32(RegisterID srcDest)
++    {
++        m_assembler.nor(srcDest, srcDest, srcDest);
++    }
++
++    // Memory access operations.
++
++    void lea(Address address, RegisterID dest)
++    {
++        add32(TrustedImm32(address.offset), address.base, dest);
++    }
++
++    void lea(BaseIndex address, RegisterID dest)
++    {
++        RegisterID index = address.index;
++        if (address.scale) {
++            m_assembler.slwi(addressTempRegister, index, address.scale);
++            index = addressTempRegister;
++        }
++        m_assembler.add(dest, address.base, index);
++        if (address.offset)
++            add32(TrustedImm32(address.offset), dest);
++    }
++
++    void load8(ImplicitAddress address, RegisterID dest)
++    {
++        Address resolved = resolveAddress(address);
++        m_assembler.lbz(dest, resolved.base, resolved.offset);
++    }
++
++    void load8(BaseIndex address, RegisterID dest)
++    {
++        if (RegisterID index = indexForXForm(address))
++            m_assembler.lbzx(dest, address.base, index);
++        else {
++            Address resolved = resolveAddress(address);
++            m_assembler.lbz(dest, resolved.base, resolved.offset);
++        }
++    }
++
++    void load8(const void* address, RegisterID dest)
++    {
++        Address resolved = absoluteAddress(address);
++        m_assembler.lbz(dest, resolved.base, resolved.offset);
++    }
++
++    void load8(AbsoluteAddress address, RegisterID dest)
++    {
++        load8(address.m_ptr, dest);
++    }
++
++    void load8SignedExtendTo32(ImplicitAddress address, RegisterID dest)
++    {
++        load8(address, dest);
++        m_assembler.extsb(dest, dest);
++    }
++
++    void load8SignedExtendTo32(BaseIndex address, RegisterID dest)
++    {
++        load8(address, dest);
++        m_assembler.extsb(dest, dest);
++    }
++
++    void load8SignedExtendTo32(const void* address, RegisterID dest)
++    {
++        load8(address, dest);
++        m_assembler.extsb(dest, dest);
++    }
++
++    void load8SignedExtendTo32(AbsoluteAddress address, RegisterID dest)
++    {
++        load8SignedExtendTo32(address.m_ptr, dest);
++    }
++
++    void load16(ImplicitAddress address, RegisterID dest)
++    {
++        Address resolved = resolveAddress(address);
++        m_assembler.lhz(dest, resolved.base, resolved.offset);
++    }
++
++    void load16(BaseIndex address, RegisterID dest)
++    {
++        if (RegisterID index = indexForXForm(address))
++            m_assembler.lhzx(dest, address.base, index);
++        else {
++            Address resolved = resolveAddress(address);
++            m_assembler.lhz(dest, resolved.base, resolved.offset);
++        }
++    }
++
++    // PowerPC handles misaligned loads in hardware in big-endian mode.
++    void load16Unaligned(BaseIndex address, RegisterID dest)
++    {
++        load16(address, dest);
++    }
++
++    void load16SignedExtendTo32(ImplicitAddress address, RegisterID dest)
++    {
++        Address resolved = resolveAddress(address);
++        m_assembler.lha(dest, resolved.base, resolved.offset);
++    }
++
++    void load16SignedExtendTo32(BaseIndex address, RegisterID dest)
++    {
++        if (RegisterID index = indexForXForm(address))
++            m_assembler.lhax(dest, address.base, index);
++        else {
++            Address resolved = resolveAddress(address);
++            m_assembler.lha(dest, resolved.base, resolved.offset);
++        }
++    }
++
++    void load32(ImplicitAddress address, RegisterID dest)
++    {
++        Address resolved = resolveAddress(address);
++        m_assembler.lwz(dest, resolved.base, resolved.offset);
++    }
++
++    void load32(BaseIndex address, RegisterID dest)
++    {
++        if (RegisterID index = indexForXForm(address))
++            m_assembler.lwzx(dest, address.base, index);
++        else {
++            Address resolved = resolveAddress(address);
++            m_assembler.lwz(dest, resolved.base, resolved.offset);
++        }
++    }
++
++    void load32(const void* address, RegisterID dest)
++    {
++        Address resolved = absoluteAddress(address);
++        m_assembler.lwz(dest, resolved.base, resolved.offset);
++    }
++
++    void load32(AbsoluteAddress address, RegisterID dest)
++    {
++        load32(address.m_ptr, dest);
++    }
++
++    void load32WithUnalignedHalfWords(BaseIndex address, RegisterID dest)
++    {
++        load32(address, dest);
++    }
++
++    DataLabel32 load32WithAddressOffsetPatch(Address address, RegisterID dest)
++    {
++        ASSERT(address.base != tempRegister);
++        DataLabel32 dataLabel(this);
++        m_assembler.load32ConstantPatchable(tempRegister, address.offset);
++        m_assembler.lwzx(dest, address.base, tempRegister);
++        return dataLabel;
++    }
++
++    DataLabelCompact load32WithCompactAddressOffsetPatch(Address address, RegisterID dest)
++    {
++        DataLabelCompact dataLabel(this);
++        load32WithAddressOffsetPatch(address, dest);
++        return dataLabel;
++    }
++
++    ConvertibleLoadLabel convertibleLoadPtr(Address address, RegisterID dest)
++    {
++        ConvertibleLoadLabel result(this);
++        m_assembler.load32ConstantPatchable(tempRegister, address.offset);
++        m_assembler.lwzx(dest, address.base, tempRegister);
++        return result;
++    }
++
++    DataLabel32 store32WithAddressOffsetPatch(RegisterID src, Address address)
++    {
++        DataLabel32 dataLabel(this);
++        m_assembler.load32ConstantPatchable(tempRegister, address.offset);
++        m_assembler.stwx(src, address.base, tempRegister);
++        return dataLabel;
++    }
++
++    void store8(RegisterID src, ImplicitAddress address)
++    {
++        Address resolved = resolveAddress(address);
++        m_assembler.stb(src, resolved.base, resolved.offset);
++    }
++
++    void store8(RegisterID src, BaseIndex address)
++    {
++        if (RegisterID index = indexForXForm(address))
++            m_assembler.stbx(src, address.base, index);
++        else {
++            Address resolved = resolveAddress(address);
++            m_assembler.stb(src, resolved.base, resolved.offset);
++        }
++    }
++
++    void store8(RegisterID src, void* address)
++    {
++        Address resolved = absoluteAddress(address);
++        m_assembler.stb(src, resolved.base, resolved.offset);
++    }
++
++    void store8(TrustedImm32 imm, ImplicitAddress address)
++    {
++        move(TrustedImm32(static_cast<int8_t>(imm.m_value)), tempRegister);
++        store8(tempRegister, address);
++    }
++
++    void store8(TrustedImm32 imm, BaseIndex address)
++    {
++        move(TrustedImm32(static_cast<int8_t>(imm.m_value)), tempRegister);
++        store8(tempRegister, address);
++    }
++
++    void store8(TrustedImm32 imm, void* address)
++    {
++        move(TrustedImm32(static_cast<int8_t>(imm.m_value)), tempRegister);
++        store8(tempRegister, address);
++    }
++
++    void store16(RegisterID src, ImplicitAddress address)
++    {
++        Address resolved = resolveAddress(address);
++        m_assembler.sth(src, resolved.base, resolved.offset);
++    }
++
++    void store16(RegisterID src, BaseIndex address)
++    {
++        if (RegisterID index = indexForXForm(address))
++            m_assembler.sthx(src, address.base, index);
++        else {
++            Address resolved = resolveAddress(address);
++            m_assembler.sth(src, resolved.base, resolved.offset);
++        }
++    }
++
++    void store16(TrustedImm32 imm, ImplicitAddress address)
++    {
++        move(TrustedImm32(static_cast<int16_t>(imm.m_value)), tempRegister);
++        store16(tempRegister, address);
++    }
++
++    void store32(RegisterID src, ImplicitAddress address)
++    {
++        notePokedArgument(address);
++        Address resolved = resolveAddress(address);
++        m_assembler.stw(src, resolved.base, resolved.offset);
++    }
++
++    void store32(RegisterID src, BaseIndex address)
++    {
++        if (RegisterID index = indexForXForm(address))
++            m_assembler.stwx(src, address.base, index);
++        else {
++            Address resolved = resolveAddress(address);
++            m_assembler.stw(src, resolved.base, resolved.offset);
++        }
++    }
++
++    void store32(TrustedImm32 imm, ImplicitAddress address)
++    {
++        move(imm, tempRegister);
++        store32(tempRegister, address);
++    }
++
++    void store32(TrustedImm32 imm, BaseIndex address)
++    {
++        move(imm, tempRegister);
++        store32(tempRegister, address);
++    }
++
++    void store32(RegisterID src, const void* address)
++    {
++        Address resolved = absoluteAddress(address);
++        m_assembler.stw(src, resolved.base, resolved.offset);
++    }
++
++    void store32(TrustedImm32 imm, const void* address)
++    {
++        move(imm, tempRegister);
++        store32(tempRegister, address);
++    }
++
++    void store32(RegisterID src, AbsoluteAddress address)
++    {
++        store32(src, address.m_ptr);
++    }
++
++    void store32(TrustedImm32 imm, AbsoluteAddress address)
++    {
++        store32(imm, address.m_ptr);
++    }
++
++    // Floating-point operations.
++
++    static bool supportsFloatingPoint() { return true; }
++    static bool supportsFloatingPointTruncate() { return true; }
++    // The G3 and G4 have no fsqrt.
++    static bool supportsFloatingPointSqrt() { return false; }
++    static bool supportsFloatingPointAbs() { return true; }
++    static bool supportsFloatingPointRounding() { return false; }
++
++    void loadDouble(ImplicitAddress address, FPRegisterID dest)
++    {
++        Address resolved = resolveAddress(address);
++        m_assembler.lfd(dest, resolved.base, resolved.offset);
++    }
++
++    void loadDouble(BaseIndex address, FPRegisterID dest)
++    {
++        if (RegisterID index = indexForXForm(address))
++            m_assembler.lfdx(dest, address.base, index);
++        else {
++            Address resolved = resolveAddress(address);
++            m_assembler.lfd(dest, resolved.base, resolved.offset);
++        }
++    }
++
++    void loadDouble(TrustedImmPtr address, FPRegisterID dest)
++    {
++        Address resolved = absoluteAddress(address.m_value);
++        m_assembler.lfd(dest, resolved.base, resolved.offset);
++    }
++
++    void loadFloat(ImplicitAddress address, FPRegisterID dest)
++    {
++        Address resolved = resolveAddress(address);
++        m_assembler.lfs(dest, resolved.base, resolved.offset);
++    }
++
++    void loadFloat(BaseIndex address, FPRegisterID dest)
++    {
++        if (RegisterID index = indexForXForm(address))
++            m_assembler.lfsx(dest, address.base, index);
++        else {
++            Address resolved = resolveAddress(address);
++            m_assembler.lfs(dest, resolved.base, resolved.offset);
++        }
++    }
++
++    void storeDouble(FPRegisterID src, ImplicitAddress address)
++    {
++        Address resolved = resolveAddress(address);
++        m_assembler.stfd(src, resolved.base, resolved.offset);
++    }
++
++    void storeDouble(FPRegisterID src, BaseIndex address)
++    {
++        if (RegisterID index = indexForXForm(address))
++            m_assembler.stfdx(src, address.base, index);
++        else {
++            Address resolved = resolveAddress(address);
++            m_assembler.stfd(src, resolved.base, resolved.offset);
++        }
++    }
++
++    void storeDouble(FPRegisterID src, TrustedImmPtr address)
++    {
++        Address resolved = absoluteAddress(address.m_value);
++        m_assembler.stfd(src, resolved.base, resolved.offset);
++    }
++
++    void storeFloat(FPRegisterID src, ImplicitAddress address)
++    {
++        Address resolved = resolveAddress(address);
++        m_assembler.stfs(src, resolved.base, resolved.offset);
++    }
++
++    void storeFloat(FPRegisterID src, BaseIndex address)
++    {
++        if (RegisterID index = indexForXForm(address))
++            m_assembler.stfsx(src, address.base, index);
++        else {
++            Address resolved = resolveAddress(address);
++            m_assembler.stfs(src, resolved.base, resolved.offset);
++        }
++    }
++
++    void moveDouble(FPRegisterID src, FPRegisterID dest)
++    {
++        m_assembler.fmr(dest, src);
++    }
++
++    void swapDouble(FPRegisterID fr1, FPRegisterID fr2)
++    {
++        m_assembler.fmr(fpTempRegister, fr1);
++        m_assembler.fmr(fr1, fr2);
++        m_assembler.fmr(fr2, fpTempRegister);
++    }
++
++    void moveZeroToDouble(FPRegisterID reg)
++    {
++        loadDouble(TrustedImmPtr(&s_zeroDouble), reg);
++    }
++
++    // dest1 is the low (payload) word, dest2 the high (tag) word.
++    void moveDoubleToInts(FPRegisterID src, RegisterID dest1, RegisterID dest2)
++    {
++        m_assembler.stfd(src, stackPointerRegister, -8);
++        m_assembler.lwz(dest2, stackPointerRegister, -8);
++        m_assembler.lwz(dest1, stackPointerRegister, -4);
++    }
++
++    void moveIntsToDouble(RegisterID src1, RegisterID src2, FPRegisterID dest, FPRegisterID)
++    {
++        m_assembler.stw(src2, stackPointerRegister, -8);
++        m_assembler.stw(src1, stackPointerRegister, -4);
++        m_assembler.lfd(dest, stackPointerRegister, -8);
++    }
++
++    void addDouble(FPRegisterID src, FPRegisterID dest)
++    {
++        m_assembler.fadd(dest, dest, src);
++    }
++
++    void addDouble(FPRegisterID op1, FPRegisterID op2, FPRegisterID dest)
++    {
++        m_assembler.fadd(dest, op1, op2);
++    }
++
++    void addDouble(Address src, FPRegisterID dest)
++    {
++        loadDouble(src, fpTempRegister);
++        addDouble(fpTempRegister, dest);
++    }
++
++    void addDouble(AbsoluteAddress address, FPRegisterID dest)
++    {
++        loadDouble(TrustedImmPtr(address.m_ptr), fpTempRegister);
++        addDouble(fpTempRegister, dest);
++    }
++
++    void subDouble(FPRegisterID src, FPRegisterID dest)
++    {
++        m_assembler.fsub(dest, dest, src);
++    }
++
++    void subDouble(FPRegisterID op1, FPRegisterID op2, FPRegisterID dest)
++    {
++        m_assembler.fsub(dest, op1, op2);
++    }
++
++    void subDouble(Address src, FPRegisterID dest)
++    {
++        loadDouble(src, fpTempRegister);
++        subDouble(fpTempRegister, dest);
++    }
++
++    void mulDouble(FPRegisterID src, FPRegisterID dest)
++    {
++        m_assembler.fmul(dest, dest, src);
++    }
++
++    void mulDouble(FPRegisterID op1, FPRegisterID op2, FPRegisterID dest)
++    {
++        m_assembler.fmul(dest, op1, op2);
++    }
++
++    void mulDouble(Address src, FPRegisterID dest)
++    {
++        loadDouble(src, fpTempRegister);
++        mulDouble(fpTempRegister, dest);
++    }
++
++    void divDouble(FPRegisterID src, FPRegisterID dest)
++    {
++        m_assembler.fdiv(dest, dest, src);
++    }
++
++    void divDouble(FPRegisterID op1, FPRegisterID op2, FPRegisterID dest)
++    {
++        m_assembler.fdiv(dest, op1, op2);
++    }
++
++    void divDouble(Address src, FPRegisterID dest)
++    {
++        loadDouble(src, fpTempRegister);
++        divDouble(fpTempRegister, dest);
++    }
++
++    void negateDouble(FPRegisterID src, FPRegisterID dest)
++    {
++        m_assembler.fneg(dest, src);
++    }
++
++    void absDouble(FPRegisterID src, FPRegisterID dest)
++    {
++        m_assembler.fabs(dest, src);
++    }
++
++    NO_RETURN_DUE_TO_CRASH void sqrtDouble(FPRegisterID, FPRegisterID)
++    {
++        ASSERT(!supportsFloatingPointSqrt());
++        CRASH();
++    }
++
++    NO_RETURN_DUE_TO_CRASH void ceilDouble(FPRegisterID, FPRegisterID)
++    {
++        ASSERT(!supportsFloatingPointRounding());
++        CRASH();
++    }
++
++    NO_RETURN_DUE_TO_CRASH void floorDouble(FPRegisterID, FPRegisterID)
++    {
++        ASSERT(!supportsFloatingPointRounding());
++        CRASH();
++    }
++
++    NO_RETURN_DUE_TO_CRASH void roundTowardZeroDouble(FPRegisterID, FPRegisterID)
++    {
++        ASSERT(!supportsFloatingPointRounding());
++        CRASH();
++    }
++
++    void convertDoubleToFloat(FPRegisterID src, FPRegisterID dest)
++    {
++        m_assembler.frsp(dest, src);
++    }
++
++    void convertFloatToDouble(FPRegisterID src, FPRegisterID dest)
++    {
++        // Single precision values are held as doubles in the FPRs.
++        m_assembler.fmr(dest, src);
++    }
++
++    // There is no fcfid before the G5: the double with high word 0x43300000
++    // and low word (x ^ 0x80000000) is 2^52 + 2^31 + x.
++    void convertInt32ToDouble(RegisterID src, FPRegisterID dest)
++    {
++        ASSERT(src != addressTempRegister);
++        m_assembler.lis(tempRegister, 0x4330);
++        m_assembler.stw(tempRegister, stackPointerRegister, -8);
++        m_assembler.xoris(tempRegister, src, 0x8000);
++        m_assembler.stw(tempRegister, stackPointerRegister, -4);
++        m_assembler.lfd(dest, stackPointerRegister, -8);
++        loadDouble(TrustedImmPtr(&s_int32ToDoubleBias), fpTempRegister2);
++        m_assembler.fsub(dest, dest, fpTempRegister2);
++    }
++
++    void convertInt32ToDouble(Address src, FPRegisterID dest)
++    {
++        load32(src, dataTempRegister2);
++        convertInt32ToDouble(dataTempRegister2, dest);
++    }
++
++    void convertInt32ToDouble(AbsoluteAddress src, FPRegisterID dest)
++    {
++        load32(src.m_ptr, dataTempRegister2);
++        convertInt32ToDouble(dataTempRegister2, dest);
++    }
++
++    void convertUInt32ToDouble(RegisterID src, FPRegisterID dest)
++    {
++        // 0x43300000:x is 2^52 + x.
++        m_assembler.lis(tempRegister, 0x4330);
++        m_assembler.stw(tempRegister, stackPointerRegister, -8);
++        m_assembler.stw(src, stackPointerRegister, -4);
++        m_assembler.lfd(dest, stackPointerRegister, -8);
++        loadDouble(TrustedImmPtr(&s_uint32ToDoubleBias), fpTempRegister2);
++        m_assembler.fsub(dest, dest, fpTempRegister2);
++    }
++
++    // fctiwz saturates: 0x7fffffff for large values, 0x80000000 for small
++    // ones and NaN.
++    void truncateDoubleToInt32(FPRegisterID src, RegisterID dest)
++    {
++        m_assembler.fctiwz(fpTempRegister, src);
++        m_assembler.stfd(fpTempRegister, stackPointerRegister, -8);
++        m_assembler.lwz(dest, stackPointerRegister, -4);
++    }
++
++    void truncateDoubleToUint32(FPRegisterID src, RegisterID dest)
++    {
++        truncateDoubleToInt32(src, dest);
++    }
++
++    enum BranchTruncateType { BranchIfTruncateFailed, BranchIfTruncateSuccessful };
++
++    // Treats the saturated results, INT_MAX and INT_MIN, as failures.
++    Jump branchTruncateDoubleToInt32(FPRegisterID src, RegisterID dest, BranchTruncateType branchType = BranchIfTruncateFailed)
++    {
++        truncateDoubleToInt32(src, dest);
++        // x ^ 0x80000000, plus 1: 0 for INT_MAX, 1 for INT_MIN.
++        m_assembler.xoris(dataTempRegister2, dest, 0x8000);
++        m_assembler.addi(dataTempRegister2, dataTempRegister2, 1);
++        m_assembler.cmplwi(PPCRegisters::cr0, dataTempRegister2, 1);
++        return branchOnCondition(branchType == BranchIfTruncateFailed ? BelowOrEqual : Above);
++    }
++
++    Jump branchTruncateDoubleToUint32(FPRegisterID src, RegisterID dest, BranchTruncateType branchType = BranchIfTruncateFailed)
++    {
++        return branchTruncateDoubleToInt32(src, dest, branchType);
++    }
++
++    // Converts src to dest, adding a failure case if the double is not exactly
++    // an int32 (or might be -0, when negZeroCheck).
++    void branchConvertDoubleToInt32(FPRegisterID src, RegisterID dest, JumpList& failureCases, FPRegisterID fpTemp, bool negZeroCheck = true)
++    {
++        truncateDoubleToInt32(src, dest);
++        if (negZeroCheck)
++            failureCases.append(branchTest32(Zero, dest));
++        convertInt32ToDouble(dest, fpTemp);
++        failureCases.append(branchDouble(DoubleNotEqualOrUnordered, fpTemp, src));
++    }
++
++    Jump branchDouble(DoubleCondition cond, FPRegisterID left, FPRegisterID right)
++    {
++        m_assembler.fcmpu(PPCRegisters::cr0, left, right);
++        const int LT = PPCAssembler::LT, GT = PPCAssembler::GT, EQ = PPCAssembler::EQ, UN = PPCAssembler::SO;
++        switch (cond) {
++        case DoubleEqual:
++            return Jump(m_assembler.branch(EQ, true));
++        case DoubleNotEqual:
++            m_assembler.cror(EQ, EQ, UN);
++            return Jump(m_assembler.branch(EQ, false));
++        case DoubleGreaterThan:
++            return Jump(m_assembler.branch(GT, true));
++        case DoubleGreaterThanOrEqual:
++            m_assembler.cror(EQ, EQ, GT);
++            return Jump(m_assembler.branch(EQ, true));
++        case DoubleLessThan:
++            return Jump(m_assembler.branch(LT, true));
++        case DoubleLessThanOrEqual:
++            m_assembler.cror(EQ, EQ, LT);
++            return Jump(m_assembler.branch(EQ, true));
++        case DoubleEqualOrUnordered:
++            m_assembler.cror(EQ, EQ, UN);
++            return Jump(m_assembler.branch(EQ, true));
++        case DoubleNotEqualOrUnordered:
++            return Jump(m_assembler.branch(EQ, false));
++        case DoubleGreaterThanOrUnordered:
++            m_assembler.cror(GT, GT, UN);
++            return Jump(m_assembler.branch(GT, true));
++        case DoubleGreaterThanOrEqualOrUnordered:
++            return Jump(m_assembler.branch(LT, false));
++        case DoubleLessThanOrUnordered:
++            m_assembler.cror(LT, LT, UN);
++            return Jump(m_assembler.branch(LT, true));
++        case DoubleLessThanOrEqualOrUnordered:
++            return Jump(m_assembler.branch(GT, false));
++        }
++        RELEASE_ASSERT_NOT_REACHED();
++        return Jump();
++    }
++
++    Jump branchDoubleNonZero(FPRegisterID reg, FPRegisterID scratch)
++    {
++        moveZeroToDouble(scratch);
++        return branchDouble(DoubleNotEqual, reg, scratch);
++    }
++
++    Jump branchDoubleZeroOrNaN(FPRegisterID reg, FPRegisterID scratch)
++    {
++        moveZeroToDouble(scratch);
++        return branchDouble(DoubleEqualOrUnordered, reg, scratch);
++    }
++
++    // Stack manipulation operations.
++
++    void pop(RegisterID dest)
++    {
++        m_assembler.lwz(dest, stackPointerRegister, 0);
++        m_assembler.addi(stackPointerRegister, stackPointerRegister, 4);
++    }
++
++    void popPair(RegisterID dest1, RegisterID dest2)
++    {
++        m_assembler.lwz(dest1, stackPointerRegister, 0);
++        m_assembler.lwz(dest2, stackPointerRegister, 4);
++        m_assembler.addi(stackPointerRegister, stackPointerRegister, 8);
++    }
++
++    void push(RegisterID src)
++    {
++        m_assembler.stwu(src, stackPointerRegister, -4);
++    }
++
++    void push(Address address)
++    {
++        load32(address, tempRegister);
++        push(tempRegister);
++    }
++
++    void push(TrustedImm32 imm)
++    {
++        move(imm, tempRegister);
++        push(tempRegister);
++    }
++
++    // src1 ends up at the lower address, as with ARM's push {src1, src2}.
++    void pushPair(RegisterID src1, RegisterID src2)
++    {
++        m_assembler.stw(src2, stackPointerRegister, -4);
++        m_assembler.stwu(src1, stackPointerRegister, -8);
++    }
++
++    // The link register.
++
++    void moveFromLinkRegister(RegisterID dest)
++    {
++        m_assembler.mflr(dest);
++    }
++
++    void moveToLinkRegister(RegisterID src)
++    {
++        m_assembler.mtlr(src);
++    }
++
++    // Register move operations.
++
++    void move(TrustedImm32 imm, RegisterID dest)
++    {
++        m_assembler.load32Constant(dest, imm.m_value);
++    }
++
++    void move(RegisterID src, RegisterID dest)
++    {
++        m_assembler.mr(dest, src);
++    }
++
++    void move(TrustedImmPtr imm, RegisterID dest)
++    {
++        move(TrustedImm32(imm), dest);
++    }
++
++    void swap(RegisterID reg1, RegisterID reg2)
++    {
++        move(reg1, tempRegister);
++        move(reg2, reg1);
++        move(tempRegister, reg2);
++    }
++
++    void signExtend32ToPtr(RegisterID src, RegisterID dest)
++    {
++        move(src, dest);
++    }
++
++    void zeroExtend32ToPtr(RegisterID src, RegisterID dest)
++    {
++        move(src, dest);
++    }
++
++    // Forwards / external control flow operations.
++
++    Jump branch8(RelationalCondition cond, Address left, TrustedImm32 right)
++    {
++        TrustedImm32 right8 = MacroAssemblerHelpers::mask8OnCondition(*this, cond, right);
++        MacroAssemblerHelpers::load8OnCondition(*this, cond, left, dataTempRegister2);
++        return branch32(cond, dataTempRegister2, right8);
++    }
++
++    Jump branch8(RelationalCondition cond, BaseIndex left, TrustedImm32 right)
++    {
++        TrustedImm32 right8 = MacroAssemblerHelpers::mask8OnCondition(*this, cond, right);
++        MacroAssemblerHelpers::load8OnCondition(*this, cond, left, dataTempRegister2);
++        return branch32(cond, dataTempRegister2, right8);
++    }
++
++    Jump branch8(RelationalCondition cond, AbsoluteAddress left, TrustedImm32 right)
++    {
++        TrustedImm32 right8 = MacroAssemblerHelpers::mask8OnCondition(*this, cond, right);
++        MacroAssemblerHelpers::load8OnCondition(*this, cond, left.m_ptr, dataTempRegister2);
++        return branch32(cond, dataTempRegister2, right8);
++    }
++
++    void compare8(RelationalCondition cond, Address left, TrustedImm32 right, RegisterID dest)
++    {
++        TrustedImm32 right8 = MacroAssemblerHelpers::mask8OnCondition(*this, cond, right);
++        MacroAssemblerHelpers::load8OnCondition(*this, cond, left, dataTempRegister2);
++        compare32(cond, dataTempRegister2, right8, dest);
++    }
++
++    Jump branch32(RelationalCondition cond, RegisterID left, RegisterID right)
++    {
++        compare(cond, left, right);
++        return branchOnCondition(cond);
++    }
++
++    Jump branch32(RelationalCondition cond, RegisterID left, TrustedImm32 right)
++    {
++        compare(cond, left, right);
++        return branchOnCondition(cond);
++    }
++
++    Jump branch32(RelationalCondition cond, RegisterID left, Address right)
++    {
++        load32(right, dataTempRegister2);
++        return branch32(cond, left, dataTempRegister2);
++    }
++
++    Jump branch32(RelationalCondition cond, Address left, RegisterID right)
++    {
++        load32(left, dataTempRegister2);
++        return branch32(cond, dataTempRegister2, right);
++    }
++
++    Jump branch32(RelationalCondition cond, Address left, TrustedImm32 right)
++    {
++        load32(left, dataTempRegister2);
++        return branch32(cond, dataTempRegister2, right);
++    }
++
++    Jump branch32(RelationalCondition cond, BaseIndex left, TrustedImm32 right)
++    {
++        load32(left, dataTempRegister2);
++        return branch32(cond, dataTempRegister2, right);
++    }
++
++    Jump branch32WithUnalignedHalfWords(RelationalCondition cond, BaseIndex left, TrustedImm32 right)
++    {
++        load32(left, dataTempRegister2);
++        return branch32(cond, dataTempRegister2, right);
++    }
++
++    Jump branch32(RelationalCondition cond, AbsoluteAddress left, RegisterID right)
++    {
++        load32(left.m_ptr, dataTempRegister2);
++        return branch32(cond, dataTempRegister2, right);
++    }
++
++    Jump branch32(RelationalCondition cond, AbsoluteAddress left, TrustedImm32 right)
++    {
++        load32(left.m_ptr, dataTempRegister2);
++        return branch32(cond, dataTempRegister2, right);
++    }
++
++    Jump branchPtr(RelationalCondition cond, BaseIndex left, RegisterID right)
++    {
++        load32(left, dataTempRegister2);
++        return branch32(cond, dataTempRegister2, right);
++    }
++
++    Jump branchTest32(ResultCondition cond, RegisterID reg, RegisterID mask)
++    {
++        ASSERT(cond == Zero || cond == NonZero || cond == Signed || cond == PositiveOrZero);
++        if (reg == mask)
++            m_assembler.cmpwi(PPCRegisters::cr0, reg, 0);
++        else
++            m_assembler.and_rc(tempRegister, reg, mask);
++        return branchOnCondition(cond);
++    }
++
++    Jump branchTest32(ResultCondition cond, RegisterID reg, TrustedImm32 mask = TrustedImm32(-1))
++    {
++        ASSERT(cond == Zero || cond == NonZero || cond == Signed || cond == PositiveOrZero);
++        test(reg, mask);
++        return branchOnCondition(cond);
++    }
++
++    Jump branchTest32(ResultCondition cond, Address address, TrustedImm32 mask = TrustedImm32(-1))
++    {
++        load32(address, dataTempRegister2);
++        return branchTest32(cond, dataTempRegister2, mask);
++    }
++
++    Jump branchTest32(ResultCondition cond, BaseIndex address, TrustedImm32 mask = TrustedImm32(-1))
++    {
++        load32(address, dataTempRegister2);
++        return branchTest32(cond, dataTempRegister2, mask);
++    }
++
++    Jump branchTest32(ResultCondition cond, AbsoluteAddress address, TrustedImm32 mask = TrustedImm32(-1))
++    {
++        load32(address.m_ptr, dataTempRegister2);
++        return branchTest32(cond, dataTempRegister2, mask);
++    }
++
++    Jump branchTest8(ResultCondition cond, Address address, TrustedImm32 mask = TrustedImm32(-1))
++    {
++        TrustedImm32 mask8 = MacroAssemblerHelpers::mask8OnCondition(*this, cond, mask);
++        MacroAssemblerHelpers::load8OnCondition(*this, cond, address, dataTempRegister2);
++        return branchTest32(cond, dataTempRegister2, mask8);
++    }
++
++    Jump branchTest8(ResultCondition cond, BaseIndex address, TrustedImm32 mask = TrustedImm32(-1))
++    {
++        TrustedImm32 mask8 = MacroAssemblerHelpers::mask8OnCondition(*this, cond, mask);
++        MacroAssemblerHelpers::load8OnCondition(*this, cond, address, dataTempRegister2);
++        return branchTest32(cond, dataTempRegister2, mask8);
++    }
++
++    Jump branchTest8(ResultCondition cond, AbsoluteAddress address, TrustedImm32 mask = TrustedImm32(-1))
++    {
++        TrustedImm32 mask8 = MacroAssemblerHelpers::mask8OnCondition(*this, cond, mask);
++        MacroAssemblerHelpers::load8OnCondition(*this, cond, address.m_ptr, dataTempRegister2);
++        return branchTest32(cond, dataTempRegister2, mask8);
++    }
++
++    Jump jump()
++    {
++        return Jump(m_assembler.jump());
++    }
++
++    void jump(RegisterID target)
++    {
++        m_assembler.mtctr(target);
++        m_assembler.bctr();
++    }
++
++    void jump(Address address)
++    {
++        load32(address, addressTempRegister);
++        jump(addressTempRegister);
++    }
++
++    void jump(AbsoluteAddress address)
++    {
++        load32(address.m_ptr, addressTempRegister);
++        jump(addressTempRegister);
++    }
++
++    // Arithmetic control flow operations. On Overflow the destination holds
++    // the wrapped result, as on x86.
++
++    Jump branchAdd32(ResultCondition cond, RegisterID op1, RegisterID op2, RegisterID dest)
++    {
++        return branchOnCondition(add32SettingCondition(cond, op1, op2, dest));
++    }
++
++    Jump branchAdd32(ResultCondition cond, RegisterID src, RegisterID dest)
++    {
++        return branchAdd32(cond, dest, src, dest);
++    }
++
++    Jump branchAdd32(ResultCondition cond, RegisterID src, TrustedImm32 imm, RegisterID dest)
++    {
++        return branchOnCondition(add32SettingCondition(cond, src, imm, dest));
++    }
++
++    Jump branchAdd32(ResultCondition cond, TrustedImm32 imm, RegisterID dest)
++    {
++        return branchAdd32(cond, dest, imm, dest);
++    }
++
++    Jump branchAdd32(ResultCondition cond, Address address, RegisterID dest)
++    {
++        load32(address, dataTempRegister2);
++        return branchAdd32(cond, dataTempRegister2, dest, dest);
++    }
++
++    // The sum is stored whether or not the branch is taken.
++    Jump branchAdd32(ResultCondition cond, TrustedImm32 imm, AbsoluteAddress dest)
++    {
++        load32(dest.m_ptr, dataTempRegister2);
++        int condition = add32SettingCondition(cond, dataTempRegister2, imm, dataTempRegister2);
++        store32(dataTempRegister2, dest.m_ptr);
++        return branchOnCondition(condition);
++    }
++
++    Jump branchAdd32(ResultCondition cond, TrustedImm32 imm, Address dest)
++    {
++        ASSERT(dest.base != addressTempRegister);
++        load32(dest, dataTempRegister2);
++        int condition = add32SettingCondition(cond, dataTempRegister2, imm, dataTempRegister2);
++        store32(dataTempRegister2, dest);
++        return branchOnCondition(condition);
++    }
++
++    Jump branchMul32(ResultCondition cond, RegisterID src1, RegisterID src2, RegisterID dest)
++    {
++        if (cond == Overflow) {
++            m_assembler.mulhw(dataTempRegister2, src1, src2);
++            m_assembler.mullw(tempRegister, src1, src2);
++            m_assembler.srawi(addressTempRegister, tempRegister, 31);
++            m_assembler.cmpw(PPCRegisters::cr0, dataTempRegister2, addressTempRegister);
++            move(tempRegister, dest);
++            return Jump(m_assembler.branch(PPCAssembler::EQ, false));
++        }
++        m_assembler.mullw(dest, src1, src2);
++        m_assembler.cmpwi(PPCRegisters::cr0, dest, 0);
++        return branchOnCondition(cond);
++    }
++
++    Jump branchMul32(ResultCondition cond, RegisterID src, RegisterID dest)
++    {
++        return branchMul32(cond, src, dest, dest);
++    }
++
++    Jump branchMul32(ResultCondition cond, RegisterID src, TrustedImm32 imm, RegisterID dest)
++    {
++        move(imm, dataTempRegister2);
++        ASSERT(src != dataTempRegister2);
++        m_assembler.mulhw(addressTempRegister, src, dataTempRegister2);
++        m_assembler.mullw(tempRegister, src, dataTempRegister2);
++        if (cond == Overflow) {
++            m_assembler.srawi(dataTempRegister2, tempRegister, 31);
++            m_assembler.cmpw(PPCRegisters::cr0, addressTempRegister, dataTempRegister2);
++            move(tempRegister, dest);
++            return Jump(m_assembler.branch(PPCAssembler::EQ, false));
++        }
++        move(tempRegister, dest);
++        m_assembler.cmpwi(PPCRegisters::cr0, dest, 0);
++        return branchOnCondition(cond);
++    }
++
++    Jump branchSub32(ResultCondition cond, RegisterID op1, RegisterID op2, RegisterID dest)
++    {
++        if (cond == Overflow) {
++            // op1 - op2 overflows when the operands' signs differ and the
++            // result's sign differs from op1's.
++            m_assembler.subf(tempRegister, op2, op1);
++            m_assembler.xor_(addressTempRegister, op1, op2);
++            m_assembler.xor_(dataTempRegister2, op1, tempRegister);
++            m_assembler.and_rc(dataTempRegister2, dataTempRegister2, addressTempRegister);
++            move(tempRegister, dest);
++            return Jump(m_assembler.branch(PPCAssembler::LT, true));
++        }
++        m_assembler.subf_rc(dest, op2, op1);
++        return branchOnCondition(cond);
++    }
++
++    Jump branchSub32(ResultCondition cond, RegisterID src, RegisterID dest)
++    {
++        return branchSub32(cond, dest, src, dest);
++    }
++
++    Jump branchSub32(ResultCondition cond, RegisterID src, TrustedImm32 imm, RegisterID dest)
++    {
++        if (imm.m_value == INT_MIN) {
++            move(imm, dataTempRegister2);
++            ASSERT(src != dataTempRegister2);
++            return branchSub32(cond, src, dataTempRegister2, dest);
++        }
++        return branchAdd32(cond, src, TrustedImm32(-imm.m_value), dest);
++    }
++
++    Jump branchSub32(ResultCondition cond, TrustedImm32 imm, RegisterID dest)
++    {
++        return branchSub32(cond, dest, imm, dest);
++    }
++
++    Jump branchNeg32(ResultCondition cond, RegisterID srcDest)
++    {
++        if (cond == Overflow) {
++            // Only INT_MIN overflows.
++            m_assembler.xoris(tempRegister, srcDest, 0x8000);
++            m_assembler.cmpwi(PPCRegisters::cr0, tempRegister, 0);
++            m_assembler.neg(srcDest, srcDest);
++            return Jump(m_assembler.branch(PPCAssembler::EQ, true));
++        }
++        m_assembler.neg(srcDest, srcDest);
++        m_assembler.cmpwi(PPCRegisters::cr0, srcDest, 0);
++        return branchOnCondition(cond);
++    }
++
++    Jump branchOr32(ResultCondition cond, RegisterID src, RegisterID dest)
++    {
++        ASSERT(cond != Overflow);
++        m_assembler.or_rc(dest, dest, src);
++        return branchOnCondition(cond);
++    }
++
++    // Miscellaneous operations.
++
++    void breakpoint()
++    {
++        m_assembler.trap();
++    }
++
++    static bool isBreakpoint(void* address) { return PPCAssembler::isTrap(address); }
++
++    void abortWithReason(AbortReason reason)
++    {
++        move(TrustedImm32(reason), dataTempRegister2);
++        breakpoint();
++    }
++
++    void abortWithReason(AbortReason reason, intptr_t misc)
++    {
++        move(TrustedImm32(misc), addressTempRegister);
++        abortWithReason(reason);
++    }
++
++    Call nearCall()
++    {
++        return Call(m_assembler.nearCall(), Call::LinkableNear);
++    }
++
++    Call nearTailCall()
++    {
++        return Call(m_assembler.jump(), Call::LinkableNearTail);
++    }
++
++    Call call()
++    {
++        loadPokedArguments();
++        return Call(m_assembler.call(), Call::Linkable);
++    }
++
++    Call call(RegisterID target)
++    {
++        move(target, addressTempRegister);
++        loadPokedArguments();
++        return Call(m_assembler.callRegister(addressTempRegister), Call::None);
++    }
++
++    Call call(Address address)
++    {
++        load32(address, addressTempRegister);
++        loadPokedArguments();
++        return Call(m_assembler.callRegister(addressTempRegister), Call::None);
++    }
++
++    Call tailRecursiveCall()
++    {
++        // The absolute call stanza with bctr for bctrl.
++        m_assembler.load32ConstantPatchable(addressTempRegister, 0);
++        m_assembler.mtctr(addressTempRegister);
++        m_assembler.bctr();
++        return Call(m_assembler.label(), Call::Linkable);
++    }
++
++    Call makeTailRecursiveCall(Jump oldJump)
++    {
++        oldJump.link(this);
++        return tailRecursiveCall();
++    }
++
++    void ret()
++    {
++        m_assembler.blr();
++    }
++
++    void compare32(RelationalCondition cond, RegisterID left, RegisterID right, RegisterID dest)
++    {
++        compare(cond, left, right);
++        setFromCondition(cond, dest);
++    }
++
++    void compare32(RelationalCondition cond, RegisterID left, TrustedImm32 right, RegisterID dest)
++    {
++        compare(cond, left, right);
++        setFromCondition(cond, dest);
++    }
++
++    void compare32(RelationalCondition cond, Address left, TrustedImm32 right, RegisterID dest)
++    {
++        load32(left, dataTempRegister2);
++        compare32(cond, dataTempRegister2, right, dest);
++    }
++
++    void test8(ResultCondition cond, Address address, TrustedImm32 mask, RegisterID dest)
++    {
++        ASSERT(cond == Zero || cond == NonZero);
++        TrustedImm32 mask8 = MacroAssemblerHelpers::mask8OnCondition(*this, cond, mask);
++        MacroAssemblerHelpers::load8OnCondition(*this, cond, address, dataTempRegister2);
++        test(dataTempRegister2, mask8);
++        setFromCondition(cond, dest);
++    }
++
++    void test32(ResultCondition cond, Address address, TrustedImm32 mask, RegisterID dest)
++    {
++        ASSERT(cond == Zero || cond == NonZero);
++        load32(address, dataTempRegister2);
++        test(dataTempRegister2, mask);
++        setFromCondition(cond, dest);
++    }
++
++    void test32(ResultCondition cond, RegisterID reg, TrustedImm32 mask, RegisterID dest)
++    {
++        ASSERT(cond == Zero || cond == NonZero);
++        test(reg, mask);
++        setFromCondition(cond, dest);
++    }
++
++    DataLabel32 moveWithPatch(TrustedImm32 imm, RegisterID dest)
++    {
++        DataLabel32 label(this);
++        m_assembler.load32ConstantPatchable(dest, imm.m_value);
++        return label;
++    }
++
++    DataLabelPtr moveWithPatch(TrustedImmPtr initialValue, RegisterID dest)
++    {
++        DataLabelPtr label(this);
++        m_assembler.load32ConstantPatchable(dest, reinterpret_cast<int32_t>(initialValue.m_value));
++        return label;
++    }
++
++    // Patchable comparisons start with the patchable constant, so that a jump
++    // replacement over their first word can be reverted.
++
++    Jump branchPtrWithPatch(RelationalCondition cond, RegisterID left, DataLabelPtr& dataLabel, TrustedImmPtr initialRightValue = TrustedImmPtr(0))
++    {
++        dataLabel = moveWithPatch(initialRightValue, tempRegister);
++        return branch32(cond, left, tempRegister);
++    }
++
++    Jump branchPtrWithPatch(RelationalCondition cond, Address left, DataLabelPtr& dataLabel, TrustedImmPtr initialRightValue = TrustedImmPtr(0))
++    {
++        dataLabel = moveWithPatch(initialRightValue, tempRegister);
++        load32(left, dataTempRegister2);
++        return branch32(cond, dataTempRegister2, tempRegister);
++    }
++
++    Jump branch32WithPatch(RelationalCondition cond, Address left, DataLabel32& dataLabel, TrustedImm32 initialRightValue = TrustedImm32(0))
++    {
++        dataLabel = moveWithPatch(initialRightValue, tempRegister);
++        load32(left, dataTempRegister2);
++        return branch32(cond, dataTempRegister2, tempRegister);
++    }
++
++    PatchableJump patchableBranchPtrWithPatch(RelationalCondition cond, Address left, DataLabelPtr& dataLabel, TrustedImmPtr initialRightValue = TrustedImmPtr(0))
++    {
++        return PatchableJump(branchPtrWithPatch(cond, left, dataLabel, initialRightValue));
++    }
++
++    PatchableJump patchableBranch32WithPatch(RelationalCondition cond, Address left, DataLabel32& dataLabel, TrustedImm32 initialRightValue = TrustedImm32(0))
++    {
++        return PatchableJump(branch32WithPatch(cond, left, dataLabel, initialRightValue));
++    }
++
++    PatchableJump patchableBranchPtr(RelationalCondition cond, Address left, TrustedImmPtr right = TrustedImmPtr(0))
++    {
++        return PatchableJump(branch32(cond, left, TrustedImm32(right)));
++    }
++
++    PatchableJump patchableBranch32(RelationalCondition cond, RegisterID reg, TrustedImm32 imm)
++    {
++        return PatchableJump(branch32(cond, reg, imm));
++    }
++
++    PatchableJump patchableBranch32(RelationalCondition cond, Address address, TrustedImm32 imm)
++    {
++        return PatchableJump(branch32(cond, address, imm));
++    }
++
++    PatchableJump patchableJump()
++    {
++        return PatchableJump(jump());
++    }
++
++    PatchableJump patchableBranchTest32(ResultCondition cond, RegisterID reg, TrustedImm32 mask = TrustedImm32(-1))
++    {
++        return PatchableJump(branchTest32(cond, reg, mask));
++    }
++
++    PatchableJump patchableBranch8(RelationalCondition cond, Address left, TrustedImm32 imm)
++    {
++        return PatchableJump(branch8(cond, left, imm));
++    }
++
++    DataLabelPtr storePtrWithPatch(TrustedImmPtr initialValue, ImplicitAddress address)
++    {
++        DataLabelPtr dataLabel = moveWithPatch(initialValue, tempRegister);
++        store32(tempRegister, address);
++        return dataLabel;
++    }
++
++    DataLabelPtr storePtrWithPatch(ImplicitAddress address)
++    {
++        return storePtrWithPatch(TrustedImmPtr(0), address);
++    }
++
++    void memoryFence()
++    {
++        m_assembler.sync();
++    }
++
++    void storeFence()
++    {
++        m_assembler.sync();
++    }
++
++    void nop()
++    {
++        m_assembler.nop();
++    }
++
++    // Linking and patching.
++
++    static FunctionPtr readCallTarget(CodeLocationCall call)
++    {
++        return FunctionPtr(reinterpret_cast<void(*)()>(PPCAssembler::readCallTarget(call.dataLocation())));
++    }
++
++    static void replaceWithJump(CodeLocationLabel instructionStart, CodeLocationLabel destination)
++    {
++        PPCAssembler::replaceWithJump(instructionStart.dataLocation(), destination.dataLocation());
++    }
++
++    static ptrdiff_t maxJumpReplacementSize()
++    {
++        return PPCAssembler::maxJumpReplacementSize();
++    }
++
++    static constexpr ptrdiff_t patchableJumpSize()
++    {
++        return PPCAssembler::patchableJumpSize();
++    }
++
++    static bool canJumpReplacePatchableBranchPtrWithPatch() { return true; }
++    static bool canJumpReplacePatchableBranch32WithPatch() { return true; }
++
++    static CodeLocationLabel startOfBranchPtrWithPatchOnRegister(CodeLocationDataLabelPtr label)
++    {
++        return label.labelAtOffset(0);
++    }
++
++    static CodeLocationLabel startOfPatchableBranchPtrWithPatchOnAddress(CodeLocationDataLabelPtr label)
++    {
++        return label.labelAtOffset(0);
++    }
++
++    static CodeLocationLabel startOfPatchableBranch32WithPatchOnAddress(CodeLocationDataLabel32 label)
++    {
++        return label.labelAtOffset(0);
++    }
++
++    static void revertJumpReplacementToBranchPtrWithPatch(CodeLocationLabel instructionStart, RegisterID, void* initialValue)
++    {
++        PPCAssembler::revertJumpToLoad32ConstantPatchable(instructionStart.dataLocation(), tempRegister, reinterpret_cast<int32_t>(initialValue));
++    }
++
++    static void revertJumpReplacementToPatchableBranchPtrWithPatch(CodeLocationLabel instructionStart, Address, void* initialValue)
++    {
++        PPCAssembler::revertJumpToLoad32ConstantPatchable(instructionStart.dataLocation(), tempRegister, reinterpret_cast<int32_t>(initialValue));
++    }
++
++    static void revertJumpReplacementToPatchableBranch32WithPatch(CodeLocationLabel instructionStart, Address, int32_t initialValue)
++    {
++        PPCAssembler::revertJumpToLoad32ConstantPatchable(instructionStart.dataLocation(), tempRegister, initialValue);
++    }
++
++    static void repatchCall(CodeLocationCall call, CodeLocationLabel destination)
++    {
++        PPCAssembler::relinkCall(call.dataLocation(), destination.executableAddress());
++    }
++
++    static void repatchCall(CodeLocationCall call, FunctionPtr destination)
++    {
++        PPCAssembler::relinkCall(call.dataLocation(), destination.executableAddress());
++    }
++
++    // Nothing needs relocating after LinkBuffer's copy.
++    void finalizeAbsoluteJumps(void*) { }
++
++private:
++    friend class LinkBuffer;
++
++    static void linkCall(void* code, Call call, FunctionPtr function)
++    {
++        if (call.isFlagSet(Call::Tail))
++            PPCAssembler::linkJump(code, call.m_label, function.value());
++        else
++            PPCAssembler::linkCall(code, call.m_label, function.value());
++    }
++
++    // C calls pass argument words 4-7 in r7-r10. CCallHelpers pokes them into
++    // their stack slots, sp + 40 to sp + 52 (POKE_ARGUMENT_OFFSET), and the
++    // next call loads them.
++    static const int firstPokedArgumentOffset = 40;
++
++    void notePokedArgument(ImplicitAddress address)
++    {
++        if (address.base != stackPointerRegister)
++            return;
++        int word = (address.offset - firstPokedArgumentOffset) / 4;
++        if (address.offset >= firstPokedArgumentOffset && !(address.offset & 3) && word < 4)
++            m_pokedArguments |= 1 << word;
++    }
++
++    void loadPokedArguments()
++    {
++        for (int word = 0; word < 4; ++word) {
++            if (m_pokedArguments & (1 << word))
++                m_assembler.lwz(static_cast<RegisterID>(PPCRegisters::r7 + word), stackPointerRegister, firstPokedArgumentOffset + 4 * word);
++        }
++        m_pokedArguments = 0;
++    }
++
++    unsigned m_pokedArguments { 0 };
++
++    // A base register and 16-bit displacement for the address, using
++    // addressTempRegister when the offset doesn't fit.
++    Address resolveAddress(ImplicitAddress address)
++    {
++        ASSERT(address.base != tempRegister);
++        if (isInt16(address.offset))
++            return Address(address.base, address.offset);
++        m_assembler.addis(addressTempRegister, address.base, ha16(address.offset));
++        return Address(addressTempRegister, lo16(address.offset));
++    }
++
++    Address resolveAddress(BaseIndex address)
++    {
++        ASSERT(address.base != tempRegister && address.index != tempRegister);
++        RegisterID index = address.index;
++        if (address.scale) {
++            m_assembler.slwi(addressTempRegister, index, address.scale);
++            index = addressTempRegister;
++        }
++        m_assembler.add(addressTempRegister, address.base, index);
++        return resolveAddress(Address(addressTempRegister, address.offset));
++    }
++
++    // For an offsetless BaseIndex, the index register for an X-form access
++    // (base + index), scaled into addressTempRegister if need be. Otherwise
++    // r0, which is never an index, to say "use resolveAddress".
++    RegisterID indexForXForm(BaseIndex address)
++    {
++        if (address.offset)
++            return PPCRegisters::r0;
++        ASSERT(address.base != tempRegister && address.index != tempRegister);
++        if (!address.scale)
++            return address.index;
++        m_assembler.slwi(addressTempRegister, address.index, address.scale);
++        return addressTempRegister;
++    }
++
++    Address absoluteAddress(const void* address)
++    {
++        int32_t value = reinterpret_cast<int32_t>(address);
++        m_assembler.lis(addressTempRegister, ha16(value));
++        return Address(addressTempRegister, lo16(value));
++    }
++
++    // A mask of contiguous ones as rlwinm's (mb << 8) | me, or 0.
++    static int contiguousMask(uint32_t value)
++    {
++        if (!value || value == 0xffffffff)
++            return 0;
++        // Big-endian bit numbering: bit 0 is the most significant.
++        int mb = __builtin_clz(value);
++        int me = 31 - __builtin_ctz(value);
++        uint32_t expected = (0xffffffffu >> mb) & (0xffffffffu << (31 - me));
++        if (expected != value)
++            return 0;
++        return (mb << 8) | me | 0x10000;
++    }
++
++    void compare(RelationalCondition cond, RegisterID left, RegisterID right)
++    {
++        if (cond & ConditionUnsigned)
++            m_assembler.cmplw(PPCRegisters::cr0, left, right);
++        else
++            m_assembler.cmpw(PPCRegisters::cr0, left, right);
++    }
++
++    void compare(RelationalCondition cond, RegisterID left, TrustedImm32 right)
++    {
++        int32_t value = right.m_value;
++        if (cond & ConditionUnsigned) {
++            if (isUInt16(value)) {
++                m_assembler.cmplwi(PPCRegisters::cr0, left, value);
++                return;
++            }
++        } else if (isInt16(value)) {
++            m_assembler.cmpwi(PPCRegisters::cr0, left, value);
++            return;
++        }
++        ASSERT(left != tempRegister);
++        move(right, tempRegister);
++        compare(cond, left, tempRegister);
++    }
++
++    // Sets cr0 from reg & mask: EQ if zero, LT if negative.
++    void test(RegisterID reg, TrustedImm32 mask)
++    {
++        uint32_t value = mask.m_value;
++        if (value == 0xffffffff)
++            m_assembler.cmpwi(PPCRegisters::cr0, reg, 0);
++        else if (!(value >> 16))
++            m_assembler.andi_rc(tempRegister, reg, value);
++        else if (!(value & 0xffff))
++            m_assembler.andis_rc(tempRegister, reg, value >> 16);
++        else {
++            ASSERT(reg != tempRegister);
++            move(mask, tempRegister);
++            m_assembler.and_rc(tempRegister, reg, tempRegister);
++        }
++    }
++
++    // Adds, leaving cr0 set up for branchOnCondition with the condition
++    // returned. For Overflow, LT is set when the addition overflowed.
++    int add32SettingCondition(ResultCondition cond, RegisterID op1, RegisterID op2, RegisterID dest)
++    {
++        if (cond == Overflow) {
++            m_assembler.add(tempRegister, op1, op2);
++            m_assembler.xor_(addressTempRegister, tempRegister, op1);
++            m_assembler.xor_(dataTempRegister2, tempRegister, op2);
++            m_assembler.and_rc(dataTempRegister2, dataTempRegister2, addressTempRegister);
++            move(tempRegister, dest);
++            return Signed;
++        }
++        m_assembler.add_rc(dest, op1, op2);
++        return cond;
++    }
++
++    int add32SettingCondition(ResultCondition cond, RegisterID src, TrustedImm32 imm, RegisterID dest)
++    {
++        if (cond == Overflow) {
++            add32(imm, src, tempRegister);
++            // With a positive immediate, overflow turns a non-negative src
++            // negative; with a negative one, a negative src non-negative.
++            if (imm.m_value >= 0)
++                m_assembler.andc(dataTempRegister2, tempRegister, src);
++            else
++                m_assembler.andc(dataTempRegister2, src, tempRegister);
++            m_assembler.cmpwi(PPCRegisters::cr0, dataTempRegister2, 0);
++            move(tempRegister, dest);
++            return Signed;
++        }
++        add32(imm, src, dest);
++        m_assembler.cmpwi(PPCRegisters::cr0, dest, 0);
++        return cond;
++    }
++
++    Jump branchOnCondition(int cond)
++    {
++        return Jump(m_assembler.branch(cond & 3, cond & ConditionSet));
++    }
++
++    // dest = the condition on cr0 ? 1 : 0
++    void setFromCondition(int cond, RegisterID dest)
++    {
++        m_assembler.mfcr(tempRegister);
++        // Rotate the cr0 bit into the least significant position.
++        m_assembler.rlwinm(dest, tempRegister, (cond & 3) + 1, 31, 31);
++        if (!(cond & ConditionSet))
++            m_assembler.xori(dest, dest, 1);
++    }
++
++    static const double s_zeroDouble;
++    static const double s_int32ToDoubleBias;
++    static const double s_uint32ToDoubleBias;
++};
++
++} // namespace JSC
++
++#endif // ENABLE(ASSEMBLER) && CPU(PPC)
+diff --git a/Source/JavaScriptCore/assembler/PPCAssembler.cpp b/Source/JavaScriptCore/assembler/PPCAssembler.cpp
+index 7ff1748c..ba43da6d 100644
+--- a/Source/JavaScriptCore/assembler/PPCAssembler.cpp
++++ b/Source/JavaScriptCore/assembler/PPCAssembler.cpp
+@@ -39,7 +39,21 @@
+ 
+ #include "config.h"
+ 
+-#if ENABLE(ASSEMBLER) && (CPU(PPC) || CPU(PPC64))
++#if ENABLE(ASSEMBLER) && CPU(PPC) && ENABLE(JIT)
++
++// The JIT's assembler (PPCAssemblerJIT.h) is all inline but for these.
++#include "MacroAssemblerPPCJIT.h"
++
++namespace JSC {
++
++const double MacroAssemblerPPC::s_zeroDouble = 0;
++// 2^52 + 2^31 and 2^52: see convertInt32ToDouble.
++const double MacroAssemblerPPC::s_int32ToDoubleBias = 4503601774854144.0;
++const double MacroAssemblerPPC::s_uint32ToDoubleBias = 4503599627370496.0;
++
++} // namespace JSC
++
++#elif ENABLE(ASSEMBLER) && (CPU(PPC) || CPU(PPC64))
+ 
+ #include "PPCAssembler.h"
+ 
+diff --git a/Source/JavaScriptCore/assembler/PPCAssemblerJIT.h b/Source/JavaScriptCore/assembler/PPCAssemblerJIT.h
+new file mode 100644
+index 00000000..68b50b07
+--- /dev/null
++++ b/Source/JavaScriptCore/assembler/PPCAssemblerJIT.h
+@@ -0,0 +1,719 @@
++/*
++ * Copyright (C) 2026 Captain Polliwog contributors. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
++ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
++ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++ * IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
++ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
++ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++// The 32-bit PowerPC assembler for the baseline JIT (and, once it has
++// proven itself, the regular expression and CSS selector JITs, which still
++// use the TenFourFox-derived PPCAssembler.h without the JIT).
++//
++// Code layout, chosen so that nothing needs relocating when LinkBuffer
++// copies code into executable memory:
++//
++//  - Jumps and near calls are relative (b, bl: +-32MB). All JIT code lives in
++//    one fixed executable pool smaller than that (ExecutableAllocator.h).
++//  - A conditional jump is a two-word stanza, "bc !cond, +8; b target", which
++//    linking turns into "bc cond, target; nop" when the target is within the
++//    +-32KB reach of bc.
++//  - Calls to C code are absolute: "lis r12, hi; ori r12, r12, lo; mtctr r12;
++//    bctrl" (r12 holding the callee is also the Darwin convention for calls
++//    through a pointer).
++//  - Patchable 32-bit constants are "lis rD, hi; ori rD, rD, lo".
++
++#if ENABLE(ASSEMBLER) && CPU(PPC)
++
++#include "AssemblerBuffer.h"
++#include "JITCompilationEffort.h"
++#include <limits.h>
++#include <wtf/Assertions.h>
++
++namespace JSC {
++
++typedef uint32_t PPCWord;
++
++namespace PPCRegisters {
++typedef enum {
++    r0 = 0,
++    r1, // sp
++    r2,
++    r3,
++    r4,
++    r5,
++    r6,
++    r7,
++    r8,
++    r9,
++    r10,
++    r11,
++    r12,
++    r13,
++    r14,
++    r15,
++    r16,
++    r17,
++    r18,
++    r19,
++    r20,
++    r21,
++    r22,
++    r23,
++    r24,
++    r25,
++    r26,
++    r27,
++    r28,
++    r29,
++    r30,
++    r31,
++    sp = r1
++} RegisterID;
++
++typedef enum {
++    f0,
++    f1,
++    f2,
++    f3,
++    f4,
++    f5,
++    f6,
++    f7,
++    f8,
++    f9,
++    f10,
++    f11,
++    f12,
++    f13,
++    f14,
++    f15,
++    f16,
++    f17,
++    f18,
++    f19,
++    f20,
++    f21,
++    f22,
++    f23,
++    f24,
++    f25,
++    f26,
++    f27,
++    f28,
++    f29,
++    f30,
++    f31
++} FPRegisterID;
++
++typedef enum {
++    cr0 = 0,
++    cr1,
++    cr2,
++    cr3,
++    cr4,
++    cr5,
++    cr6,
++    cr7
++} CRegisterID;
++
++} // namespace PPCRegisters
++
++class PPCAssembler {
++public:
++    typedef PPCRegisters::RegisterID RegisterID;
++    typedef PPCRegisters::FPRegisterID FPRegisterID;
++    typedef PPCRegisters::CRegisterID CRegisterID;
++
++    static constexpr RegisterID firstRegister() { return PPCRegisters::r0; }
++    static constexpr RegisterID lastRegister() { return PPCRegisters::r31; }
++
++    static constexpr FPRegisterID firstFPRegister() { return PPCRegisters::f0; }
++    static constexpr FPRegisterID lastFPRegister() { return PPCRegisters::f31; }
++
++    PPCAssembler()
++        : m_indexOfLastWatchpoint(INT_MIN)
++        , m_indexOfTailOfLastWatchpoint(INT_MIN)
++    {
++    }
++
++    AssemblerBuffer& buffer() { return m_buffer; }
++
++    // Condition register bits within a field.
++    enum CRBit {
++        LT = 0,
++        GT = 1,
++        EQ = 2,
++        SO = 3, // also "unordered" after a floating point compare
++    };
++
++    // BO values for bc: branch if the CR bit is set, or clear, or always.
++    enum BranchOption {
++        BranchIfTrue = 12,
++        BranchIfFalse = 4,
++        BranchAlways = 20,
++    };
++
++    static int crBit(CRegisterID cr, CRBit bit) { return cr * 4 + bit; }
++
++    void emitInst(PPCWord op)
++    {
++        m_buffer.putInt(op);
++    }
++
++    // Instruction forms.
++
++    static PPCWord formD(int op, int rt, int ra, int imm)
++    {
++        return (op << 26) | ((rt & 31) << 21) | ((ra & 31) << 16) | (imm & 0xffff);
++    }
++
++    static PPCWord formX(int op, int rt, int ra, int rb, int xo, bool rc = false)
++    {
++        return (op << 26) | ((rt & 31) << 21) | ((ra & 31) << 16) | ((rb & 31) << 11) | (xo << 1) | (rc ? 1 : 0);
++    }
++
++    static PPCWord formXO(int rt, int ra, int rb, bool oe, int xo, bool rc = false)
++    {
++        return (31 << 26) | ((rt & 31) << 21) | ((ra & 31) << 16) | ((rb & 31) << 11) | (oe ? 0x400 : 0) | (xo << 1) | (rc ? 1 : 0);
++    }
++
++    static PPCWord formA(int op, int frt, int fra, int frb, int frc, int xo)
++    {
++        return (op << 26) | ((frt & 31) << 21) | ((fra & 31) << 16) | ((frb & 31) << 11) | ((frc & 31) << 6) | (xo << 1);
++    }
++
++    static PPCWord formM(int op, int rs, int ra, int sh, int mb, int me, bool rc = false)
++    {
++        return (op << 26) | ((rs & 31) << 21) | ((ra & 31) << 16) | ((sh & 31) << 11) | ((mb & 31) << 6) | ((me & 31) << 1) | (rc ? 1 : 0);
++    }
++
++    // Integer arithmetic. rt is the destination.
++
++    void addi(RegisterID rt, RegisterID ra, int16_t imm) { ASSERT(ra != PPCRegisters::r0); emitInst(formD(14, rt, ra, imm)); }
++    void li(RegisterID rt, int16_t imm) { emitInst(formD(14, rt, 0, imm)); }
++    void addis(RegisterID rt, RegisterID ra, int16_t imm) { ASSERT(ra != PPCRegisters::r0); emitInst(formD(15, rt, ra, imm)); }
++    void lis(RegisterID rt, int16_t imm) { emitInst(formD(15, rt, 0, imm)); }
++    void mulli(RegisterID rt, RegisterID ra, int16_t imm) { emitInst(formD(7, rt, ra, imm)); }
++    void subfic(RegisterID rt, RegisterID ra, int16_t imm) { emitInst(formD(8, rt, ra, imm)); }
++
++    void add(RegisterID rt, RegisterID ra, RegisterID rb) { emitInst(formXO(rt, ra, rb, false, 266)); }
++    void add_rc(RegisterID rt, RegisterID ra, RegisterID rb) { emitInst(formXO(rt, ra, rb, false, 266, true)); }
++    // subf rt, ra, rb: rt = rb - ra
++    void subf(RegisterID rt, RegisterID ra, RegisterID rb) { emitInst(formXO(rt, ra, rb, false, 40)); }
++    void subf_rc(RegisterID rt, RegisterID ra, RegisterID rb) { emitInst(formXO(rt, ra, rb, false, 40, true)); }
++    void mullw(RegisterID rt, RegisterID ra, RegisterID rb) { emitInst(formXO(rt, ra, rb, false, 235)); }
++    void mulhw(RegisterID rt, RegisterID ra, RegisterID rb) { emitInst(formXO(rt, ra, rb, false, 75)); }
++    void mulhwu(RegisterID rt, RegisterID ra, RegisterID rb) { emitInst(formXO(rt, ra, rb, false, 11)); }
++    void divw(RegisterID rt, RegisterID ra, RegisterID rb) { emitInst(formXO(rt, ra, rb, false, 491)); }
++    void divwu(RegisterID rt, RegisterID ra, RegisterID rb) { emitInst(formXO(rt, ra, rb, false, 459)); }
++    void neg(RegisterID rt, RegisterID ra) { emitInst(formXO(rt, ra, 0, false, 104)); }
++
++    // Logical operations. ra is the destination, rs the source.
++
++    void ori(RegisterID ra, RegisterID rs, uint16_t imm) { emitInst(formD(24, rs, ra, imm)); }
++    void oris(RegisterID ra, RegisterID rs, uint16_t imm) { emitInst(formD(25, rs, ra, imm)); }
++    void xori(RegisterID ra, RegisterID rs, uint16_t imm) { emitInst(formD(26, rs, ra, imm)); }
++    void xoris(RegisterID ra, RegisterID rs, uint16_t imm) { emitInst(formD(27, rs, ra, imm)); }
++    void andi_rc(RegisterID ra, RegisterID rs, uint16_t imm) { emitInst(formD(28, rs, ra, imm)); }
++    void andis_rc(RegisterID ra, RegisterID rs, uint16_t imm) { emitInst(formD(29, rs, ra, imm)); }
++
++    void and_(RegisterID ra, RegisterID rs, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 28)); }
++    void and_rc(RegisterID ra, RegisterID rs, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 28, true)); }
++    void andc(RegisterID ra, RegisterID rs, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 60)); }
++    void or_(RegisterID ra, RegisterID rs, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 444)); }
++    void or_rc(RegisterID ra, RegisterID rs, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 444, true)); }
++    void mr(RegisterID ra, RegisterID rs) { if (ra != rs) or_(ra, rs, rs); }
++    void xor_(RegisterID ra, RegisterID rs, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 316)); }
++    void nor(RegisterID ra, RegisterID rs, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 124)); }
++    void slw(RegisterID ra, RegisterID rs, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 24)); }
++    void srw(RegisterID ra, RegisterID rs, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 536)); }
++    void sraw(RegisterID ra, RegisterID rs, RegisterID rb) { emitInst(formX(31, rs, ra, rb, 792)); }
++    void srawi(RegisterID ra, RegisterID rs, int sh) { emitInst(formX(31, rs, ra, sh, 824)); }
++    void cntlzw(RegisterID ra, RegisterID rs) { emitInst(formX(31, rs, ra, 0, 26)); }
++    void extsb(RegisterID ra, RegisterID rs) { emitInst(formX(31, rs, ra, 0, 954)); }
++    void extsh(RegisterID ra, RegisterID rs) { emitInst(formX(31, rs, ra, 0, 922)); }
++
++    void rlwinm(RegisterID ra, RegisterID rs, int sh, int mb, int me) { emitInst(formM(21, rs, ra, sh, mb, me)); }
++    void rlwnm(RegisterID ra, RegisterID rs, RegisterID rb, int mb, int me) { emitInst(formM(23, rs, ra, rb, mb, me)); }
++    void slwi(RegisterID ra, RegisterID rs, int n) { ASSERT(n > 0 && n < 32); rlwinm(ra, rs, n, 0, 31 - n); }
++    void srwi(RegisterID ra, RegisterID rs, int n) { ASSERT(n > 0 && n < 32); rlwinm(ra, rs, 32 - n, n, 31); }
++    // Clear the high n bits.
++    void clrlwi(RegisterID ra, RegisterID rs, int n) { rlwinm(ra, rs, 0, n, 31); }
++
++    // Comparisons.
++
++    void cmpw(CRegisterID cr, RegisterID ra, RegisterID rb) { emitInst(formX(31, cr << 2, ra, rb, 0)); }
++    void cmplw(CRegisterID cr, RegisterID ra, RegisterID rb) { emitInst(formX(31, cr << 2, ra, rb, 32)); }
++    void cmpwi(CRegisterID cr, RegisterID ra, int16_t imm) { emitInst(formD(11, cr << 2, ra, imm)); }
++    void cmplwi(CRegisterID cr, RegisterID ra, uint16_t imm) { emitInst(formD(10, cr << 2, ra, imm)); }
++
++    // Condition register logic on bit numbers.
++    void cror(int bt, int ba, int bb) { emitInst(formX(19, bt, ba, bb, 449)); }
++    void crorc(int bt, int ba, int bb) { emitInst(formX(19, bt, ba, bb, 417)); }
++    void crandc(int bt, int ba, int bb) { emitInst(formX(19, bt, ba, bb, 129)); }
++    void crnor(int bt, int ba, int bb) { emitInst(formX(19, bt, ba, bb, 33)); }
++    void mfcr(RegisterID rt) { emitInst(formX(31, rt, 0, 0, 19)); }
++
++    // Loads and stores. D-form: displacement(ra); X-form: ra + rb. ra may not
++    // be r0, which reads as zero.
++
++    void lwz(RegisterID rt, RegisterID ra, int16_t d) { ASSERT(ra != PPCRegisters::r0); emitInst(formD(32, rt, ra, d)); }
++    void lwzu(RegisterID rt, RegisterID ra, int16_t d) { emitInst(formD(33, rt, ra, d)); }
++    void lbz(RegisterID rt, RegisterID ra, int16_t d) { ASSERT(ra != PPCRegisters::r0); emitInst(formD(34, rt, ra, d)); }
++    void lhz(RegisterID rt, RegisterID ra, int16_t d) { ASSERT(ra != PPCRegisters::r0); emitInst(formD(40, rt, ra, d)); }
++    void lha(RegisterID rt, RegisterID ra, int16_t d) { ASSERT(ra != PPCRegisters::r0); emitInst(formD(42, rt, ra, d)); }
++    void stw(RegisterID rs, RegisterID ra, int16_t d) { ASSERT(ra != PPCRegisters::r0); emitInst(formD(36, rs, ra, d)); }
++    void stwu(RegisterID rs, RegisterID ra, int16_t d) { emitInst(formD(37, rs, ra, d)); }
++    void stb(RegisterID rs, RegisterID ra, int16_t d) { ASSERT(ra != PPCRegisters::r0); emitInst(formD(38, rs, ra, d)); }
++    void sth(RegisterID rs, RegisterID ra, int16_t d) { ASSERT(ra != PPCRegisters::r0); emitInst(formD(44, rs, ra, d)); }
++    void lwzx(RegisterID rt, RegisterID ra, RegisterID rb) { ASSERT(ra != PPCRegisters::r0); emitInst(formX(31, rt, ra, rb, 23)); }
++    void lbzx(RegisterID rt, RegisterID ra, RegisterID rb) { ASSERT(ra != PPCRegisters::r0); emitInst(formX(31, rt, ra, rb, 87)); }
++    void lhzx(RegisterID rt, RegisterID ra, RegisterID rb) { ASSERT(ra != PPCRegisters::r0); emitInst(formX(31, rt, ra, rb, 279)); }
++    void lhax(RegisterID rt, RegisterID ra, RegisterID rb) { ASSERT(ra != PPCRegisters::r0); emitInst(formX(31, rt, ra, rb, 343)); }
++    void stwx(RegisterID rs, RegisterID ra, RegisterID rb) { ASSERT(ra != PPCRegisters::r0); emitInst(formX(31, rs, ra, rb, 151)); }
++    void stbx(RegisterID rs, RegisterID ra, RegisterID rb) { ASSERT(ra != PPCRegisters::r0); emitInst(formX(31, rs, ra, rb, 215)); }
++    void sthx(RegisterID rs, RegisterID ra, RegisterID rb) { ASSERT(ra != PPCRegisters::r0); emitInst(formX(31, rs, ra, rb, 407)); }
++
++    void lfd(FPRegisterID frt, RegisterID ra, int16_t d) { ASSERT(ra != PPCRegisters::r0); emitInst(formD(50, frt, ra, d)); }
++    void lfs(FPRegisterID frt, RegisterID ra, int16_t d) { ASSERT(ra != PPCRegisters::r0); emitInst(formD(48, frt, ra, d)); }
++    void stfd(FPRegisterID frs, RegisterID ra, int16_t d) { ASSERT(ra != PPCRegisters::r0); emitInst(formD(54, frs, ra, d)); }
++    void stfs(FPRegisterID frs, RegisterID ra, int16_t d) { ASSERT(ra != PPCRegisters::r0); emitInst(formD(52, frs, ra, d)); }
++    void lfdx(FPRegisterID frt, RegisterID ra, RegisterID rb) { ASSERT(ra != PPCRegisters::r0); emitInst(formX(31, frt, ra, rb, 599)); }
++    void lfsx(FPRegisterID frt, RegisterID ra, RegisterID rb) { ASSERT(ra != PPCRegisters::r0); emitInst(formX(31, frt, ra, rb, 535)); }
++    void stfdx(FPRegisterID frs, RegisterID ra, RegisterID rb) { ASSERT(ra != PPCRegisters::r0); emitInst(formX(31, frs, ra, rb, 727)); }
++    void stfsx(FPRegisterID frs, RegisterID ra, RegisterID rb) { ASSERT(ra != PPCRegisters::r0); emitInst(formX(31, frs, ra, rb, 663)); }
++
++    // Floating point.
++
++    void fadd(FPRegisterID frt, FPRegisterID fra, FPRegisterID frb) { emitInst(formA(63, frt, fra, frb, 0, 21)); }
++    void fsub(FPRegisterID frt, FPRegisterID fra, FPRegisterID frb) { emitInst(formA(63, frt, fra, frb, 0, 20)); }
++    void fmul(FPRegisterID frt, FPRegisterID fra, FPRegisterID frc) { emitInst(formA(63, frt, fra, 0, frc, 25)); }
++    void fdiv(FPRegisterID frt, FPRegisterID fra, FPRegisterID frb) { emitInst(formA(63, frt, fra, frb, 0, 18)); }
++    void fadds(FPRegisterID frt, FPRegisterID fra, FPRegisterID frb) { emitInst(formA(59, frt, fra, frb, 0, 21)); }
++    void fsubs(FPRegisterID frt, FPRegisterID fra, FPRegisterID frb) { emitInst(formA(59, frt, fra, frb, 0, 20)); }
++    void fmuls(FPRegisterID frt, FPRegisterID fra, FPRegisterID frc) { emitInst(formA(59, frt, fra, 0, frc, 25)); }
++    void fdivs(FPRegisterID frt, FPRegisterID fra, FPRegisterID frb) { emitInst(formA(59, frt, fra, frb, 0, 18)); }
++    void fmr(FPRegisterID frt, FPRegisterID frb) { if (frt != frb) emitInst(formX(63, frt, 0, frb, 72)); }
++    void fneg(FPRegisterID frt, FPRegisterID frb) { emitInst(formX(63, frt, 0, frb, 40)); }
++    void fabs(FPRegisterID frt, FPRegisterID frb) { emitInst(formX(63, frt, 0, frb, 264)); }
++    void frsp(FPRegisterID frt, FPRegisterID frb) { emitInst(formX(63, frt, 0, frb, 12)); }
++    void fctiwz(FPRegisterID frt, FPRegisterID frb) { emitInst(formX(63, frt, 0, frb, 15)); }
++    void fcmpu(CRegisterID cr, FPRegisterID fra, FPRegisterID frb) { emitInst(formX(63, cr << 2, fra, frb, 0)); }
++    void frsqrte(FPRegisterID frt, FPRegisterID frb) { emitInst(formA(63, frt, 0, frb, 0, 26)); }
++    void fmadd(FPRegisterID frt, FPRegisterID fra, FPRegisterID frc, FPRegisterID frb) { emitInst(formA(63, frt, fra, frb, frc, 29)); }
++    void fnmsub(FPRegisterID frt, FPRegisterID fra, FPRegisterID frc, FPRegisterID frb) { emitInst(formA(63, frt, fra, frb, frc, 30)); }
++    void fsel(FPRegisterID frt, FPRegisterID fra, FPRegisterID frc, FPRegisterID frb) { emitInst(formA(63, frt, fra, frb, frc, 23)); }
++
++    // Special purpose registers and branches.
++
++    static PPCWord sprField(int spr) { return ((spr & 31) << 16) | ((spr >> 5) << 11); }
++    void mflr(RegisterID rt) { emitInst((31 << 26) | (rt << 21) | sprField(8) | (339 << 1)); }
++    void mtlr(RegisterID rs) { emitInst((31 << 26) | (rs << 21) | sprField(8) | (467 << 1)); }
++    void mtctr(RegisterID rs) { emitInst((31 << 26) | (rs << 21) | sprField(9) | (467 << 1)); }
++
++    static PPCWord bInstruction(int32_t offset, bool link) { return (18 << 26) | (offset & 0x03fffffc) | (link ? 1 : 0); }
++    static PPCWord bcInstruction(int bo, int bi, int32_t offset, bool link = false) { return (16 << 26) | (bo << 21) | (bi << 16) | (offset & 0xfffc) | (link ? 1 : 0); }
++
++    void b(int32_t offset) { emitInst(bInstruction(offset, false)); }
++    void bl(int32_t offset) { emitInst(bInstruction(offset, true)); }
++    void bc(int bo, int bi, int32_t offset) { emitInst(bcInstruction(bo, bi, offset)); }
++    void blr() { emitInst(0x4e800020); }
++    void bctr() { emitInst(0x4e800420); }
++    void bctrl() { emitInst(0x4e800421); }
++
++    void nop() { emitInst(0x60000000); }
++    void trap() { emitInst(0x7fe00008); }
++    void sync() { emitInst(0x7c0004ac); }
++    void lwsync() { emitInst(0x7c2004ac); } // executes as sync on the G3 and G4
++    void isync() { emitInst(0x4c00012c); }
++
++    static bool isTrap(void* address) { return *static_cast<PPCWord*>(address) == 0x7fe00008; }
++
++    static void fillNops(void* base, size_t size, bool isCopyingToExecutableMemory)
++    {
++        UNUSED_PARAM(isCopyingToExecutableMemory);
++        RELEASE_ASSERT(!(size % sizeof(PPCWord)));
++        PPCWord* ptr = static_cast<PPCWord*>(base);
++        for (size_t i = 0; i < size / sizeof(PPCWord); ++i)
++            *ptr++ = 0x60000000;
++    }
++
++    // Constants.
++
++    void load32Constant(RegisterID rt, int32_t value)
++    {
++        if (value >= -32768 && value <= 32767) {
++            li(rt, value);
++            return;
++        }
++        lis(rt, value >> 16);
++        if (value & 0xffff)
++            ori(rt, rt, value & 0xffff);
++    }
++
++    // Always two words, so it can be patched.
++    void load32ConstantPatchable(RegisterID rt, int32_t value)
++    {
++        lis(rt, value >> 16);
++        ori(rt, rt, value & 0xffff);
++    }
++
++    // Labels, jumps and calls.
++
++    AssemblerLabel labelIgnoringWatchpoints()
++    {
++        return m_buffer.label();
++    }
++
++    AssemblerLabel labelForWatchpoint()
++    {
++        AssemblerLabel result = m_buffer.label();
++        if (static_cast<int>(result.m_offset) != m_indexOfLastWatchpoint)
++            result = label();
++        m_indexOfLastWatchpoint = result.m_offset;
++        m_indexOfTailOfLastWatchpoint = result.m_offset + maxJumpReplacementSize();
++        return result;
++    }
++
++    AssemblerLabel label()
++    {
++        AssemblerLabel result = m_buffer.label();
++        while (UNLIKELY(static_cast<int>(result.m_offset) < m_indexOfTailOfLastWatchpoint)) {
++            nop();
++            result = m_buffer.label();
++        }
++        return result;
++    }
++
++    AssemblerLabel align(int alignment)
++    {
++        while (!m_buffer.isAligned(alignment))
++            trap();
++        return label();
++    }
++
++    // An unconditional jump: one "b" word. The label is after it.
++    AssemblerLabel jump()
++    {
++        b(0);
++        return m_buffer.label();
++    }
++
++    // A conditional jump on a CR bit: "bc !cond, +8; b 0". The label is after
++    // the stanza.
++    AssemblerLabel branch(int bit, bool branchIfSet)
++    {
++        bc(branchIfSet ? BranchIfFalse : BranchIfTrue, bit, 8);
++        b(0);
++        return m_buffer.label();
++    }
++
++    // A call to JIT code: "bl". The label is the return address.
++    AssemblerLabel nearCall()
++    {
++        bl(0);
++        return m_buffer.label();
++    }
++
++    // A call to anywhere: the four-word absolute stanza. The label is the
++    // return address.
++    AssemblerLabel call()
++    {
++        load32ConstantPatchable(PPCRegisters::r12, 0);
++        mtctr(PPCRegisters::r12);
++        bctrl();
++        return m_buffer.label();
++    }
++
++    AssemblerLabel callRegister(RegisterID target)
++    {
++        if (target != PPCRegisters::r12)
++            mr(PPCRegisters::r12, target);
++        mtctr(PPCRegisters::r12);
++        bctrl();
++        return m_buffer.label();
++    }
++
++    static void* getRelocatedAddress(void* code, AssemblerLabel label)
++    {
++        return reinterpret_cast<void*>(reinterpret_cast<char*>(code) + label.m_offset);
++    }
++
++    static int getDifferenceBetweenLabels(AssemblerLabel a, AssemblerLabel b)
++    {
++        return b.m_offset - a.m_offset;
++    }
++
++    size_t codeSize() const { return m_buffer.codeSize(); }
++
++    unsigned debugOffset() { return m_buffer.debugOffset(); }
++
++    static unsigned getCallReturnOffset(AssemblerLabel call)
++    {
++        return call.m_offset;
++    }
++
++    // Linking & patching.
++
++    static bool isB(PPCWord insn) { return (insn & 0xfc000003) == 0x48000000; }
++    static bool isBL(PPCWord insn) { return (insn & 0xfc000003) == 0x48000001; }
++    static bool isBC(PPCWord insn) { return (insn & 0xfc000003) == 0x40000000; }
++    static bool isLIS(PPCWord insn) { return (insn & 0xfc1f0000) == 0x3c000000; }
++    static bool isORI(PPCWord insn) { return (insn & 0xfc000000) == 0x60000000; }
++    static bool isNop(PPCWord insn) { return insn == 0x60000000; }
++    static int bcBO(PPCWord insn) { return (insn >> 21) & 31; }
++    static int bcBI(PPCWord insn) { return (insn >> 16) & 31; }
++
++    static bool fitsInBranch(intptr_t offset) { return offset >= -0x2000000 && offset <= 0x1fffffc; }
++    static bool fitsInConditionalBranch(intptr_t offset) { return offset >= -0x8000 && offset <= 0x7ffc; }
++
++    // Links the jump ending at "from" to "to", returning the first word
++    // patched. A jump is a "b"; a conditional jump is a "bc" before it, in one
++    // of the forms described at the top, which nothing else emits. The word
++    // before the jump is only examined at or after codeStart, when known.
++    static PPCWord* linkJumpAt(PPCWord* from, void* to, PPCWord* codeStart = nullptr)
++    {
++        PPCWord* insn = from - 1;
++        bool mayBeConditional = !codeStart || insn > codeStart;
++        if (mayBeConditional && isB(insn[0]) && isBC(insn[-1]) && ((insn[-1] & 0xfffc) == 8)) {
++            // "bc !cond, +8; b target": try the one-branch form.
++            PPCWord* bcWord = insn - 1;
++            intptr_t offset = reinterpret_cast<intptr_t>(to) - reinterpret_cast<intptr_t>(bcWord);
++            if (fitsInConditionalBranch(offset)) {
++                int bo = bcBO(*bcWord) == BranchIfTrue ? BranchIfFalse : BranchIfTrue;
++                *bcWord = bcInstruction(bo, bcBI(*bcWord), offset);
++                *insn = 0x60000000;
++                return bcWord;
++            }
++            offset = reinterpret_cast<intptr_t>(to) - reinterpret_cast<intptr_t>(insn);
++            RELEASE_ASSERT(fitsInBranch(offset));
++            *insn = bInstruction(offset, false);
++            return bcWord;
++        }
++        if (mayBeConditional && isNop(insn[0]) && isBC(insn[-1])) {
++            // Already in the one-branch form: "bc cond, target; nop".
++            PPCWord* bcWord = insn - 1;
++            intptr_t offset = reinterpret_cast<intptr_t>(to) - reinterpret_cast<intptr_t>(bcWord);
++            if (fitsInConditionalBranch(offset)) {
++                *bcWord = bcInstruction(bcBO(*bcWord), bcBI(*bcWord), offset);
++                return bcWord;
++            }
++            // Back to the two-branch form.
++            int bo = bcBO(*bcWord) == BranchIfTrue ? BranchIfFalse : BranchIfTrue;
++            *bcWord = bcInstruction(bo, bcBI(*bcWord), 8);
++            offset = reinterpret_cast<intptr_t>(to) - reinterpret_cast<intptr_t>(insn);
++            RELEASE_ASSERT(fitsInBranch(offset));
++            *insn = bInstruction(offset, false);
++            return bcWord;
++        }
++        RELEASE_ASSERT(isB(insn[0]));
++        intptr_t offset = reinterpret_cast<intptr_t>(to) - reinterpret_cast<intptr_t>(insn);
++        RELEASE_ASSERT(fitsInBranch(offset));
++        *insn = bInstruction(offset, false);
++        return insn;
++    }
++
++    void linkJump(AssemblerLabel from, AssemblerLabel to)
++    {
++        ASSERT(from.isSet() && to.isSet());
++        char* base = static_cast<char*>(m_buffer.data());
++        linkJumpAt(reinterpret_cast<PPCWord*>(base + from.m_offset), base + to.m_offset, reinterpret_cast<PPCWord*>(base));
++    }
++
++    static void linkJump(void* code, AssemblerLabel from, void* to)
++    {
++        ASSERT(from.isSet());
++        linkJumpAt(reinterpret_cast<PPCWord*>(static_cast<char*>(code) + from.m_offset), to, static_cast<PPCWord*>(code));
++    }
++
++    static void relinkJump(void* from, void* to)
++    {
++        PPCWord* start = linkJumpAt(static_cast<PPCWord*>(from), to);
++        cacheFlush(start, reinterpret_cast<char*>(from) - reinterpret_cast<char*>(start));
++    }
++
++    static void relinkJumpToNop(void* from)
++    {
++        relinkJump(from, from);
++    }
++
++    // Links the call whose return address is "from".
++    static void linkCallAt(PPCWord* from, void* to)
++    {
++        PPCWord* insn = from - 1;
++        if (isBL(*insn)) {
++            intptr_t offset = reinterpret_cast<intptr_t>(to) - reinterpret_cast<intptr_t>(insn);
++            RELEASE_ASSERT(fitsInBranch(offset));
++            *insn = bInstruction(offset, true);
++            return;
++        }
++        // lis r12; ori r12; mtctr r12; bctrl
++        setConstant(from - 4, reinterpret_cast<int32_t>(to));
++    }
++
++    static void linkCall(void* code, AssemblerLabel from, void* to)
++    {
++        linkCallAt(reinterpret_cast<PPCWord*>(static_cast<char*>(code) + from.m_offset), to);
++    }
++
++    static void relinkCall(void* from, void* to)
++    {
++        linkCallAt(static_cast<PPCWord*>(from), to);
++        cacheFlush(static_cast<PPCWord*>(from) - 4, 4 * sizeof(PPCWord));
++    }
++
++    static void* readCallTarget(void* from)
++    {
++        PPCWord* insn = static_cast<PPCWord*>(from) - 1;
++        if (isBL(*insn)) {
++            int32_t offset = static_cast<int32_t>(*insn & 0x03fffffc);
++            if (offset & 0x02000000)
++                offset -= 0x04000000;
++            return reinterpret_cast<char*>(insn) + offset;
++        }
++        return reinterpret_cast<void*>(getConstant(static_cast<PPCWord*>(from) - 4));
++    }
++
++    static void setConstant(PPCWord* insn, int32_t value)
++    {
++        ASSERT(isLIS(insn[0]) && isORI(insn[1]));
++        insn[0] = (insn[0] & 0xffff0000) | ((value >> 16) & 0xffff);
++        insn[1] = (insn[1] & 0xffff0000) | (value & 0xffff);
++    }
++
++    static int32_t getConstant(PPCWord* insn)
++    {
++        ASSERT(isLIS(insn[0]) && isORI(insn[1]));
++        return static_cast<int32_t>(((insn[0] & 0xffff) << 16) | (insn[1] & 0xffff));
++    }
++
++    // "where" is the start of a load32ConstantPatchable.
++    static void linkPointer(void* code, AssemblerLabel where, void* value)
++    {
++        setConstant(reinterpret_cast<PPCWord*>(static_cast<char*>(code) + where.m_offset), reinterpret_cast<int32_t>(value));
++    }
++
++    static void repatchInt32(void* where, int32_t value)
++    {
++        setConstant(static_cast<PPCWord*>(where), value);
++        cacheFlush(where, 2 * sizeof(PPCWord));
++    }
++
++    static void repatchCompact(void* where, int32_t value)
++    {
++        repatchInt32(where, value);
++    }
++
++    static void repatchPointer(void* where, void* value)
++    {
++        repatchInt32(where, reinterpret_cast<int32_t>(value));
++    }
++
++    static int32_t readInt32(void* where)
++    {
++        return getConstant(static_cast<PPCWord*>(where));
++    }
++
++    static void* readPointer(void* where)
++    {
++        return reinterpret_cast<void*>(readInt32(where));
++    }
++
++    // Jump replacement (for watchpoints and inline caches) overwrites one
++    // word with a "b" to JIT code.
++    static constexpr ptrdiff_t maxJumpReplacementSize()
++    {
++        return sizeof(PPCWord);
++    }
++
++    static constexpr ptrdiff_t patchableJumpSize()
++    {
++        return 2 * sizeof(PPCWord);
++    }
++
++    static void replaceWithJump(void* instructionStart, void* to)
++    {
++        PPCWord* insn = static_cast<PPCWord*>(instructionStart);
++        intptr_t offset = reinterpret_cast<intptr_t>(to) - reinterpret_cast<intptr_t>(insn);
++        RELEASE_ASSERT(fitsInBranch(offset));
++        *insn = bInstruction(offset, false);
++        cacheFlush(insn, sizeof(PPCWord));
++    }
++
++    // Undoes replaceWithJump over the first word of a patchable constant
++    // load.
++    static void revertJumpToLoad32ConstantPatchable(void* instructionStart, RegisterID rt, int32_t value)
++    {
++        PPCWord* insn = static_cast<PPCWord*>(instructionStart);
++        insn[0] = formD(15, rt, 0, (value >> 16) & 0xffff);
++        ASSERT(isORI(insn[1]));
++        insn[1] = (insn[1] & 0xffff0000) | (value & 0xffff);
++        cacheFlush(insn, 2 * sizeof(PPCWord));
++    }
++
++    // Load/LEA conversion, for the patchable "lis r0; ori r0; lwzx dest, base,
++    // r0" sequences (the lwzx is word 2).
++    static void replaceWithLoad(void* instructionStart)
++    {
++        PPCWord* insn = static_cast<PPCWord*>(instructionStart) + 2;
++        // add dest, base, r0 => lwzx dest, base, r0
++        if ((*insn & 0xfc0007fe) == ((31u << 26) | (266 << 1))) {
++            *insn = (*insn & ~0x7feu) | (23 << 1);
++            cacheFlush(insn, sizeof(PPCWord));
++        }
++    }
++
++    static void replaceWithAddressComputation(void* instructionStart)
++    {
++        PPCWord* insn = static_cast<PPCWord*>(instructionStart) + 2;
++        // lwzx dest, base, r0 => add dest, base, r0
++        if ((*insn & 0xfc0007fe) == ((31u << 26) | (23 << 1))) {
++            *insn = (*insn & ~0x7feu) | (266 << 1);
++            cacheFlush(insn, sizeof(PPCWord));
++        }
++    }
++
++    // Writes the data cache lines back to memory and invalidates the
++    // instruction cache over them. 32-byte lines (the G3 and G4; the G5's are
++    // larger, which a smaller stride covers too).
++    static void cacheFlush(void* code, size_t size)
++    {
++        const uintptr_t lineSize = 32;
++        uintptr_t start = reinterpret_cast<uintptr_t>(code) & ~(lineSize - 1);
++        uintptr_t end = reinterpret_cast<uintptr_t>(code) + size;
++        for (uintptr_t line = start; line < end; line += lineSize)
++            asm volatile("dcbst 0, %0" : : "r"(line) : "memory");
++        asm volatile("sync" : : : "memory");
++        for (uintptr_t line = start; line < end; line += lineSize)
++            asm volatile("icbi 0, %0" : : "r"(line) : "memory");
++        asm volatile("sync\n\tisync" : : : "memory");
++    }
++
++private:
++    AssemblerBuffer m_buffer;
++    int m_indexOfLastWatchpoint;
++    int m_indexOfTailOfLastWatchpoint;
++};
++
++} // namespace JSC
++
++#endif // ENABLE(ASSEMBLER) && CPU(PPC)
+diff --git a/Source/JavaScriptCore/bytecode/InlineAccess.h b/Source/JavaScriptCore/bytecode/InlineAccess.h
+index 1baabe0f..15c8e4ec 100644
+--- a/Source/JavaScriptCore/bytecode/InlineAccess.h
++++ b/Source/JavaScriptCore/bytecode/InlineAccess.h
+@@ -55,7 +55,7 @@ public:
+ #else
+         return 52;
+ #endif
+-#elif CPU(MIPS)
++#elif CPU(MIPS) || CPU(PPC)
+         return 72;
+ #else
+ #error "unsupported platform"
+@@ -77,7 +77,7 @@ public:
+ #else
+         return 48;
+ #endif
+-#elif CPU(MIPS)
++#elif CPU(MIPS) || CPU(PPC)
+         return 72;
+ #else
+ #error "unsupported platform"
+@@ -102,7 +102,7 @@ public:
+ #else
+         size_t size = 32;
+ #endif
+-#elif CPU(MIPS)
++#elif CPU(MIPS) || CPU(PPC)
+         size_t size = 56;
+ #else
+ #error "unsupported platform"
+diff --git a/Source/JavaScriptCore/jit/AssemblyHelpers.cpp b/Source/JavaScriptCore/jit/AssemblyHelpers.cpp
+index 32d433d2..be9d732f 100644
+--- a/Source/JavaScriptCore/jit/AssemblyHelpers.cpp
++++ b/Source/JavaScriptCore/jit/AssemblyHelpers.cpp
+@@ -842,7 +842,7 @@ void AssemblyHelpers::debugCall(VM& vm, V_DebugOperation_EPP function, void* arg
+     move(TrustedImmPtr(scratchBuffer->activeLengthPtr()), GPRInfo::regT0);
+     storePtr(TrustedImmPtr(scratchSize), GPRInfo::regT0);
+ 
+-#if CPU(X86_64) || CPU(ARM) || CPU(ARM64) || CPU(MIPS)
++#if CPU(X86_64) || CPU(ARM) || CPU(ARM64) || CPU(MIPS) || CPU(PPC)
+     move(TrustedImmPtr(buffer), GPRInfo::argumentGPR2);
+     move(TrustedImmPtr(argument), GPRInfo::argumentGPR1);
+     move(GPRInfo::callFrameRegister, GPRInfo::argumentGPR0);
+diff --git a/Source/JavaScriptCore/jit/AssemblyHelpers.h b/Source/JavaScriptCore/jit/AssemblyHelpers.h
+index cd442126..0476ed54 100644
+--- a/Source/JavaScriptCore/jit/AssemblyHelpers.h
++++ b/Source/JavaScriptCore/jit/AssemblyHelpers.h
+@@ -564,13 +564,70 @@ public:
+     }
+ #endif
+ 
++#if CPU(PPC)
++    // The link register is not a GPR; it moves through r0.
++    static size_t prologueStackPointerDelta()
++    {
++        // Prologue saves the framePointerRegister and the link register
++        return 2 * sizeof(void*);
++    }
++
++    void emitFunctionPrologue()
++    {
++        moveFromLinkRegister(tempRegister);
++        pushPair(framePointerRegister, tempRegister);
++        move(stackPointerRegister, framePointerRegister);
++    }
++
++    void emitFunctionEpilogueWithEmptyFrame()
++    {
++        popPair(framePointerRegister, tempRegister);
++        moveToLinkRegister(tempRegister);
++    }
++
++    void emitFunctionEpilogue()
++    {
++        move(framePointerRegister, stackPointerRegister);
++        emitFunctionEpilogueWithEmptyFrame();
++    }
++
++    ALWAYS_INLINE void preserveReturnAddressAfterCall(RegisterID reg)
++    {
++        moveFromLinkRegister(reg);
++    }
++
++    ALWAYS_INLINE void restoreReturnAddressBeforeReturn(RegisterID reg)
++    {
++        moveToLinkRegister(reg);
++    }
++
++    ALWAYS_INLINE void restoreReturnAddressBeforeReturn(Address address)
++    {
++        loadPtr(address, tempRegister);
++        moveToLinkRegister(tempRegister);
++    }
++#endif
++
++    // The offset of a pointer or int in a call frame header slot. The callee
++    // and the argument count are JSValue slots, whose payload is the second
++    // word on big-endian 32-bit platforms; the code block slot holds a
++    // pointer at its start (Register::codeBlock()).
++    static int callFrameHeaderOffset(int entry)
++    {
++#if USE(JSVALUE32_64) && CPU(BIG_ENDIAN)
++        if (entry == CallFrameSlot::callee || entry == CallFrameSlot::argumentCount)
++            return entry * static_cast<int>(sizeof(Register)) + PayloadOffset;
++#endif
++        return entry * static_cast<int>(sizeof(Register));
++    }
++
+     void emitGetFromCallFrameHeaderPtr(int entry, GPRReg to, GPRReg from = GPRInfo::callFrameRegister)
+     {
+-        loadPtr(Address(from, entry * sizeof(Register)), to);
++        loadPtr(Address(from, callFrameHeaderOffset(entry)), to);
+     }
+     void emitGetFromCallFrameHeader32(int entry, GPRReg to, GPRReg from = GPRInfo::callFrameRegister)
+     {
+-        load32(Address(from, entry * sizeof(Register)), to);
++        load32(Address(from, callFrameHeaderOffset(entry)), to);
+     }
+ #if USE(JSVALUE64)
+     void emitGetFromCallFrameHeader64(int entry, GPRReg to, GPRReg from = GPRInfo::callFrameRegister)
+@@ -580,12 +637,12 @@ public:
+ #endif // USE(JSVALUE64)
+     void emitPutToCallFrameHeader(GPRReg from, int entry)
+     {
+-        storePtr(from, Address(GPRInfo::callFrameRegister, entry * sizeof(Register)));
++        storePtr(from, Address(GPRInfo::callFrameRegister, callFrameHeaderOffset(entry)));
+     }
+ 
+     void emitPutToCallFrameHeader(void* value, int entry)
+     {
+-        storePtr(TrustedImmPtr(value), Address(GPRInfo::callFrameRegister, entry * sizeof(Register)));
++        storePtr(TrustedImmPtr(value), Address(GPRInfo::callFrameRegister, callFrameHeaderOffset(entry)));
+     }
+ 
+     void emitGetCallerFrameFromCallFrameHeaderPtr(RegisterID to)
+diff --git a/Source/JavaScriptCore/jit/CCallHelpers.h b/Source/JavaScriptCore/jit/CCallHelpers.h
+index 6a50fc08..14506ac9 100644
+--- a/Source/JavaScriptCore/jit/CCallHelpers.h
++++ b/Source/JavaScriptCore/jit/CCallHelpers.h
+@@ -35,6 +35,11 @@ namespace JSC {
+ 
+ #if CPU(MIPS) || (OS(WINDOWS) && CPU(X86_64))
+ #define POKE_ARGUMENT_OFFSET 4
++#elif CPU(PPC)
++// Darwin: argument word n is at sp + 24 + 4n. The first four words are in
++// r3-r6; words 4-7, poked at sp + 40, are loaded into r7-r10 at the call (see
++// MacroAssemblerPPCJIT.h); later words stay on the stack.
++#define POKE_ARGUMENT_OFFSET 10
+ #else
+ #define POKE_ARGUMENT_OFFSET 0
+ #endif
+@@ -1286,6 +1291,66 @@ public:
+     {
+         setupArgumentsWithExecState(arg1, arg2, arg4);
+     }
++#elif CPU(PPC)
++    // Darwin passes doubles in f1, f2, ..., and each also takes up two
++    // argument words (registers) that later arguments skip.
++    ALWAYS_INLINE void setupArguments(FPRReg arg1)
++    {
++        moveDouble(arg1, FPRInfo::argumentFPR0);
++    }
++
++    ALWAYS_INLINE void setupArguments(FPRReg arg1, FPRReg arg2)
++    {
++        if (arg2 != FPRInfo::argumentFPR0) {
++            moveDouble(arg1, FPRInfo::argumentFPR0);
++            moveDouble(arg2, FPRInfo::argumentFPR1);
++        } else if (arg1 != FPRInfo::argumentFPR1) {
++            moveDouble(arg2, FPRInfo::argumentFPR1);
++            moveDouble(arg1, FPRInfo::argumentFPR0);
++        } else
++            swapDouble(FPRInfo::argumentFPR0, FPRInfo::argumentFPR1);
++    }
++
++    // (ExecState*, double, int): r3, f1 (words 1-2), r6.
++    ALWAYS_INLINE void setupArgumentsWithExecState(FPRReg arg1, GPRReg arg2)
++    {
++        move(arg2, GPRInfo::argumentGPR3);
++        moveDouble(arg1, FPRInfo::argumentFPR0);
++        move(GPRInfo::callFrameRegister, GPRInfo::argumentGPR0);
++    }
++
++    ALWAYS_INLINE void setupArgumentsWithExecState(FPRReg arg1, TrustedImm32 arg2)
++    {
++        move(arg2, GPRInfo::argumentGPR3);
++        moveDouble(arg1, FPRInfo::argumentFPR0);
++        move(GPRInfo::callFrameRegister, GPRInfo::argumentGPR0);
++    }
++
++    // (ExecState*, int, int, double): r3, r4, r5, f1 (words 3-4).
++    ALWAYS_INLINE void setupArgumentsWithExecState(GPRReg arg1, GPRReg arg2, FPRReg arg3)
++    {
++        moveDouble(arg3, FPRInfo::argumentFPR0);
++        setupStubArguments(arg1, arg2);
++        move(GPRInfo::callFrameRegister, GPRInfo::argumentGPR0);
++    }
++
++    // (ExecState*, int, double, int): r3, r4, f1 (words 2-3), word 4.
++    ALWAYS_INLINE void setupArgumentsWithExecState(TrustedImm32 arg1, FPRReg arg2, GPRReg arg3)
++    {
++        poke(arg3, POKE_ARGUMENT_OFFSET);
++        move(arg1, GPRInfo::argumentGPR1);
++        moveDouble(arg2, FPRInfo::argumentFPR0);
++        move(GPRInfo::callFrameRegister, GPRInfo::argumentGPR0);
++    }
++
++    // (ExecState*, int, int, int, double): r3-r6, f1 (words 4-5).
++    ALWAYS_INLINE void setupArgumentsWithExecState(GPRReg arg1, GPRReg arg2, TrustedImm32 arg3, FPRReg arg4)
++    {
++        moveDouble(arg4, FPRInfo::argumentFPR0);
++        setupStubArguments(arg1, arg2);
++        move(arg3, GPRInfo::argumentGPR3);
++        move(GPRInfo::callFrameRegister, GPRInfo::argumentGPR0);
++    }
+ #else
+ #error "JIT not supported on this platform."
+ #endif
+@@ -2434,8 +2499,14 @@ public:
+     {
+ #if USE(JSVALUE64)
+         move(GPRInfo::returnValueGPR, regs.gpr());
++#else
++#if CPU(PPC)
++        // Big-endian: a C function returns an EncodedJSValue's tag, its high
++        // word, in r3 (returnValueGPR).
++        setupResults(regs.tagGPR(), regs.payloadGPR());
+ #else
+         setupResults(regs.payloadGPR(), regs.tagGPR());
++#endif
+ #endif
+     }
+     
+@@ -2510,6 +2581,10 @@ public:
+ #elif CPU(MIPS)
+         loadPtr(Address(framePointerRegister, sizeof(void*)), returnAddressRegister);
+         subPtr(TrustedImm32(2 * sizeof(void*)), newFrameSizeGPR);
++#elif CPU(PPC)
++        loadPtr(Address(framePointerRegister, sizeof(void*)), tempGPR);
++        moveToLinkRegister(tempGPR);
++        subPtr(TrustedImm32(2 * sizeof(void*)), newFrameSizeGPR);
+ #elif CPU(X86) || CPU(X86_64)
+         loadPtr(Address(framePointerRegister, sizeof(void*)), tempGPR);
+         push(tempGPR);
+diff --git a/Source/JavaScriptCore/jit/CallFrameShuffler.cpp b/Source/JavaScriptCore/jit/CallFrameShuffler.cpp
+index ffbc7e6b..8b0765c1 100644
+--- a/Source/JavaScriptCore/jit/CallFrameShuffler.cpp
++++ b/Source/JavaScriptCore/jit/CallFrameShuffler.cpp
+@@ -383,7 +383,7 @@ void CallFrameShuffler::prepareForTailCall()
+     // sp will point to head0 and we will move it up half a slot
+     // manually
+     m_newFrameOffset = 0;
+-#elif CPU(ARM) || CPU(MIPS)
++#elif CPU(ARM) || CPU(MIPS) || CPU(PPC)
+     // We load the the frame pointer and link register
+     // manually. We could ask the algorithm to load them for us,
+     // and it would allow us to use the link register as an extra
+@@ -451,6 +451,10 @@ void CallFrameShuffler::prepareForTailCall()
+ #elif CPU(MIPS)
+     m_jit.loadPtr(MacroAssembler::Address(MacroAssembler::framePointerRegister, sizeof(void*)),
+         MacroAssembler::returnAddressRegister);
++#elif CPU(PPC)
++    m_jit.loadPtr(MacroAssembler::Address(MacroAssembler::framePointerRegister, sizeof(void*)),
++        MacroAssembler::tempRegister);
++    m_jit.moveToLinkRegister(MacroAssembler::tempRegister);
+ #endif
+ 
+     // We want the frame pointer to always point to a valid frame, and
+diff --git a/Source/JavaScriptCore/jit/ExecutableAllocator.cpp b/Source/JavaScriptCore/jit/ExecutableAllocator.cpp
+index 3d8724e6..d98751d7 100644
+--- a/Source/JavaScriptCore/jit/ExecutableAllocator.cpp
++++ b/Source/JavaScriptCore/jit/ExecutableAllocator.cpp
+@@ -84,7 +84,9 @@ namespace JSC {
+ 
+ #if defined(FIXED_EXECUTABLE_MEMORY_POOL_SIZE_IN_MB) && FIXED_EXECUTABLE_MEMORY_POOL_SIZE_IN_MB > 0
+ static const size_t fixedExecutableMemoryPoolSize = FIXED_EXECUTABLE_MEMORY_POOL_SIZE_IN_MB * 1024 * 1024;
+-#elif CPU(ARM)
++#elif CPU(ARM) || CPU(PPC)
++// PowerPC: JIT code reaches the rest of the pool with relative branches
++// (+-32MB); see PPCAssemblerJIT.h.
+ static const size_t fixedExecutableMemoryPoolSize = 16 * 1024 * 1024;
+ #elif CPU(ARM64)
+ static const size_t fixedExecutableMemoryPoolSize = 64 * 1024 * 1024;
+diff --git a/Source/JavaScriptCore/jit/GPRInfo.h b/Source/JavaScriptCore/jit/GPRInfo.h
+index 6891c7e1..0e929ce5 100644
+--- a/Source/JavaScriptCore/jit/GPRInfo.h
++++ b/Source/JavaScriptCore/jit/GPRInfo.h
+@@ -824,7 +824,9 @@ public:
+ #endif // CPU(MIPS)
+ 
+ #if CPU(PPC)
+-#define NUMBER_OF_ARGUMENT_REGISTERS 8u
++// r3-r10 carry arguments, but CCallHelpers treats r7-r10 as stack words that
++// the call loads (see POKE_ARGUMENT_OFFSET), as with ARM's four registers.
++#define NUMBER_OF_ARGUMENT_REGISTERS 4u
+ #define NUMBER_OF_CALLEE_SAVES_REGISTERS 0u
+ 
+ class GPRInfo {
+@@ -872,6 +874,13 @@ public:
+         return registerForIndex[index];
+     }
+ 
++    static GPRReg toArgumentRegister(unsigned index)
++    {
++        ASSERT(index < numberOfArgumentRegisters);
++        static const GPRReg registerForIndex[numberOfArgumentRegisters] = { argumentGPR0, argumentGPR1, argumentGPR2, argumentGPR3 };
++        return registerForIndex[index];
++    }
++
+     static unsigned toIndex(GPRReg reg)
+     {
+         ASSERT(reg != InvalidGPRReg);
+diff --git a/Source/JavaScriptCore/jit/JITInlines.h b/Source/JavaScriptCore/jit/JITInlines.h
+index 29c23605..1caa380d 100644
+--- a/Source/JavaScriptCore/jit/JITInlines.h
++++ b/Source/JavaScriptCore/jit/JITInlines.h
+@@ -180,6 +180,9 @@ ALWAYS_INLINE MacroAssembler::Call JIT::appendCallWithExceptionCheckSetJSValueRe
+     MacroAssembler::Call call = appendCallWithExceptionCheck(function);
+ #if USE(JSVALUE64)
+     emitPutVirtualRegister(dst, returnValueGPR);
++#elif CPU(PPC)
++    // Big-endian: the tag, the high word, comes back in r3.
++    emitStore(dst, returnValueGPR, returnValueGPR2);
+ #else
+     emitStore(dst, returnValueGPR2, returnValueGPR);
+ #endif
+@@ -192,6 +195,9 @@ ALWAYS_INLINE MacroAssembler::Call JIT::appendCallWithExceptionCheckSetJSValueRe
+     emitValueProfilingSite();
+ #if USE(JSVALUE64)
+     emitPutVirtualRegister(dst, returnValueGPR);
++#elif CPU(PPC)
++    // Big-endian: the tag, the high word, comes back in r3.
++    emitStore(dst, returnValueGPR, returnValueGPR2);
+ #else
+     emitStore(dst, returnValueGPR2, returnValueGPR);
+ #endif
+diff --git a/Source/JavaScriptCore/jit/JITOpcodes32_64.cpp b/Source/JavaScriptCore/jit/JITOpcodes32_64.cpp
+index add4c2ef..8cb9bc19 100644
+--- a/Source/JavaScriptCore/jit/JITOpcodes32_64.cpp
++++ b/Source/JavaScriptCore/jit/JITOpcodes32_64.cpp
+@@ -70,6 +70,17 @@ JIT::CodeRef JIT::privateCompileCTINativeCall(VM* vm, NativeFunction func)
+ 
+     addPtr(TrustedImm32(8), stackPointerRegister);
+ 
++#elif CPU(PPC)
++    // Keep the host function's linkage and parameter areas off this frame's
++    // header (see nativeForGenerator in ThunkGenerators.cpp).
++    subPtr(TrustedImm32(maxFrameExtentForSlowPathCall), stackPointerRegister);
++    move(callFrameRegister, argumentGPR0);
++    emitGetFromCallFrameHeaderPtr(CallFrameSlot::callee, argumentGPR1);
++    loadPtr(Address(argumentGPR1, OBJECT_OFFSETOF(JSFunction, m_executable)), regT2);
++    nativeCall = call();
++    // Big-endian: the tag came back in r3, the payload in r4.
++    swap(regT0, regT1);
++    addPtr(TrustedImm32(maxFrameExtentForSlowPathCall), stackPointerRegister);
+ #elif CPU(ARM) || CPU(MIPS)
+ #if CPU(MIPS)
+     // Allocate stack space for (unused) 16 bytes (8-byte aligned) for 4 arguments.
+@@ -114,6 +125,9 @@ JIT::CodeRef JIT::privateCompileCTINativeCall(VM* vm, NativeFunction func)
+     move(callFrameRegister, X86Registers::ecx);
+     push(X86Registers::ecx);
+ #else
++#if CPU(PPC)
++    subPtr(TrustedImm32(maxFrameExtentForSlowPathCall), stackPointerRegister);
++#endif
+     move(callFrameRegister, argumentGPR0);
+ #endif
+     move(TrustedImmPtr(FunctionPtr(operationVMHandleException).value()), regT3);
+@@ -121,6 +135,8 @@ JIT::CodeRef JIT::privateCompileCTINativeCall(VM* vm, NativeFunction func)
+ 
+ #if CPU(X86)
+     addPtr(TrustedImm32(8), stackPointerRegister);
++#elif CPU(PPC)
++    addPtr(TrustedImm32(maxFrameExtentForSlowPathCall), stackPointerRegister);
+ #endif
+ 
+     jumpToExceptionHandler(*vm);
+diff --git a/Source/JavaScriptCore/jit/RegisterSet.cpp b/Source/JavaScriptCore/jit/RegisterSet.cpp
+index 6a2797d0..28ad6430 100644
+--- a/Source/JavaScriptCore/jit/RegisterSet.cpp
++++ b/Source/JavaScriptCore/jit/RegisterSet.cpp
+@@ -94,7 +94,7 @@ RegisterSet RegisterSet::macroScratchRegisters()
+     RegisterSet result;
+     result.set(MacroAssembler::tempRegister);
+     result.set(MacroAssembler::addressTempRegister);
+-    result.set(MacroAssembler::emergencyTempRegister);
++    result.set(MacroAssembler::dataTempRegister2);
+     return result;
+ #elif CPU(MIPS)
+     RegisterSet result;
+diff --git a/Source/JavaScriptCore/jit/ThunkGenerators.cpp b/Source/JavaScriptCore/jit/ThunkGenerators.cpp
+index 63fe242e..641bf6f5 100644
+--- a/Source/JavaScriptCore/jit/ThunkGenerators.cpp
++++ b/Source/JavaScriptCore/jit/ThunkGenerators.cpp
+@@ -330,6 +330,19 @@ static MacroAssemblerCodeRef nativeForGenerator(VM* vm, CodeSpecializationKind k
+     jit.move(JSInterfaceJIT::TrustedImm64(g_nativeCodePoison), ARM64Registers::x1);
+     jit.xor64(ARM64Registers::x1, ARM64Registers::x2);
+     jit.call(ARM64Registers::x2);
++#elif CPU(PPC)
++    // The host function may store into the 56 bytes above its sp (Darwin's
++    // linkage and parameter areas), which must not be this frame's header;
++    // sp stays 16-byte aligned.
++    jit.subPtr(JSInterfaceJIT::TrustedImm32(maxFrameExtentForSlowPathCall), JSInterfaceJIT::stackPointerRegister);
++    jit.move(JSInterfaceJIT::callFrameRegister, JSInterfaceJIT::argumentGPR0);
++    jit.emitGetFromCallFrameHeaderPtr(CallFrameSlot::callee, JSInterfaceJIT::argumentGPR1);
++    jit.loadPtr(JSInterfaceJIT::Address(JSInterfaceJIT::argumentGPR1, JSFunction::offsetOfExecutable()), JSInterfaceJIT::regT2);
++    jit.call(JSInterfaceJIT::Address(JSInterfaceJIT::regT2, executableOffsetToFunction));
++    // Big-endian: the EncodedJSValue's tag came back in r3, the payload in r4;
++    // JS code returns the payload in regT0 (r3).
++    jit.swap(JSInterfaceJIT::regT0, JSInterfaceJIT::regT1);
++    jit.addPtr(JSInterfaceJIT::TrustedImm32(maxFrameExtentForSlowPathCall), JSInterfaceJIT::stackPointerRegister);
+ #elif CPU(ARM) || CPU(MIPS)
+ #if CPU(MIPS)
+     // Allocate stack space for (unused) 16 bytes (8-byte aligned) for 4 arguments.
+@@ -383,6 +396,8 @@ static MacroAssemblerCodeRef nativeForGenerator(VM* vm, CodeSpecializationKind k
+ #if OS(WINDOWS)
+     // Allocate space on stack for the 4 parameter registers.
+     jit.subPtr(JSInterfaceJIT::TrustedImm32(4 * sizeof(int64_t)), JSInterfaceJIT::stackPointerRegister);
++#elif CPU(PPC)
++    jit.subPtr(JSInterfaceJIT::TrustedImm32(maxFrameExtentForSlowPathCall), JSInterfaceJIT::stackPointerRegister);
+ #endif
+     jit.move(JSInterfaceJIT::callFrameRegister, JSInterfaceJIT::argumentGPR0);
+ #endif
+@@ -392,6 +407,8 @@ static MacroAssemblerCodeRef nativeForGenerator(VM* vm, CodeSpecializationKind k
+     jit.addPtr(JSInterfaceJIT::TrustedImm32(16), JSInterfaceJIT::stackPointerRegister);
+ #elif OS(WINDOWS)
+     jit.addPtr(JSInterfaceJIT::TrustedImm32(4 * sizeof(int64_t)), JSInterfaceJIT::stackPointerRegister);
++#elif CPU(PPC)
++    jit.addPtr(JSInterfaceJIT::TrustedImm32(maxFrameExtentForSlowPathCall), JSInterfaceJIT::stackPointerRegister);
+ #endif
+ 
+     jit.jumpToExceptionHandler(*vm);
+@@ -436,7 +453,7 @@ MacroAssemblerCodeRef arityFixupGenerator(VM* vm)
+     jit.pop(JSInterfaceJIT::regT4);
+ #  endif
+     jit.move(JSInterfaceJIT::callFrameRegister, JSInterfaceJIT::regT3);
+-    jit.load32(JSInterfaceJIT::Address(JSInterfaceJIT::callFrameRegister, CallFrameSlot::argumentCount * sizeof(Register)), JSInterfaceJIT::argumentGPR2);
++    jit.load32(JSInterfaceJIT::Address(JSInterfaceJIT::callFrameRegister, CallFrameSlot::argumentCount * sizeof(Register) + PayloadOffset), JSInterfaceJIT::argumentGPR2);
+     jit.add32(JSInterfaceJIT::TrustedImm32(CallFrame::headerSizeInRegisters), JSInterfaceJIT::argumentGPR2);
+ 
+     // Check to see if we have extra slots we can use
+@@ -489,7 +506,7 @@ MacroAssemblerCodeRef arityFixupGenerator(VM* vm)
+     jit.pop(JSInterfaceJIT::regT4);
+ #  endif
+     jit.move(JSInterfaceJIT::callFrameRegister, JSInterfaceJIT::regT3);
+-    jit.load32(JSInterfaceJIT::Address(JSInterfaceJIT::callFrameRegister, CallFrameSlot::argumentCount * sizeof(Register)), JSInterfaceJIT::argumentGPR2);
++    jit.load32(JSInterfaceJIT::Address(JSInterfaceJIT::callFrameRegister, CallFrameSlot::argumentCount * sizeof(Register) + PayloadOffset), JSInterfaceJIT::argumentGPR2);
+     jit.add32(JSInterfaceJIT::TrustedImm32(CallFrame::headerSizeInRegisters), JSInterfaceJIT::argumentGPR2);
+ 
+     // Check to see if we have extra slots we can use
+diff --git a/Source/JavaScriptCore/offlineasm/instructions.rb b/Source/JavaScriptCore/offlineasm/instructions.rb
+index df0f5e66..87ae8fb9 100644
+--- a/Source/JavaScriptCore/offlineasm/instructions.rb
++++ b/Source/JavaScriptCore/offlineasm/instructions.rb
+@@ -296,6 +296,7 @@ PPC_INSTRUCTIONS =
+      "ppcbcl",         # ppcbcl label: save lr in r0, then bcl to the label (the next instruction)
+      "ppcpcfinish",    # ppcpcfinish reg: reg = the pc bcl left in lr; restore lr from r0
+      "ppclabeloffset", # ppclabeloffset label, base, baseReg, dest: dest = baseReg + (label - base)
++     "ppcdispatch",    # ppcdispatch imm, reg: reg += imm, then jump to the address stored at reg
+     ]
+ 
+ CXX_INSTRUCTIONS =
+diff --git a/Source/JavaScriptCore/offlineasm/ppc.rb b/Source/JavaScriptCore/offlineasm/ppc.rb
+index e59a911c..47e998fc 100644
+--- a/Source/JavaScriptCore/offlineasm/ppc.rb
++++ b/Source/JavaScriptCore/offlineasm/ppc.rb
+@@ -292,6 +292,84 @@ def ppcLowerSimpleBranchOps(list)
+     newList
+ end
+ 
++#
++# The LLInt's dispatch, "addp n, PC; jmp [PC]", becomes a load with update:
++# lwzu r0, n(PC); mtctr r0; bctr.
++#
++
++def ppcLowerDispatch(list)
++    newList = []
++    list.each_with_index {
++        | node, index |
++        following = list[index + 1]
++        if node.is_a? Instruction and node.opcode == "addp" and node.operands.size == 2 and
++                node.operands[0].immediate? and ppcFitsSigned16(node.operands[0].value) and
++                node.operands[1].register? and
++                following.is_a? Instruction and following.opcode == "jmp" and
++                following.operands[0].is_a? Address and following.operands[0].base == node.operands[1] and
++                following.operands[0].offset.value == 0
++            newList << Instruction.new(node.codeOrigin, "ppcdispatch", node.operands, node.annotation)
++        elsif node.is_a? Instruction and node.opcode == "jmp" and index > 0 and
++                newList[-1].is_a? Instruction and newList[-1].opcode == "ppcdispatch" and
++                list[index - 1].is_a? Instruction and list[index - 1].opcode == "addp"
++            # Folded into the ppcdispatch above.
++        else
++            newList << node
++        end
++    }
++    newList
++end
++
++#
++# Scaled or offset BaseIndex addresses: PowerPC only has base + index. Adjacent
++# loads and stores through the same base, index and scale (a JSValue's tag and
++# payload, typically) share one computed address:
++#
++#   loadi 0[cfr, t2, 8], t1         slwi r0, t2, 3
++#   loadi 4[cfr, t2, 8], t0   =>    add tmp, cfr, r0
++#                                   lwz t1, 0(tmp)
++#                                   lwz t0, 4(tmp)
++#
++
++PPC_SIMPLE_MEMORY_OPCODES = ["loadi", "loadis", "loadp", "loadb", "loadbs", "loadh", "loadhs", "loadd",
++                             "storei", "storep", "storeb", "storeh", "stored"]
++
++def ppcLowerBaseIndexes(list)
++    newList = []
++    shared = nil # [base, index, scaleShift, tmp]
++    list.each {
++        | node |
++        unless node.is_a? Instruction and PPC_SIMPLE_MEMORY_OPCODES.include? node.opcode
++            shared = nil
++            newList << node
++            next
++        end
++        operands = node.operands.map {
++            | operand |
++            if operand.is_a? BaseIndex and (operand.scaleShift != 0 or operand.offset.value != 0) and
++                    ppcFitsSigned16(operand.offset.value)
++                unless shared and shared[0] == operand.base and shared[1] == operand.index and shared[2] == operand.scaleShift
++                    tmp = Tmp.new(node.codeOrigin, :gpr)
++                    newList << Instruction.new(node.codeOrigin, "leap",
++                                               [BaseIndex.new(node.codeOrigin, operand.base, operand.index, operand.scale,
++                                                              Immediate.new(node.codeOrigin, 0)), tmp])
++                    shared = [operand.base, operand.index, operand.scaleShift, tmp]
++                end
++                Address.new(node.codeOrigin, shared[3], operand.offset)
++            else
++                operand
++            end
++        }
++        newList << Instruction.new(node.codeOrigin, node.opcode, operands, node.annotation)
++        # A load that overwrites the base or the index ends the sharing.
++        if shared and node.opcode.start_with? "load"
++            destination = operands[-1]
++            shared = nil if destination == shared[0] or destination == shared[1]
++        end
++    }
++    newList
++end
++
+ #
+ # Actual lowering code follows.
+ #
+@@ -310,7 +388,9 @@ class Sequence
+             end
+         }
+ 
++        result = ppcLowerDispatch(result)
+         result = ppcLowerSimpleBranchOps(result)
++        result = ppcLowerBaseIndexes(result)
+         result = riscLowerSimpleBranchOps(result)
+         result = riscLowerHardBranchOps(result)
+         result = riscLowerShiftOps(result)
+@@ -899,6 +979,10 @@ class Instruction
+             $asm.puts "mr #{operands[3].ppcOperand}, r0"
+         when "memfence"
+             $asm.puts "sync"
++        when "ppcdispatch"
++            $asm.puts "lwzu r0, #{operands[0].value}(#{operands[1].ppcOperand})"
++            $asm.puts "mtctr r0"
++            $asm.puts "bctr"
+         when "ppcbcl"
+             # The first half of finding the PC: save lr, branch-and-link to
+             # the next instruction, which is the label given.
+diff --git a/Source/JavaScriptCore/runtime/MachineContext.h b/Source/JavaScriptCore/runtime/MachineContext.h
+index 0f3f6899..dbeb8b11 100644
+--- a/Source/JavaScriptCore/runtime/MachineContext.h
++++ b/Source/JavaScriptCore/runtime/MachineContext.h
+@@ -530,6 +530,9 @@ inline void*& llintInstructionPointer(PlatformRegisters& regs)
+ #elif CPU(ARM64)
+     static_assert(LLInt::LLIntPC == ARM64Registers::x4, "Wrong LLInt PC.");
+     return reinterpret_cast<void*&>(regs.__x[4]);
++#elif CPU(PPC)
++    static_assert(LLInt::LLIntPC == PPCRegisters::r7, "Wrong LLInt PC.");
++    return reinterpret_cast<void*&>(regs.__r7);
+ #else
+ #error Unknown Architecture
+ #endif
+@@ -541,6 +544,9 @@ inline void*& llintInstructionPointer(PlatformRegisters& regs)
+ #elif CPU(X86_64)
+     static_assert(LLInt::LLIntPC == X86Registers::r8, "Wrong LLInt PC.");
+     return reinterpret_cast<void*&>(regs.r8);
++#elif CPU(PPC)
++    static_assert(LLInt::LLIntPC == PPCRegisters::r7, "Wrong LLInt PC.");
++    return reinterpret_cast<void*&>(regs.r7);
+ #else
+ #error Unknown Architecture
+ #endif
+diff --git a/Source/WTF/wtf/Platform.h b/Source/WTF/wtf/Platform.h
+index 5190bf0a..4775ad1b 100644
+--- a/Source/WTF/wtf/Platform.h
++++ b/Source/WTF/wtf/Platform.h
+@@ -588,11 +588,14 @@
+ #if CPU(PPC)
+ /* Captain Polliwog: the LLInt runs natively through the offlineasm PPC
+    backend rather than as the C loop (see ENABLE(C_LOOP) below). The
+-   baseline JIT is not ported yet; the DFG and the sampling profiler are
+-   not ported. */
++   baseline JIT is a work in progress, off unless the build turns it on
++   (the leopard-g4-jit variant); the DFG and the sampling profiler are not
++   ported. */
+ #define ENABLE_ASSEMBLER 1
+ #define ENABLE_YARR_JIT 1
++#if !defined(ENABLE_JIT)
+ #define ENABLE_JIT 0
++#endif
+ #define ENABLE_DFG_JIT 0
+ #define ENABLE_SAMPLING_PROFILER 0
+ #endif
+-- 
+2.54.0 (Apple Git-157)
+

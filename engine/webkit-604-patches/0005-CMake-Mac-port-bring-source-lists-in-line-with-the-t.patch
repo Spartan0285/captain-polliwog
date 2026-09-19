@@ -1,7 +1,7 @@
 From 6246ba72bf0bf02e59ae62c829688efd07eb8aa1 Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Thu, 17 Sep 2026 23:53:51 -0400
-Subject: [PATCH 05/47] CMake Mac port: bring source lists in line with the
+Subject: [PATCH 05/49] CMake Mac port: bring source lists in line with the
  tree
 
 WebLayer.mm moved to platform/graphics/mac, WebDefaultUIDelegate became
@@ -44,5 +44,5 @@ index cc4acc5c..5d987910 100644
      mac/Misc/WebNSDataExtras.m
      mac/Misc/WebNSDictionaryExtras.m
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

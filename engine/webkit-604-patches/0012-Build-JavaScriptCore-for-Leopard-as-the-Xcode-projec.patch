@@ -1,7 +1,7 @@
 From f91e172ce0dea14ae72c98bbcf814a4f4a5205ca Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 00:13:49 -0400
-Subject: [PATCH 12/47] Build JavaScriptCore for Leopard as the Xcode project
+Subject: [PATCH 12/49] Build JavaScriptCore for Leopard as the Xcode project
  does
 
 Link the configured ICU instead of the system libicucore, use the
@@ -86,5 +86,5 @@ index f409a54e..136bdb10 100644
          ENABLE_ACCELERATED_OVERFLOW_SCROLLING
          ENABLE_ASYNC_SCROLLING
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

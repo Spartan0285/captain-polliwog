@@ -1,7 +1,7 @@
 From f30fa028de15bebf95cf4d9424bd1558b0cb774d Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 10:12:54 -0400
-Subject: [PATCH 26/47] Caret movement: drop Apple ICU's !!RINoChain, and never
+Subject: [PATCH 26/49] Caret movement: drop Apple ICU's !!RINoChain, and never
  keep a null iterator
 
 Upstream ICU rejects the caret rule set because of the Apple-only
@@ -39,5 +39,5 @@ index 308e40e2..0311843b 100644
  #endif
              m_iterator = ubrk_open(type, locale, text, textLength, &status);
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

@@ -1,7 +1,7 @@
 From 56c02ce50eacc8adbcd6d003006d796a9fb5be7e Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 03:57:22 -0400
-Subject: [PATCH 22/47] WebKitLegacy: WebViewGroup.cpp needs Objective-C++
+Subject: [PATCH 22/49] WebKitLegacy: WebViewGroup.cpp needs Objective-C++
 
 ---
  Source/WebKitLegacy/PlatformMac.cmake | 2 +-
@@ -21,5 +21,5 @@ index 5e834b98..b288aaed 100644
      else ()
          set_source_files_properties(${_file} PROPERTIES COMPILE_FLAGS "${WEBKITLEGACY_OBJCXX_FLAGS}")
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

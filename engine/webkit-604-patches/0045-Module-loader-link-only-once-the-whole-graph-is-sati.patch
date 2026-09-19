@@ -1,7 +1,7 @@
 From 70ebcfde09384826303939f6c3e83e5629193c98 Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Sat, 19 Sep 2026 03:45:21 -0400
-Subject: [PATCH 45/47] Module loader: link only once the whole graph is
+Subject: [PATCH 45/49] Module loader: link only once the whole graph is
  satisfied
 
 A module whose dependency another request is already satisfying waits only
@@ -106,5 +106,5 @@ index 67186e50..e1825c24 100644
      requestReady                   JSBuiltin                                           DontEnum|Function 2
      link                           JSBuiltin                                           DontEnum|Function 2
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 

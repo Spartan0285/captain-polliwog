@@ -1,7 +1,7 @@
 From 403bf60edce2e5eb86d2bd191969d61c7dd7a7c6 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 03:54:03 -0400
-Subject: [PATCH 21/47] WebKitLegacy: build .cpp files as C++ with GCC, whose
+Subject: [PATCH 21/49] WebKitLegacy: build .cpp files as C++ with GCC, whose
  Objective-C++ rejects lambda init-captures
 
 ---
@@ -46,5 +46,5 @@ index b56bfaf4..5e834b98 100644
  endforeach ()
  
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-157)
 
