@@ -23,7 +23,9 @@ ICU=/opt/ppc/icu/lib/libicucore.dylib
 OTS="/opt/ppc/ots/lib/libots.a;/opt/ppc/ots/lib/libwoff2.a;/opt/ppc/ots/lib/libbrotli.a;/opt/ppc/ots/lib/liblz4.a"
 
 case $VARIANT in
-    leopard-g4) TARGET=10.5; CPU="-mcpu=7400 -maltivec" ;;
+    # 7400 instructions (every G4), scheduled for the 7447/7450 "G4e" core
+    # that later G4 Macs, the iBook and aluminum PowerBooks among them, have.
+    leopard-g4) TARGET=10.5; CPU="-mcpu=7400 -mtune=7450 -maltivec" ;;
     *) echo "usage: $0 configure|build leopard-g4 [targets...]" >&2; exit 1 ;;
 esac
 # WebCore is about 30MB of code, past the reach of PowerPC's branch

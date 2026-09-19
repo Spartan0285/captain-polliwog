@@ -331,6 +331,25 @@ iterable's iterator when there is no `Symbol.asyncIterator`) and awaits
 each result. `SourceParseMode` grew from 16 to 32 bits for the three new
 modes. Tests in `engine/tests/async-generators.js`.
 
+Also on 19 September:
+- **The module loader raced.** A module whose dependency another request was
+  already loading waited only for that dependency to be parsed, so imports
+  that shared modules could link before a dependency's own dependencies had
+  resolved ("undefined is not an object"). GitHub loads React this way.
+  Linking now first waits until everything reachable is ready
+  (`requestSatisfyAll` in `ModuleLoaderPrototype.js`; test in
+  `engine/tests/concurrent-imports`).
+- **BigInt literals** (`10n`) read as their number, so scripts holding them
+  parse; the BigInt stand-in still tells feature tests there is no BigInt.
+- **Polyfills:** `performance.measure(name, { start, end })`, constructable
+  style sheets (`new CSSStyleSheet()`, `adoptedStyleSheets`), and
+  `Intl.NumberFormat` units and compact notation. Speedometer 3.1's Web
+  Components and Charts workloads failed without the last two.
+- **Debugging:** with `CPDebugLog` on, the app logs the stack of every
+  uncaught page error, and the URL of every failed `fetch`.
+- **Tuning:** the G4 build schedules for the 7447/7450 core (`-mtune=7450`)
+  while still running on the 7400.
+
 A lesson from the way: `CommonIdentifiers.h` and `BuiltinNames.h` are
 compiled into WebCore, so adding a name to either shifts what WebCore reads
 (`Document.prototype` came back undefined). After changing them, rebuild
