@@ -9,7 +9,9 @@
 extern NSString * const CPDownloadDidChangeNotification;
 
 typedef enum {
+    CPDownloadQueued,       // waiting for a turn
     CPDownloadActive,
+    CPDownloadPaused,       // the partial file is kept
     CPDownloadFinished,
     CPDownloadFailed,
     CPDownloadCancelled
@@ -17,6 +19,7 @@ typedef enum {
 
 // One file being saved. It is written as "name.download" and renamed when
 // complete, so a half-finished file is never mistaken for a whole one.
+// It starts queued; CPDownloadsController decides when it runs.
 @interface CPDownload : NSObject
 {
     NSURLRequest    *request;
@@ -27,6 +30,7 @@ typedef enum {
     long long        received;
     long long        expected;
     NSDate          *started;
+    long long        receivedAtStart;   // for the rate: bytes already there on resuming
     NSString        *failureReason;
 }
 
@@ -34,8 +38,10 @@ typedef enum {
     suggestedFilename:(NSString *)filename
                folder:(NSString *)folder;
 
-- (void)start;
-- (void)cancel;
+- (void)start;               // queued -> active
+- (void)pause;               // active -> paused
+- (void)resume;              // paused or failed -> queued, continuing the partial file
+- (void)cancel;              // stops and deletes the partial file
 
 - (NSString *)filename;
 - (NSString *)path;

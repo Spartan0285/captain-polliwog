@@ -20,7 +20,8 @@
 // Saves the response to request into the downloads folder.
 - (CPDownload *)startDownloadWithRequest:(NSURLRequest *)request suggestedFilename:(NSString *)filename;
 
-- (BOOL)hasActiveDownloads;
+- (BOOL)hasActiveDownloads;        // running or waiting their turn
+- (unsigned)activeDownloadCount;
 
 - (IBAction)clearFinished:(id)sender;
 

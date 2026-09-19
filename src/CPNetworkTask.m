@@ -11,6 +11,7 @@
 #include <curl/curl.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <CoreFoundation/CoreFoundation.h>
 
 #define CPProgressInterval 0.5
@@ -69,9 +70,32 @@ static size_t CPWriteCallback(char *buffer, size_t size, size_t count, void *use
     // libcurl follows a download's redirects itself; only the final answer
     // matters, and only for its size.
     if (downloadOwner != nil) {
+        long long offset = 0;
+        if (resumeOffset > 0) {
+            NSString *range = [responseHeaders objectForKey:@"content-range"];
+            if (CPDebugLogging())
+                NSLog(@"Captain Polliwog: resuming download at %lld bytes: HTTP %d", resumeOffset, statusCode);
+            if (statusCode == 206) {
+                offset = resumeOffset;
+            } else if (statusCode == 416 && range != nil &&
+                       [range rangeOfString:@"/"].location != NSNotFound &&
+                       strtoll([[range substringFromIndex:[range rangeOfString:@"/"].location + 1] UTF8String], NULL, 10) == resumeOffset) {
+                // Asked for the bytes after the end: the file was already whole.
+                rangeComplete = YES;
+                bytesExpected = resumeOffset;
+                return;
+            } else if (statusCode >= 200 && statusCode <= 299 && downloadFile != NULL) {
+                // The whole file is coming again: start it over.
+                fflush(downloadFile);
+                ftruncate(fileno(downloadFile), 0);
+                fseeko(downloadFile, 0, SEEK_SET);
+                bytesWritten = 0;
+                resumeOffset = 0;
+            }
+        }
         if (statusCode >= 200 && statusCode <= 299 && [responseHeaders objectForKey:@"content-length"] != nil &&
             [responseHeaders objectForKey:@"content-encoding"] == nil)
-            bytesExpected = strtoll([[responseHeaders objectForKey:@"content-length"] UTF8String], NULL, 10);
+            bytesExpected = offset + strtoll([[responseHeaders objectForKey:@"content-length"] UTF8String], NULL, 10);
         return;
     }
 
@@ -390,6 +414,12 @@ static NSString *CPAcceptLanguageHeader(void)
 
 - (id)initWithRequest:(NSURLRequest *)aRequest downloadPath:(NSString *)path owner:(id)owner
 {
+    return [self initWithRequest:aRequest downloadPath:path resume:NO owner:owner];
+}
+
+- (id)initWithRequest:(NSURLRequest *)aRequest downloadPath:(NSString *)path
+               resume:(BOOL)resume owner:(id)owner
+{
     self = [super init];
     if (self == nil)
         return nil;
@@ -398,7 +428,15 @@ static NSString *CPAcceptLanguageHeader(void)
     downloadOwner = [owner retain];
     responseHeaders = [[NSMutableDictionary alloc] init];
     responseHeaderOrder = [[NSMutableArray alloc] init];
-    downloadFile = fopen([path fileSystemRepresentation], "wb");
+    downloadFile = resume ? fopen([path fileSystemRepresentation], "r+b") : NULL;
+    if (downloadFile != NULL && fseeko(downloadFile, 0, SEEK_END) == 0) {
+        resumeOffset = ftello(downloadFile);
+        bytesWritten = resumeOffset;
+    } else {
+        if (downloadFile != NULL)
+            fclose(downloadFile);
+        downloadFile = fopen([path fileSystemRepresentation], "wb");
+    }
     if (downloadFile == NULL) {
         [self release];
         return nil;
@@ -483,7 +521,16 @@ static NSString *CPAcceptLanguageHeader(void)
     curl_easy_setopt(easy, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_1_1);
     // Compression is a clear win here: these machines wait on the network far
     // longer than they spend unpacking gzip.
-    curl_easy_setopt(easy, CURLOPT_ACCEPT_ENCODING, "");
+    // ...but not when resuming: a range of compressed bytes can't be joined
+    // to the ones already saved.
+    // CURLOPT_RANGE rather than RESUME_FROM, which fails outright when the
+    // server sends the whole file instead.
+    if (resumeOffset > 0) {
+        char range[32];
+        snprintf(range, sizeof range, "%lld-", resumeOffset);
+        curl_easy_setopt(easy, CURLOPT_RANGE, range);
+    } else
+        curl_easy_setopt(easy, CURLOPT_ACCEPT_ENCODING, "");
     curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, CPHeaderCallback);
     curl_easy_setopt(easy, CURLOPT_HEADERDATA, self);
     curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, CPWriteCallback);
@@ -668,7 +715,7 @@ static NSString *CPAcceptLanguageHeader(void)
         }
         if (code != CURLE_OK) {
             error = [self errorForCurlCode:code];
-        } else if (statusCode >= 400) {
+        } else if (statusCode >= 400 && !rangeComplete) {
             error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorBadServerResponse
                                     userInfo:[NSDictionary dictionaryWithObject:
                                               [NSString stringWithFormat:@"The server answered with error %d.", statusCode]

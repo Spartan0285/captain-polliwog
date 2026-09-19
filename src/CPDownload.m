@@ -95,12 +95,28 @@ static NSString *CPCleanFilename(NSString *filename, NSURL *url)
     [super dealloc];
 }
 
+- (void)stopTask
+{
+    [task markCancelled];
+    [task detachDownloadOwner];
+    [[CPNetworkEngine sharedEngine] cancelTask:task];
+    [task release];
+    task = nil;
+}
+
 - (void)start
 {
+    BOOL resume = [[NSFileManager defaultManager] fileExistsAtPath:partialPath];
+
+    if (state == CPDownloadActive)
+        return;
+    [started release];
     started = [[NSDate date] retain];
-    task = [[CPNetworkTask alloc] initWithRequest:request downloadPath:partialPath owner:self];
+    receivedAtStart = resume ? received : 0;
+    task = [[CPNetworkTask alloc] initWithRequest:request downloadPath:partialPath resume:resume owner:self];
     if (task == nil) {
         state = CPDownloadFailed;
+        [failureReason release];
         failureReason = [@"The file could not be created. Check the downloads folder." retain];
         [self changed];
         return;
@@ -110,16 +126,37 @@ static NSString *CPCleanFilename(NSString *filename, NSURL *url)
     [self changed];
 }
 
-- (void)cancel
+- (void)pause
 {
+    if (state == CPDownloadQueued) {
+        state = CPDownloadPaused;
+        [self changed];
+        return;
+    }
     if (state != CPDownloadActive)
         return;
+    [self stopTask];
+    state = CPDownloadPaused;
+    [self changed];
+}
+
+- (void)resume
+{
+    if (state != CPDownloadPaused && state != CPDownloadFailed && state != CPDownloadCancelled)
+        return;
+    if (state == CPDownloadCancelled)
+        received = 0;
+    state = CPDownloadQueued;
+    [self changed];
+}
+
+- (void)cancel
+{
+    if (state == CPDownloadActive)
+        [self stopTask];
+    else if (state != CPDownloadQueued && state != CPDownloadPaused)
+        return;
     state = CPDownloadCancelled;
-    [task markCancelled];
-    [task detachDownloadOwner];
-    [[CPNetworkEngine sharedEngine] cancelTask:task];
-    [task release];
-    task = nil;
     [[NSFileManager defaultManager] removeFileAtPath:partialPath handler:nil];
     [self changed];
 }
@@ -149,7 +186,7 @@ static NSString *CPCleanFilename(NSString *filename, NSURL *url)
 - (NSString *)statusText
 {
     double seconds = -[started timeIntervalSinceNow];
-    double rate = (seconds > 0.5) ? (double)received / seconds : 0.0;
+    double rate = (seconds > 0.5) ? (double)(received - receivedAtStart) / seconds : 0.0;
 
     switch (state) {
     case CPDownloadFinished:
@@ -158,6 +195,12 @@ static NSString *CPCleanFilename(NSString *filename, NSURL *url)
         return [NSString stringWithFormat:@"Failed: %@", failureReason];
     case CPDownloadCancelled:
         return @"Stopped";
+    case CPDownloadQueued:
+        return (received > 0) ? [NSString stringWithFormat:@"Waiting, %@ so far", CPSizeText(received)] : @"Waiting";
+    case CPDownloadPaused:
+        if (expected > 0)
+            return [NSString stringWithFormat:@"Paused, %@ of %@", CPSizeText(received), CPSizeText(expected)];
+        return [NSString stringWithFormat:@"Paused, %@", CPSizeText(received)];
     default:
         break;
     }
@@ -190,7 +233,7 @@ static NSString *CPCleanFilename(NSString *filename, NSURL *url)
         state = CPDownloadFailed;
         [failureReason release];
         failureReason = [[error localizedDescription] copy];
-        [files removeFileAtPath:partialPath handler:nil];
+        // The partial file stays, so Retry can continue from it.
     } else if (![files movePath:partialPath toPath:finalPath handler:nil]) {
         state = CPDownloadFailed;
         [failureReason release];

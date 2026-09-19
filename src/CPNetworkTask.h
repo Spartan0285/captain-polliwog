@@ -41,6 +41,8 @@
     FILE                *downloadFile;
     long long            bytesWritten;
     long long            bytesExpected;
+    long long            resumeOffset;      // bytes already on disk when resuming
+    BOOL                 rangeComplete;     // the server says the partial file is whole
     double               lastProgressReport;
 }
 
@@ -50,6 +52,10 @@
 
 // A download: follows redirects itself and writes the body to path.
 - (id)initWithRequest:(NSURLRequest *)aRequest downloadPath:(NSString *)path owner:(id)owner;
+// Continues a paused or broken download: asks for the bytes after those
+// already in path, and starts over if the server can't send just those.
+- (id)initWithRequest:(NSURLRequest *)aRequest downloadPath:(NSString *)path
+               resume:(BOOL)resume owner:(id)owner;
 
 - (NSURLRequest *)request;
 - (CPCurlProtocol *)protocol;

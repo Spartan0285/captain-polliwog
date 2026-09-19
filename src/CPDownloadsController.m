@@ -9,6 +9,9 @@
 
 #define CPRowHeight 52.0f
 #define CPWindowWidth 440.0f
+#define CPTextWidth (CPWindowWidth - 176.0f)
+// More at once only splits the same connection and makes each one slower.
+#define CPMaxActiveDownloads 2
 
 // Top-to-bottom coordinates, so new rows simply go at the bottom.
 @interface CPFlippedView : NSView
@@ -26,7 +29,8 @@
 enum {
     CPTagName = 1,
     CPTagStatus,
-    CPTagButton
+    CPTagButton,            // Pause / Resume / Retry / Open
+    CPTagSecondButton       // Stop / Show / Remove
 };
 
 static NSProgressIndicator *CPProgressBarInRow(NSView *row)
@@ -40,12 +44,28 @@ static NSProgressIndicator *CPProgressBarInRow(NSView *row)
     return nil;
 }
 
+static NSButton *CPRowButton(NSView *row, int tag, float x, float width, id target)
+{
+    NSButton *button = [[NSButton alloc] initWithFrame:NSMakeRect(x, 14.0f, width, 24.0f)];
+    [button setTag:tag];
+    [button setBezelStyle:NSRoundedBezelStyle];
+    [[button cell] setControlSize:NSSmallControlSize];
+    [button setFont:[NSFont systemFontOfSize:[NSFont smallSystemFontSize]]];
+    [button setTarget:target];
+    [button setAction:@selector(rowButtonClicked:)];
+    [button setAutoresizingMask:NSViewMinXMargin];
+    [row addSubview:button];
+    [button release];
+    return button;
+}
+
 @interface CPDownloadsController (Private)
 - (NSView *)rowForDownload:(CPDownload *)download;
 - (void)layoutRows;
 - (void)updateRow:(NSView *)row forDownload:(CPDownload *)download;
 - (void)downloadChanged:(NSNotification *)notification;
 - (void)rowButtonClicked:(id)sender;
+- (void)startQueuedDownloads;
 - (void)writeDebugSnapshot;
 @end
 
@@ -56,11 +76,10 @@ static NSProgressIndicator *CPProgressBarInRow(NSView *row)
     NSView *row = [[[NSView alloc] initWithFrame:NSMakeRect(0.0f, 0.0f, CPWindowWidth, CPRowHeight)] autorelease];
     NSTextField *label;
     NSProgressIndicator *bar;
-    NSButton *button;
 
     [row setAutoresizingMask:NSViewWidthSizable];
 
-    label = [[NSTextField alloc] initWithFrame:NSMakeRect(12.0f, 30.0f, CPWindowWidth - 136.0f, 17.0f)];
+    label = [[NSTextField alloc] initWithFrame:NSMakeRect(12.0f, 30.0f, CPTextWidth, 17.0f)];
     [label setTag:CPTagName];
     [label setEditable:NO];
     [label setBezeled:NO];
@@ -71,7 +90,7 @@ static NSProgressIndicator *CPProgressBarInRow(NSView *row)
     [row addSubview:label];
     [label release];
 
-    bar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(12.0f, 18.0f, CPWindowWidth - 136.0f, 12.0f)];
+    bar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(12.0f, 18.0f, CPTextWidth, 12.0f)];
     [bar setStyle:NSProgressIndicatorBarStyle];
     [bar setControlSize:NSSmallControlSize];
     [bar setMinValue:0.0];
@@ -80,7 +99,7 @@ static NSProgressIndicator *CPProgressBarInRow(NSView *row)
     [row addSubview:bar];
     [bar release];
 
-    label = [[NSTextField alloc] initWithFrame:NSMakeRect(12.0f, 2.0f, CPWindowWidth - 136.0f, 14.0f)];
+    label = [[NSTextField alloc] initWithFrame:NSMakeRect(12.0f, 2.0f, CPTextWidth, 14.0f)];
     [label setTag:CPTagStatus];
     [label setEditable:NO];
     [label setBezeled:NO];
@@ -91,17 +110,8 @@ static NSProgressIndicator *CPProgressBarInRow(NSView *row)
     [row addSubview:label];
     [label release];
 
-    button = [[NSButton alloc] initWithFrame:NSMakeRect(CPWindowWidth - 120.0f, 14.0f, 112.0f, 24.0f)];
-    [button setTag:CPTagButton];
-    [button setBezelStyle:NSRoundedBezelStyle];
-    [[button cell] setControlSize:NSSmallControlSize];
-    [button setFont:[NSFont systemFontOfSize:[NSFont smallSystemFontSize]]];
-    [button setTarget:self];
-    [button setAction:@selector(rowButtonClicked:)];
-    [button setAutoresizingMask:NSViewMinXMargin];
-    [row addSubview:button];
-    [button release];
-
+    CPRowButton(row, CPTagButton, CPWindowWidth - 158.0f, 76.0f, self);
+    CPRowButton(row, CPTagSecondButton, CPWindowWidth - 84.0f, 76.0f, self);
     return row;
 }
 
@@ -122,29 +132,44 @@ static NSProgressIndicator *CPProgressBarInRow(NSView *row)
 {
     NSProgressIndicator *bar = CPProgressBarInRow(row);
     NSButton *button = [row viewWithTag:CPTagButton];
+    NSButton *second = [row viewWithTag:CPTagSecondButton];
     double fraction = [download fractionDone];
-    BOOL active = ([download state] == CPDownloadActive);
+    CPDownloadState state = [download state];
+    BOOL active = (state == CPDownloadActive);
 
     [[row viewWithTag:CPTagName] setStringValue:[download filename]];
     [[row viewWithTag:CPTagStatus] setStringValue:[download statusText]];
 
-    [bar setHidden:!active];
-    if (active) {
-        [bar setIndeterminate:(fraction < 0.0)];
-        if (fraction >= 0.0)
-            [bar setDoubleValue:fraction];
-        else
-            [bar startAnimation:self];
+    // A paused download keeps its bar, standing still.
+    [bar setHidden:!(active || state == CPDownloadPaused)];
+    if (active && fraction < 0.0) {
+        [bar setIndeterminate:YES];
+        [bar startAnimation:self];
     } else {
         [bar stopAnimation:self];
+        [bar setIndeterminate:NO];
+        [bar setDoubleValue:(fraction >= 0.0 ? fraction : 0.0)];
     }
 
-    if (active)
-        [button setTitle:@"Stop"];
-    else if ([download state] == CPDownloadFinished)
-        [button setTitle:@"Show in Finder"];
-    else
-        [button setTitle:@"Remove"];
+    switch (state) {
+    case CPDownloadActive:
+    case CPDownloadQueued:
+        [button setTitle:@"Pause"];
+        [second setTitle:@"Stop"];
+        break;
+    case CPDownloadPaused:
+        [button setTitle:@"Resume"];
+        [second setTitle:@"Stop"];
+        break;
+    case CPDownloadFinished:
+        [button setTitle:@"Open"];
+        [second setTitle:@"Show"];
+        break;
+    default:
+        [button setTitle:@"Retry"];
+        [second setTitle:@"Remove"];
+        break;
+    }
 }
 
 - (void)downloadChanged:(NSNotification *)notification
@@ -155,6 +180,10 @@ static NSProgressIndicator *CPProgressBarInRow(NSView *row)
     if (index == NSNotFound)
         return;
     [self updateRow:[[list subviews] objectAtIndex:index] forDownload:download];
+
+    // One finished, paused or joined the queue: perhaps it is another's turn.
+    if ([download state] != CPDownloadActive)
+        [self performSelector:@selector(startQueuedDownloads) withObject:nil afterDelay:0.0];
 
     if ([download state] == CPDownloadFinished || [download state] == CPDownloadFailed) {
         if (CPDebugSnapshotPath() != nil)
@@ -171,18 +200,58 @@ static NSProgressIndicator *CPProgressBarInRow(NSView *row)
     if (index == NSNotFound)
         return;
     download = [downloads objectAtIndex:index];
+
+    if ([sender tag] == CPTagButton) {
+        switch ([download state]) {
+        case CPDownloadActive:
+        case CPDownloadQueued:
+            [download pause];
+            break;
+        case CPDownloadFinished:
+            if (![[NSWorkspace sharedWorkspace] openFile:[download path]])
+                NSBeep();
+            break;
+        default:
+            [download resume];
+            break;
+        }
+        return;
+    }
+
     switch ([download state]) {
     case CPDownloadActive:
+    case CPDownloadQueued:
+    case CPDownloadPaused:
         [download cancel];
         break;
     case CPDownloadFinished:
         [[NSWorkspace sharedWorkspace] selectFile:[download path] inFileViewerRootedAtPath:@""];
         break;
     default:
+        // A failed download's partial file goes with it.
+        if ([download state] == CPDownloadFailed)
+            [[NSFileManager defaultManager] removeFileAtPath:[download path] handler:nil];
         [row removeFromSuperview];
         [downloads removeObjectAtIndex:index];
         [self layoutRows];
         break;
+    }
+}
+
+- (void)startQueuedDownloads
+{
+    unsigned index, active = 0;
+
+    for (index = 0; index < [downloads count]; index++) {
+        if ([[downloads objectAtIndex:index] state] == CPDownloadActive)
+            active++;
+    }
+    for (index = 0; index < [downloads count] && active < CPMaxActiveDownloads; index++) {
+        CPDownload *download = [downloads objectAtIndex:index];
+        if ([download state] == CPDownloadQueued) {
+            [download start];
+            active++;
+        }
     }
 }
 
@@ -215,7 +284,7 @@ static NSProgressIndicator *CPProgressBarInRow(NSView *row)
     NSButton *clear;
 
     [window setTitle:@"Downloads"];
-    [window setMinSize:NSMakeSize(320.0f, 160.0f)];
+    [window setMinSize:NSMakeSize(360.0f, 160.0f)];
     [window center];
 
     self = [super initWithWindow:window];
@@ -250,6 +319,7 @@ static NSProgressIndicator *CPProgressBarInRow(NSView *row)
     clear = [[NSButton alloc] initWithFrame:NSMakeRect(10.0f, 8.0f, 80.0f, 24.0f)];
     [clear setBezelStyle:NSRoundedBezelStyle];
     [clear setTitle:@"Clear"];
+    [clear setToolTip:@"Remove finished and stopped downloads from the list"];
     [clear setTarget:self];
     [clear setAction:@selector(clearFinished:)];
     [content addSubview:clear];
@@ -280,7 +350,13 @@ static NSProgressIndicator *CPProgressBarInRow(NSView *row)
     [self layoutRows];
     [self updateRow:row forDownload:download];
     [self showWindow:self];
-    [download start];
+    [self startQueuedDownloads];
+    // Debugging: pause the first download after two seconds and resume it
+    // three seconds later, which exercises continuing a partial file.
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugDownloadPause"] && [downloads count] == 1) {
+        [download performSelector:@selector(pause) withObject:nil afterDelay:2.0];
+        [download performSelector:@selector(resume) withObject:nil afterDelay:5.0];
+    }
     return download;
 }
 
@@ -288,10 +364,22 @@ static NSProgressIndicator *CPProgressBarInRow(NSView *row)
 {
     unsigned index;
     for (index = 0; index < [downloads count]; index++) {
-        if ([[downloads objectAtIndex:index] state] == CPDownloadActive)
+        CPDownloadState state = [[downloads objectAtIndex:index] state];
+        if (state == CPDownloadActive || state == CPDownloadQueued)
             return YES;
     }
     return NO;
+}
+
+- (unsigned)activeDownloadCount
+{
+    unsigned index, count = 0;
+    for (index = 0; index < [downloads count]; index++) {
+        CPDownloadState state = [[downloads objectAtIndex:index] state];
+        if (state == CPDownloadActive || state == CPDownloadQueued)
+            count++;
+    }
+    return count;
 }
 
 - (IBAction)clearFinished:(id)sender
@@ -300,7 +388,8 @@ static NSProgressIndicator *CPProgressBarInRow(NSView *row)
     NSArray *rows = [[[list subviews] copy] autorelease];
 
     for (index = [downloads count] - 1; index >= 0; index--) {
-        if ([[downloads objectAtIndex:index] state] != CPDownloadActive) {
+        CPDownloadState state = [[downloads objectAtIndex:index] state];
+        if (state == CPDownloadFinished || state == CPDownloadCancelled) {
             [[rows objectAtIndex:index] removeFromSuperview];
             [downloads removeObjectAtIndex:index];
         }
