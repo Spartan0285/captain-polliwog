@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Canvas path throughput</title>
+<!--
+  What Charts-chartjs spends its time on, with nothing else in the way.
+
+  The Speedometer chart suites are, on this machine, mostly CoreGraphics:
+  a profile of Charts-chartjs puts a quarter of the main thread inside
+  CGContextDrawPath and its rasterizer, and a third under the canvas
+  fill() and stroke() entry points. A whole Speedometer run costs the
+  better part of an hour, which is a poor way to answer a question about
+  a pixel format. This page asks the same question in a few seconds.
+
+  It draws what Chart.js draws: grid lines, a filled area under a
+  polyline, the polyline itself, a small filled-and-stroked circle at
+  every point, and the axis labels. Nothing here is a real chart - the
+  numbers are a fixed pseudo-random sequence so two runs draw exactly
+  the same pixels.
+-->
+<style>
+body { font: 13px/1.5 'Lucida Grande', sans-serif; margin: 20px; }
+canvas { border: 1px solid #ccc; }
+#out { white-space: pre; font-family: Monaco, monospace; margin-top: 12px; }
+</style>
+<canvas id="c" width="600" height="400"></canvas>
+<div id="out">running...</div>
+<script>
+var canvas = document.getElementById("c");
+var ctx = canvas.getContext("2d");
+var out = document.getElementById("out");
+
+// A fixed sequence, so every run draws the same chart.
+var seed = 12345;
+function random() {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+}
+
+var SERIES = 4, POINTS = 40;
+var data = [];
+for (var s = 0; s < SERIES; s++) {
+    var row = [];
+    for (var p = 0; p < POINTS; p++)
+        row.push(random());
+    data.push(row);
+}
+var colours = ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2"];
+
+function drawChart() {
+    var w = canvas.width, h = canvas.height;
+    var left = 40, bottom = h - 30, top = 10, right = w - 10;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Grid: thin stroked lines, one path each, as Chart.js draws them.
+    ctx.strokeStyle = "#e0e0e0";
+    ctx.lineWidth = 1;
+    for (var i = 0; i <= 10; i++) {
+        var y = top + (bottom - top) * i / 10;
+        ctx.beginPath();
+        ctx.moveTo(left, y);
+        ctx.lineTo(right, y);
+        ctx.stroke();
+    }
+
+    for (var s = 0; s < SERIES; s++) {
+        var row = data[s];
+        var x = function (p) { return left + (right - left) * p / (POINTS - 1); };
+        var y = function (p) { return bottom - (bottom - top) * row[p] * 0.9; };
+
+        // The filled area: one long path, closed back along the axis.
+        ctx.beginPath();
+        ctx.moveTo(x(0), y(0));
+        for (var p = 1; p < POINTS; p++)
+            ctx.lineTo(x(p), y(p));
+        ctx.lineTo(x(POINTS - 1), bottom);
+        ctx.lineTo(x(0), bottom);
+        ctx.closePath();
+        ctx.fillStyle = colours[s];
+        ctx.globalAlpha = 0.15;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+
+        // The line itself.
+        ctx.beginPath();
+        ctx.moveTo(x(0), y(0));
+        for (var p = 1; p < POINTS; p++)
+            ctx.lineTo(x(p), y(p));
+        ctx.strokeStyle = colours[s];
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // A point at every sample: the small fill-then-stroke that a
+        // sprite cache would replace, and the reason the colour count
+        // matters.
+        ctx.fillStyle = "#fff";
+        for (var p = 0; p < POINTS; p++) {
+            ctx.beginPath();
+            ctx.arc(x(p), y(p), 3, 0, Math.PI * 2, false);
+            ctx.fill();
+            ctx.stroke();
+        }
+    }
+
+    ctx.fillStyle = "#333";
+    ctx.font = "11px sans-serif";
+    for (var i = 0; i <= 10; i++)
+        ctx.fillText((i * 10) + "", 4, top + (bottom - top) * (10 - i) / 10 + 4);
+}
+
+function run() {
+    // One draw first, so the first timed one is not paying for whatever
+    // the context sets up lazily.
+    drawChart();
+
+    var frames = 0, start = new Date().getTime(), now = start;
+    while (now - start < 3000) {
+        drawChart();
+        frames++;
+        now = new Date().getTime();
+    }
+    var ms = (now - start) / frames;
+    var label = location.search.replace(/^\?/, "") || "canvas-paths";
+    out.textContent = ms.toFixed(2) + " ms per chart (" + frames + " in "
+        + (now - start) + " ms)";
+
+    try {
+        var request = new XMLHttpRequest();
+        request.open("POST", "/canvas-paths", true);
+        request.setRequestHeader("Content-Type", "application/json");
+        request.send(JSON.stringify({ label: label, msPerChart: ms, frames: frames }));
+    } catch (e) { }
+}
+
+setTimeout(run, 200);
+</script>

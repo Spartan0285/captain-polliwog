@@ -1,0 +1,75 @@
+GCC PR target/88343: r31 is saved in every PIC function on Darwin
+
+powerpc-darwin sets up the picbase in r31 only when a function really
+needs it, but decides whether to *save* r31 on nothing more than
+-fPIC - and -fPIC is the Darwin default. So every function gets
+
+	stw r31,-4(r1)
+	...
+	lwz r31,-4(r1)
+
+whether or not it ever touches r31. In a WebKit build that is about
+19% of all functions: two instructions, a stack store and a load that
+misses on a cold frame, in the prologue and epilogue of sixteen
+thousand functions.
+
+Iain Sandoe reported this in December 2018 and it was fixed for GCC
+7.5 and 8.3 - "it's possibly required for 6.x if someone is
+maintaining a branch there, they might wish to apply it." Nobody did.
+We are, so here it is.
+
+This is the form that shipped in 7.5 (Alan Modra's rework, r268722),
+not the first attempt: the original fix was reverted on both branches
+because it under-saved r30 for 32-bit soft-float ABI_V4 Linux and
+miscompiled glibc. That failure was entirely on the V4 side and cannot
+reach a Darwin-only cross compiler, but the later form is the one
+upstream settled on, so it is the one to carry.
+
+The dead #if TARGET_MACHO block in first_reg_to_save goes with it, as
+upstream removed it in the same commit: it tested exactly the
+predicate that rs6000_reg_live_or_pic_offset_p now tests.
+
+--- a/gcc/config/rs6000/rs6000.c
++++ b/gcc/config/rs6000/rs6000.c
+@@ -24107,8 +24107,25 @@
+ 	      || get_pool_size ()))
+ 	return true;
+ 
+-      if ((DEFAULT_ABI == ABI_V4 || DEFAULT_ABI == ABI_DARWIN)
+-	  && flag_pic)
++      /* When calling eh_return, we must return true for all the cases
++	 where conditional_register_usage marks the PIC offset reg
++	 call used or fixed.  */
++      if (crtl->calls_eh_return
++	  && ((DEFAULT_ABI == ABI_V4 && flag_pic)
++	      || (DEFAULT_ABI == ABI_DARWIN && flag_pic)))
++	return true;
++
++      if (DEFAULT_ABI == ABI_V4
++	  && (flag_pic == 1 || (flag_pic && TARGET_SECURE_PLT))
++	  && df_regs_ever_live_p (RS6000_PIC_OFFSET_TABLE_REGNUM))
++	return true;
++
++      /* Darwin sets up the picbase only when it is really used, so
++	 saving r31 for any -fPIC function saves it in the ~19% of
++	 functions that never touch it.  Test the same predicate the
++	 prologue does.  (GCC PR target/88343, fixed in 7.5 and 8.3.)  */
++      if (DEFAULT_ABI == ABI_DARWIN
++	  && flag_pic && crtl->uses_pic_offset_table)
+ 	return true;
+     }
+ 
+@@ -24139,13 +24156,6 @@
+       && rs6000_reg_live_or_pic_offset_p (RS6000_PIC_OFFSET_TABLE_REGNUM))
+     first_reg = RS6000_PIC_OFFSET_TABLE_REGNUM;
+ 
+-#if TARGET_MACHO
+-  if (flag_pic
+-      && crtl->uses_pic_offset_table
+-      && first_reg > RS6000_PIC_OFFSET_TABLE_REGNUM)
+-    return RS6000_PIC_OFFSET_TABLE_REGNUM;
+-#endif
+-
+   return first_reg;
+ }
+ 
