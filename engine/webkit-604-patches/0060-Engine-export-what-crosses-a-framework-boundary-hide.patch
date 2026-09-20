@@ -1,0 +1,113 @@
+From de865eedd1377751e648a2c527fcc2336d4f79ee Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Sun, 20 Sep 2026 15:09:16 -0400
+Subject: [PATCH] Engine: export what crosses a framework boundary, hide the
+ rest
+
+Built with -fvisibility=hidden the three frameworks link, run and pass
+engine/tests/features-modern.html, once four things are said out loud.
+
+WebCore's ContentExtensions instantiates JavaScriptCore's Yarr parser
+template, which calls unicodePropertyRanges - a function we added, and
+never annotated. WebKitLegacy calls Pasteboard and HTMLCollection
+across the boundary, and Document::unregisterCollection with them.
+Those four are the whole list: everything else WebKit already annotates
+with WEBCORE_EXPORT, JS_EXPORT_PRIVATE and WTF_EXPORT_PRIVATE, which
+expand to visibility("default") on Cocoa. The annotations have been
+right all along; nothing was asking them the question.
+
+WebKitLegacy itself keeps default visibility. It is the framework
+applications link against, and its API is not only Objective-C classes:
+it is also plain C globals, the notification names among them. Hiding
+those drops them from the export table and the application dies in dyld
+before main. It did, once, and the crash log says exactly which symbol.
+
+What this is for: WebCore's stub section held 7,564 eight-instruction
+PIC stubs, and 5,484 of them pointed at symbols WebCore itself defines,
+because the CMake Mac port exported all 73,627 of them and dyld is
+entitled to replace an exported symbol. Now WebCore exports 6,917 and
+has 2,237 stubs; JavaScriptCore has 342 where it had 2,359. WebCore is
+1.4MB smaller.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ Source/JavaScriptCore/yarr/YarrPattern.h | 2 +-
+ Source/WebCore/dom/Document.h            | 2 +-
+ Source/WebCore/html/HTMLCollection.h     | 2 +-
+ Source/WebCore/platform/Pasteboard.h     | 2 +-
+ Source/WebKitLegacy/CMakeLists.txt       | 7 +++++++
+ 5 files changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/Source/JavaScriptCore/yarr/YarrPattern.h b/Source/JavaScriptCore/yarr/YarrPattern.h
+index a3268c35..5f192e8f 100644
+--- a/Source/JavaScriptCore/yarr/YarrPattern.h
++++ b/Source/JavaScriptCore/yarr/YarrPattern.h
+@@ -39,7 +39,7 @@ namespace JSC { namespace Yarr {
+ typedef Vector<std::pair<UChar32, UChar32>> UnicodePropertyRanges;
+ // Looks up "Name" or "Name=Value" (General_Category, Script,
+ // Script_Extensions, or a binary property); false if there is no such property.
+-bool unicodePropertyRanges(const String& expression, UnicodePropertyRanges&);
++JS_EXPORT_PRIVATE bool unicodePropertyRanges(const String& expression, UnicodePropertyRanges&);
+ 
+ struct PatternDisjunction;
+ 
+diff --git a/Source/WebCore/dom/Document.h b/Source/WebCore/dom/Document.h
+index 5f972301..33b9a1f3 100644
+--- a/Source/WebCore/dom/Document.h
++++ b/Source/WebCore/dom/Document.h
+@@ -749,7 +749,7 @@ public:
+     void registerNodeListForInvalidation(LiveNodeList&);
+     void unregisterNodeListForInvalidation(LiveNodeList&);
+     WEBCORE_EXPORT void registerCollection(HTMLCollection&);
+-    void unregisterCollection(HTMLCollection&);
++    WEBCORE_EXPORT void unregisterCollection(HTMLCollection&);
+     void collectionCachedIdNameMap(const HTMLCollection&);
+     void collectionWillClearIdNameMap(const HTMLCollection&);
+     bool shouldInvalidateNodeListAndCollectionCaches() const;
+diff --git a/Source/WebCore/html/HTMLCollection.h b/Source/WebCore/html/HTMLCollection.h
+index 75ac4345..f87c1e5d 100644
+--- a/Source/WebCore/html/HTMLCollection.h
++++ b/Source/WebCore/html/HTMLCollection.h
+@@ -60,7 +60,7 @@ private:
+ };
+ 
+ // HTMLCollection subclasses NodeList to maintain legacy ObjC API compatibility.
+-class HTMLCollection : public NodeList {
++class WEBCORE_EXPORT HTMLCollection : public NodeList {
+ public:
+     virtual ~HTMLCollection();
+ 
+diff --git a/Source/WebCore/platform/Pasteboard.h b/Source/WebCore/platform/Pasteboard.h
+index 01c7e0f5..731b025f 100644
+--- a/Source/WebCore/platform/Pasteboard.h
++++ b/Source/WebCore/platform/Pasteboard.h
+@@ -145,7 +145,7 @@ struct PasteboardPlainText {
+ #endif
+ };
+ 
+-class Pasteboard {
++class WEBCORE_EXPORT Pasteboard {
+     WTF_MAKE_NONCOPYABLE(Pasteboard); WTF_MAKE_FAST_ALLOCATED;
+ public:
+     Pasteboard();
+diff --git a/Source/WebKitLegacy/CMakeLists.txt b/Source/WebKitLegacy/CMakeLists.txt
+index 41d9c2ad..f07a6dec 100644
+--- a/Source/WebKitLegacy/CMakeLists.txt
++++ b/Source/WebKitLegacy/CMakeLists.txt
+@@ -52,6 +52,13 @@ if (TARGET WebKitGUID)
+ endif ()
+ 
+ if (APPLE)
++    # WebKitLegacy is the framework applications link against, and its API is
++    # not only Objective-C classes: it is also plain C globals, the
++    # notification names among them. Hidden visibility is right for WebCore
++    # and JavaScriptCore, which only talk to each other, but here it would
++    # quietly drop every one of those globals from the export table and the
++    # application would die in dyld on the first launch. It did.
++    target_compile_options(WebKit PRIVATE -fvisibility=default)
+     if (POLLIWOG_LEGACY_MAC)
+         # As on Mac OS X 10.5, this is WebKit.framework itself, and re-exports
+         # WebCore (and through it libobjc) to the applications linked to it.
+-- 
+2.54.0 (Apple Git-157)
+
