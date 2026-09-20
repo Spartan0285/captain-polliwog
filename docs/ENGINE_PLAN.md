@@ -570,3 +570,65 @@ Two suites:
    its time. Canvas-level work, as before.
 2. **TodoMVC-JavaScript-ES5** (needs 9%): the remaining layout cost on a page
    whose every change relayouts the list. Relayout boundaries are the fix.
+
+## 20 September: what the ES5 suite actually costs
+
+The plan said the next thing for TodoMVC-JavaScript-ES5 was WebKit's HTML
+fast-path parser, which Apple measured at about 20% on this very suite. A
+fresh profile says otherwise: **HTML parsing is 2.4% of the main thread
+here**. Apple's 20% was against their own baseline, on hardware where the
+rest is far cheaper; our engine's costs sit elsewhere. That saved a week or
+two of work on the wrong thing, and is the argument for profiling the machine
+in front of you rather than reading someone else's numbers.
+
+Where the time went instead (4176 main-thread samples, after patches 0053 to
+0056):
+
+| | |
+|---|---|
+| layout | 34.8% |
+| unclassified | 31.4% |
+| style | 10.3% |
+| DOM | 7.1% |
+| JS runtime | 6.4% |
+| parse/load | **2.4%** |
+
+The unclassified third is where the interesting costs turned out to be, and
+almost none of them are layout algorithms:
+
+- `restGPRx` 2.9% - GCC's out-of-line register restore helper, reached through
+  a **branch island** because WebCore is too big to reach it directly. No GCC
+  6.5 option turns this off on darwin-ppc; `-mno-multiple`, `-fno-shrink-wrap`
+  and `-O2` all still emit the call.
+- `pthread_getspecific` 2.2%, mostly under `fastMalloc` and `fastFree`:
+  bmalloc's per-thread cache. bmalloc has a fast path for this
+  (`_pthread_getspecific_direct`) but it needs `<System/pthread_machdep.h>`,
+  which Leopard does not have - it arrives in Snow Leopard. No cheap fix.
+- `floorf`, `round`, `lroundf` about 2%, all through dyld stubs, called from
+  text measurement and repaint rectangles. The G4 has no `frim`, so GCC cannot
+  inline them.
+- `objc_msgSend_stret` 1.5%, under `-[NSScrollView documentVisibleRect]`.
+
+### What came of it
+
+**The visible content rectangle is now held for the length of a layout or a
+paint** (patch 0057). Neither can move the view while it runs, and layout
+asks hundreds of times - every repaint rectangle wants it - at the cost of an
+Objective-C call returning a structure plus a `floorf` and a `ceilf`. ES5
+went from about 5332 to a mean of 5152 ms.
+
+**Inlining `computedCSSPadding` made things worse, and was reverted.** It is
+the hottest single WebCore symbol in the profile (2.3%), a cross-translation
+-unit call wrapping what is usually `return length.value()`, so moving it into
+the header looked free. Six runs said 5286 ms against 5126 for the same build
+without it - about 3% slower. On a 32KB instruction cache, inlining a small
+function into several hundred call sites in a 30MB library costs more than the
+call it saves. Worth remembering before the next "obviously free" inline.
+
+Measurement discipline this needed: a single run of this suite varies by 3%,
+and two batches of the same build differed by 1.2%. Nothing under about 2% is
+a result without several runs on both sides.
+
+### Where ES5 stands
+
+About 5152 ms against PowerFox's 4846: 6.3% behind, from 9-10%.

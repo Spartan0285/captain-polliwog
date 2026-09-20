@@ -1,7 +1,7 @@
 From a3b5c6a1ec32837c40ac1528774e6770227749ec Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Fri, 18 Sep 2026 19:38:14 -0400
-Subject: [PATCH 39/56] CSS: cascade layers, range media queries, :is() and
+Subject: [PATCH 39/57] CSS: cascade layers, range media queries, :is() and
  :where()
 
 - @layer blocks apply as unlayered rules in source order (kept as a

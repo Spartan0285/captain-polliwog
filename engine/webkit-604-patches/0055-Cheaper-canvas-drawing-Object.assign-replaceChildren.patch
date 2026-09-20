@@ -1,7 +1,7 @@
 From a589619033b902920550ab526d1c8371a11500de Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Sun, 20 Sep 2026 01:04:06 -0400
-Subject: [PATCH 55/56] Cheaper canvas drawing, Object.assign, replaceChildren,
+Subject: [PATCH 55/57] Cheaper canvas drawing, Object.assign, replaceChildren,
  sticky, :focus-visible
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

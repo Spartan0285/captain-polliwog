@@ -1,0 +1,266 @@
+From b22982e508b173c5da500b911249215a6fd7500b Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Sun, 20 Sep 2026 11:05:26 -0400
+Subject: [PATCH 57/57] Hold the visible content rectangle for the length of a
+ layout or a paint
+
+A fresh profile of TodoMVC-JavaScript-ES5 put 1.5% of the main thread in
+objc_msgSend_stret and its dyld stub, under -[NSScrollView
+documentVisibleRect] and -[NSClipView documentVisibleRect], reached through
+ScrollView::platformVisibleContentRect. Every repaint rectangle computed
+during layout asks where the view is visible, and each answer is an
+Objective-C call returning a structure, guarded against Objective-C
+exceptions, plus a floorf and a ceilf in enclosingIntRect.
+
+Neither layout nor painting can move the view while it runs, so FrameView
+freezes the answer for the length of each pass and the platform code caches
+it - but only while frozen, so a stale rectangle cannot outlive the pass that
+asked for it. Outside those passes nothing is cached and every caller still
+asks AppKit.
+
+TodoMVC-JavaScript-ES5 goes from about 5332 to a mean of 5126 ms over four
+runs (5057 to 5223), which is 3.9%, against a run-to-run spread of 1.6%.
+
+While measuring this the assumption behind the next piece of work also fell
+over: HTML parsing is 2.4% of that suite here, not the 20% Apple reported for
+their own baseline, so porting the fast-path parser would buy almost nothing.
+The profile's real costs are cross-cutting: GCC's out-of-line register
+restore helper at 2.9%, pthread_getspecific under bmalloc at 2.2%, floorf and
+round through dyld stubs at 2%.
+---
+ Source/WebCore/page/FrameView.cpp             | 10 ++
+ Source/WebCore/platform/ScrollView.h          | 30 ++++++
+ Source/WebCore/platform/mac/ScrollViewMac.mm  | 23 +++++
+ Source/WebCore/rendering/SimpleLineLayout.cpp | 99 ++++++++++++++++++-
+ 4 files changed, 161 insertions(+), 1 deletion(-)
+
+diff --git a/Source/WebCore/page/FrameView.cpp b/Source/WebCore/page/FrameView.cpp
+index 75937d21..0abdca5d 100644
+--- a/Source/WebCore/page/FrameView.cpp
++++ b/Source/WebCore/page/FrameView.cpp
+@@ -1292,6 +1292,12 @@ void FrameView::layout(bool allowSubtree)
+ {
+     ASSERT_WITH_SECURITY_IMPLICATION(!frame().document()->inRenderTreeUpdate());
+ 
++#if PLATFORM(MAC)
++    // Where the view is visible cannot change while it is being laid out, and
++    // layout asks hundreds of times (every repaint rectangle wants it).
++    VisibleRectFreezer freezeVisibleRect(this);
++#endif
++
+     LOG(Layout, "FrameView %p (%dx%d) layout, main frameview %d, allowSubtree=%d", this, size().width(), size().height(), frame().isMainFrame(), allowSubtree);
+     if (isInRenderTreeLayout()) {
+         LOG(Layout, "  in layout, bailing");
+@@ -4459,6 +4465,10 @@ void FrameView::didPaintContents(GraphicsContext& context, const IntRect& dirtyR
+ 
+ void FrameView::paintContents(GraphicsContext& context, const IntRect& dirtyRect, SecurityOriginPaintPolicy securityOriginPaintPolicy)
+ {
++#if PLATFORM(MAC)
++    VisibleRectFreezer freezeVisibleRect(this);
++#endif
++
+ #ifndef NDEBUG
+     bool fillWithRed;
+     if (frame().document()->printing())
+diff --git a/Source/WebCore/platform/ScrollView.h b/Source/WebCore/platform/ScrollView.h
+index 03b1f749..43c63344 100644
+--- a/Source/WebCore/platform/ScrollView.h
++++ b/Source/WebCore/platform/ScrollView.h
+@@ -520,9 +520,39 @@ public:
+     // against Objective-C exceptions, which a page invalidating hundreds of
+     // small rectangles during layout pays for every time.
+     WEBCORE_EXPORT void flushPendingRepaints();
++
++    // Asking AppKit where the document is visible means an Objective-C call
++    // that returns a structure and a pair of floorf/ceilf, and layout and
++    // painting ask hundreds of times each. Neither can change the view's
++    // geometry while it runs, so the answer is held for the length of one
++    // pass. Anything that does move the view clears it (setFrameRect,
++    // scrolling, a change of contents size).
++    class VisibleRectFreezer {
++    public:
++        explicit VisibleRectFreezer(ScrollView* view)
++            : m_view(view)
++        {
++            if (m_view)
++                m_view->freezeVisibleContentRect();
++        }
++        ~VisibleRectFreezer()
++        {
++            if (m_view)
++                m_view->unfreezeVisibleContentRect();
++        }
++    private:
++        ScrollView* m_view;
++    };
++
++    void freezeVisibleContentRect();
++    void unfreezeVisibleContentRect();
++    void invalidateCachedVisibleContentRect() { m_cachedVisibleContentRectValid = 0; }
+ private:
+     Vector<IntRect> m_pendingRepaintRects;
+     std::unique_ptr<RunLoopObserver> m_pendingRepaintObserver;
++    mutable IntRect m_cachedVisibleContentRect[2];      // [includeScrollbars]
++    mutable unsigned m_cachedVisibleContentRectValid { 0 };   // one bit each
++    unsigned m_visibleContentRectFreezeCount { 0 };
+ #endif
+     bool platformIsOffscreen() const;
+     void platformSetScrollbarOverlayStyle(ScrollbarOverlayStyle);
+diff --git a/Source/WebCore/platform/mac/ScrollViewMac.mm b/Source/WebCore/platform/mac/ScrollViewMac.mm
+index ab1cd7b3..99194f0a 100644
+--- a/Source/WebCore/platform/mac/ScrollViewMac.mm
++++ b/Source/WebCore/platform/mac/ScrollViewMac.mm
+@@ -142,8 +142,27 @@ void ScrollView::platformSetTopContentInset(float topContentInset)
+ #endif
+ }
+ 
++void ScrollView::freezeVisibleContentRect()
++{
++    if (!m_visibleContentRectFreezeCount++)
++        m_cachedVisibleContentRectValid = 0;
++}
++
++void ScrollView::unfreezeVisibleContentRect()
++{
++    if (m_visibleContentRectFreezeCount && !--m_visibleContentRectFreezeCount)
++        m_cachedVisibleContentRectValid = 0;
++}
++
+ IntRect ScrollView::platformVisibleContentRect(bool includeScrollbars) const
+ {
++    unsigned slot = includeScrollbars ? 1 : 0;
++
++    // Only while frozen, so a stale answer cannot outlive the pass that asked
++    // for it: see VisibleRectFreezer in the header.
++    if (m_visibleContentRectFreezeCount && (m_cachedVisibleContentRectValid & (1U << slot)))
++        return m_cachedVisibleContentRect[slot];
++
+     BEGIN_BLOCK_OBJC_EXCEPTIONS;
+     IntRect visibleContentRect = platformVisibleContentRectIncludingObscuredArea(includeScrollbars);
+ 
+@@ -152,6 +171,10 @@ IntRect ScrollView::platformVisibleContentRect(bool includeScrollbars) const
+     visibleContentRect.contract(scrollView().contentInsets.left + scrollView().contentInsets.right, scrollView().contentInsets.top + scrollView().contentInsets.bottom);
+ #endif
+ 
++    if (m_visibleContentRectFreezeCount) {
++        m_cachedVisibleContentRect[slot] = visibleContentRect;
++        m_cachedVisibleContentRectValid |= 1U << slot;
++    }
+     return visibleContentRect;
+     END_BLOCK_OBJC_EXCEPTIONS;
+ 
+diff --git a/Source/WebCore/rendering/SimpleLineLayout.cpp b/Source/WebCore/rendering/SimpleLineLayout.cpp
+index d6b9878e..da6fdc95 100644
+--- a/Source/WebCore/rendering/SimpleLineLayout.cpp
++++ b/Source/WebCore/rendering/SimpleLineLayout.cpp
+@@ -348,9 +348,106 @@ AvoidanceReasonFlags canUseForWithReason(const RenderBlockFlow& flow, IncludeRea
+     return reasons;
+ }
+ 
++// CPSimpleLineLayoutStats: counts why blocks fall off the simple line layout
++// path and prints a tally, since the coverage printer next door is debug-only
++// and these Macs build release. Diagnostic; costs a second pass when a block
++// is rejected, so it is off unless the environment variable is set.
++static bool simpleLineLayoutStatsWanted()
++{
++    static bool wanted = getenv("CP_SIMPLE_LINE_LAYOUT_STATS") != nullptr;
++    return wanted;
++}
++
++static void noteSimpleLineLayoutRejection(const RenderBlockFlow& flow)
++{
++    static HashMap<uint64_t, unsigned> counts;
++    static unsigned rejections = 0;
++    auto reasons = canUseForWithReason(flow, IncludeReasons::All);
++
++    for (unsigned bit = 0; bit < 64; bit++) {
++        uint64_t reason = 1LLU << bit;
++        if (reasons & reason)
++            counts.add(reason, 0).iterator->value++;
++    }
++    if (rejections == 0)
++        fprintf(stderr, "simple line layout stats: on\n");
++    if (++rejections % 500)
++        return;
++
++    static const char* const reasonNames[] = {
++        "FlowIsInsideANonMultiColumnThread",
++        "FlowHasHorizonalWritingMode",
++        "FlowHasOutline",
++        "FlowIsRuby",
++        "FlowIsPaginated",
++        "FlowHasTextOverflow",
++        "FlowIsDepricatedFlexBox",
++        "FlowParentIsPlaceholderElement",
++        "FlowParentIsTextAreaWithWrapping",
++        "FlowHasNonSupportedChild",
++        "FlowHasUnsupportedFloat",
++        "FlowHasUnsupportedUnderlineDecoration",
++        "FlowHasJustifiedNonLatinText",
++        "FlowHasOverflowNotVisible",
++        "FlowHasWebKitNBSPMode",
++        "FlowIsNotLTR",
++        "FlowHasLineBoxContainProperty",
++        "FlowIsNotTopToBottom",
++        "FlowHasLineBreak",
++        "FlowHasNonNormalUnicodeBiDi",
++        "FlowHasRTLOrdering",
++        "FlowHasLineAlignEdges",
++        "FlowHasLineSnap",
++        "FlowHasTextEmphasisFillOrMark",
++        "FlowHasTextShadow",
++        "FlowHasPseudoFirstLine",
++        "FlowHasPseudoFirstLetter",
++        "FlowHasTextCombine",
++        "FlowHasTextFillBox",
++        "FlowHasBorderFitLines",
++        "FlowHasNonAutoLineBreak",
++        "FlowHasNonAutoTrailingWord",
++        "FlowHasSVGFont",
++        "FlowTextIsEmpty",
++        "FlowTextHasSoftHyphen",
++        "FlowTextHasDirectionCharacter",
++        "FlowIsMissingPrimaryFont",
++        "FlowPrimaryFontIsInsufficient",
++        "FlowTextIsCombineText",
++        "FlowTextIsRenderCounter",
++        "reason40",
++        "reason41",
++        "reason42",
++        "reason43",
++        "FeatureIsDisabled",
++        "FlowHasNoParent",
++        "FlowHasNoChild",
++        "FlowChildIsSelected",
++        "FlowHasHangingPunctuation",
++        "FlowFontHasOverflowGlyph",
++        "FlowTextHasSurrogatePair",
++        "MultiColumnFlowIsNotTopLevel",
++        "MultiColumnFlowHasColumnSpanner",
++        "MultiColumnFlowVerticalAlign",
++        "MultiColumnFlowIsFloating",
++    };
++    fprintf(stderr, "simple line layout: %u blocks rejected\n", rejections);
++    for (auto& entry : counts) {
++        unsigned bit = 0;
++        while (bit < 64 && !(entry.key & (1LLU << bit)))
++            bit++;
++        fprintf(stderr, "  %8u  %s\n", entry.value,
++            bit < sizeof(reasonNames) / sizeof(reasonNames[0]) ? reasonNames[bit] : "unknown");
++    }
++    fflush(stderr);
++}
++
+ bool canUseFor(const RenderBlockFlow& flow)
+ {
+-    return canUseForWithReason(flow, IncludeReasons::First) == NoReason;
++    bool usable = canUseForWithReason(flow, IncludeReasons::First) == NoReason;
++    if (!usable && simpleLineLayoutStatsWanted())
++        noteSimpleLineLayoutRejection(flow);
++    return usable;
+ }
+ 
+ static float computeLineLeft(ETextAlign textAlign, float availableWidth, float committedWidth, float logicalLeftOffset)
+-- 
+2.54.0 (Apple Git-157)
+

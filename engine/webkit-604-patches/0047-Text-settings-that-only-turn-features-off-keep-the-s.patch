@@ -1,7 +1,7 @@
 From 363dc6663ac6c6126b814a1be2ecaf3f047a28ad Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Sat, 19 Sep 2026 08:32:14 -0400
-Subject: [PATCH 47/56] Text: settings that only turn features off keep the
+Subject: [PATCH 47/57] Text: settings that only turn features off keep the
  simple code path
 
 On 10.5/10.6 the simple path applies no kerning or ligatures (applyTransforms
