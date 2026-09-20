@@ -1497,18 +1497,21 @@
         function patchAll(root) {
             var dialogs, i;
             if (!root || !root.querySelectorAll)
-                return;
+                return false;
             dialogs = root.querySelectorAll("dialog");
             for (i = 0; i < dialogs.length; i++)
                 patch(dialogs[i]);
+            return dialogs.length > 0;
         }
 
-        // Dialogs that are in the page, made later, or created in script.
-        if (document.readyState === "loading")
-            document.addEventListener("DOMContentLoaded", function () { patchAll(document); }, false);
-        else
-            patchAll(document);
-        if (global.MutationObserver) {
+        // Watching the whole document costs something on every node a page
+        // inserts, and almost no page has a dialog at all. So nothing is
+        // watched until one turns up - in the markup, or from createElement.
+        var watching = false;
+        function watchForDialogs() {
+            if (watching || !global.MutationObserver)
+                return;
+            watching = true;
             new MutationObserver(function (records) {
                 for (var i = 0; i < records.length; i++) {
                     var added = records[i].addedNodes;
@@ -1518,17 +1521,30 @@
                             continue;
                         if (String(node.tagName).toLowerCase() === "dialog")
                             patch(node);
-                        patchAll(node);
+                        else
+                            patchAll(node);
                     }
                 }
             }).observe(document, { childList: true, subtree: true });
         }
+
+        // Dialogs that are in the page, made later, or created in script.
+        if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", function () {
+                if (patchAll(document))
+                    watchForDialogs();
+            }, false);
+        } else if (patchAll(document))
+            watchForDialogs();
+
         if (document.createElement) {
             var createElement = document.createElement;
             document.createElement = function (name) {
                 var element = createElement.apply(this, arguments);
-                if (String(name).toLowerCase() === "dialog")
+                if (String(name).toLowerCase() === "dialog") {
                     patch(element);
+                    watchForDialogs();      // this page deals in dialogs
+                }
                 return element;
             };
         }
@@ -1605,6 +1621,38 @@
             }
         }
 
+        // Every mouse event a page receives would otherwise be copied into a
+        // pointer event, whether or not anything is listening - and pages
+        // that listen for pointer events are the minority. So nothing is
+        // forwarded until something asks for one.
+        var forwarding = false;
+
+        function startForwarding() {
+            if (forwarding)
+                return;
+            forwarding = true;
+            for (var i = 0; i < pairs.length; i++)
+                forward(pairs[i][0], pairs[i][1]);
+        }
+
+        function watchForPointerListeners() {
+            var targets = [global.EventTarget && EventTarget.prototype,
+                           !global.EventTarget && global.Node && Node.prototype,
+                           !global.EventTarget && global], i;
+            for (i = 0; i < targets.length; i++) {
+                (function (target) {
+                    var original = target && target.addEventListener;
+                    if (!original)
+                        return;
+                    target.addEventListener = function (type) {
+                        if (typeof type === "string" && type.substring(0, 7) === "pointer")
+                            startForwarding();
+                        return original.apply(this, arguments);
+                    };
+                })(targets[i]);
+            }
+        }
+
         function forward(from, to) {
             document.addEventListener(from, function (event) {
                 var copy, target;
@@ -1622,8 +1670,7 @@
                     event.preventDefault();      // the page cancelled the pointer event
             }, true);
         }
-        for (var i = 0; i < pairs.length; i++)
-            forward(pairs[i][0], pairs[i][1]);
+        watchForPointerListeners();
 
         // There is one mouse, so capture is only bookkeeping.
         define(ElementPrototype, "setPointerCapture", function setPointerCapture() { });
