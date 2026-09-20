@@ -21,6 +21,12 @@
 + (void)setImagesEnabled:(BOOL)flag forURL:(NSURL *)url;
 + (NSString *)siteNameForURL:(NSURL *)url;
 
+// For the Websites preferences: the sites that have settings of their own,
+// sorted, what one of them is set to, and how to forget one.
++ (NSArray *)configuredSites;
++ (NSDictionary *)settingsForSite:(NSString *)site;
++ (void)removeSettingsForSite:(NSString *)site;
+
 @end
 
 extern NSString * const CPSiteSettingsDidChangeNotification;

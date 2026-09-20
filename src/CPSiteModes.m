@@ -195,6 +195,37 @@ static NSDictionary *CPBuiltInSiteModes(void)
     [self changed];
 }
 
++ (NSArray *)configuredSites
+{
+    NSMutableSet *sites = [NSMutableSet set];
+    NSDictionary *saved = [[NSUserDefaults standardUserDefaults] dictionaryForKey:CPSiteModesKey];
+    if (saved != nil)
+        [sites addObjectsFromArray:[saved allKeys]];
+    if (CPPrivateSiteModes != nil)
+        [sites addObjectsFromArray:[CPPrivateSiteModes allKeys]];
+    return [[sites allObjects] sortedArrayUsingSelector:@selector(compare:)];
+}
+
++ (CPSiteMode)modeForSite:(NSString *)site
+{
+    NSNumber *mode = [CPPrivateSiteModes objectForKey:site];
+    if (mode == nil)
+        mode = [[[NSUserDefaults standardUserDefaults] dictionaryForKey:CPSiteModesKey]
+                objectForKey:site];
+    return mode != nil ? (CPSiteMode)[mode intValue] : [self defaultMode];
+}
+
++ (void)removeModeForSite:(NSString *)site
+{
+    NSMutableDictionary *modes = [NSMutableDictionary dictionaryWithDictionary:
+        [[NSUserDefaults standardUserDefaults] dictionaryForKey:CPSiteModesKey]];
+
+    [CPPrivateSiteModes removeObjectForKey:site];
+    [modes removeObjectForKey:site];
+    [[NSUserDefaults standardUserDefaults] setObject:modes forKey:CPSiteModesKey];
+    [self changed];
+}
+
 + (void)removeModeForURL:(NSURL *)url
 {
     NSString *key = CPSiteKey(url);

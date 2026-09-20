@@ -52,6 +52,7 @@
 - (IBAction)stopLoading:(id)sender;
 - (IBAction)reloadOrStop:(id)sender;
 - (IBAction)openLocation:(id)sender;
+- (IBAction)toggleTabOverview:(id)sender;
 - (IBAction)addressEntered:(id)sender;
 - (IBAction)autoFillForm:(id)sender;
 - (IBAction)toggleReader:(id)sender;

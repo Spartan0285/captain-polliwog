@@ -65,6 +65,38 @@ static NSMutableDictionary *CPPrivateSettings = nil;
     [[NSNotificationCenter defaultCenter] postNotificationName:CPSiteSettingsDidChangeNotification object:url];
 }
 
++ (NSArray *)configuredSites
+{
+    NSMutableSet *sites = [NSMutableSet set];
+    NSDictionary *saved = [[NSUserDefaults standardUserDefaults] dictionaryForKey:CPSiteSettingsKey];
+    if (saved != nil)
+        [sites addObjectsFromArray:[saved allKeys]];
+    if (CPPrivateSettings != nil)
+        [sites addObjectsFromArray:[CPPrivateSettings allKeys]];
+    return [[sites allObjects] sortedArrayUsingSelector:@selector(compare:)];
+}
+
++ (NSDictionary *)settingsForSite:(NSString *)site
+{
+    NSDictionary *settings = [CPPrivateSettings objectForKey:site];
+    if (settings == nil)
+        settings = [[[NSUserDefaults standardUserDefaults]
+            dictionaryForKey:CPSiteSettingsKey] objectForKey:site];
+    return settings;
+}
+
++ (void)removeSettingsForSite:(NSString *)site
+{
+    NSMutableDictionary *all = [NSMutableDictionary dictionaryWithDictionary:
+        [[NSUserDefaults standardUserDefaults] dictionaryForKey:CPSiteSettingsKey]];
+
+    [CPPrivateSettings removeObjectForKey:site];
+    [all removeObjectForKey:site];
+    [[NSUserDefaults standardUserDefaults] setObject:all forKey:CPSiteSettingsKey];
+    [[NSNotificationCenter defaultCenter] postNotificationName:CPSiteSettingsDidChangeNotification
+                                                        object:nil];
+}
+
 + (float)textSizeForURL:(NSURL *)url
 {
     NSNumber *size = [[self settingsForURL:url] objectForKey:@"textSize"];

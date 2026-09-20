@@ -18,6 +18,10 @@
     NSPopUpButton *siteModePopUp;
     NSButton      *acceleratorBox;
     NSButton      *updatesBox;
+    NSButton      *defaultBrowserButton;
+    NSTextField   *defaultBrowserStatus;
+    NSTableView   *websitesTable;
+    NSArray       *configuredSites;     // the rows of that table
     NSTextField   *acceleratorStatus;
     NSTextField   *pairingField;
 }

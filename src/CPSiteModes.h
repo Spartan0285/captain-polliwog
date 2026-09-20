@@ -41,4 +41,10 @@ extern NSString * const CPSiteModesDidChangeNotification;
 // Only web pages have site versions.
 + (BOOL)appliesToURL:(NSURL *)url;
 
+// For the Websites preferences: the sites with a version of their own, what
+// one of them is set to, and how to forget one.
++ (NSArray *)configuredSites;
++ (CPSiteMode)modeForSite:(NSString *)site;
++ (void)removeModeForSite:(NSString *)site;
+
 @end

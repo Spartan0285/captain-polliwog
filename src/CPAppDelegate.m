@@ -19,6 +19,7 @@
 #import "CPDownloadsController.h"
 #import "CPPrivateBrowsing.h"
 #import "CPUpdater.h"
+#import "CPDefaultBrowser.h"
 #import "CPUpdateController.h"
 #import <WebKit/WebKit.h>
 
@@ -153,6 +154,12 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     CPAddItem(menu, @"AutoFill Form", @selector(autoFillForm:), @"A");
 
     menu = CPAddSubmenu(mainMenu, @"View");
+    {
+        // Safari's key for the same thing.
+        NSMenuItem *overview = CPAddItem(menu, @"Show All Tabs", @selector(toggleTabOverview:), @"\\");
+        [overview setKeyEquivalentModifierMask:(NSCommandKeyMask | NSShiftKeyMask)];
+    }
+    [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Reload Page", @selector(reload:), @"r");
     CPAddItem(menu, @"Stop", @selector(stopLoading:), @".");
     [menu addItem:[NSMenuItem separatorItem]];
@@ -379,6 +386,78 @@ static size_t CPStatisticCount(Class statistics, NSString *name)
           [types componentsJoinedByString:@", "]);
 }
 
+// A link clicked in Mail, or anywhere else, arrives as a GetURL Apple Event.
+// Without this, being the default browser would do nothing at all.
+#ifndef kInternetEventClass
+#define kInternetEventClass 'GURL'
+#define kAEGetURL 'GURL'
+#endif
+
+- (void)applicationWillFinishLaunching:(NSNotification *)notification
+{
+    // Registered before the application finishes launching, so that a link
+    // that started it is not missed.
+    [[NSAppleEventManager sharedAppleEventManager]
+        setEventHandler:self
+            andSelector:@selector(handleGetURLEvent:withReplyEvent:)
+          forEventClass:kInternetEventClass
+             andEventID:kAEGetURL];
+}
+
+// One place for every way a page arrives from outside: an Apple Event, a
+// dropped file, or a document opened in the Finder.
+// The panel CPDebugPanel opened, rather than the browser window behind it.
+- (void)writeDebugPanelSnapshot
+{
+    NSString *panel = [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugPanel"];
+    NSWindow *window = nil;
+
+    if ([panel isEqualToString:@"preferences"])
+        window = [[CPPreferencesController sharedController] window];
+    else if ([panel isEqualToString:@"tabs"])
+        window = [[browserWindows lastObject] window];
+    else if ([panel isEqualToString:@"downloads"])
+        window = [[CPDownloadsController sharedController] window];
+    else if ([panel isEqualToString:@"bookmarks"])
+        window = [[CPBookmarksController sharedController] window];
+    if (window == nil)
+        window = [NSApp keyWindow];
+    if (window != nil)
+        CPWriteWindowSnapshot(window);
+}
+
+- (void)openAddress:(NSString *)address
+{
+    CPBrowserWindowController *controller = [browserWindows lastObject];
+
+    if (controller == nil) {
+        controller = [self openBrowserWindow];
+        [controller showWindow:self];
+    }
+    [[controller window] makeKeyAndOrderFront:self];
+    [NSApp activateIgnoringOtherApps:YES];
+    [controller addTabWithURL:[NSURL URLWithString:address] select:YES];
+}
+
+- (void)handleGetURLEvent:(NSAppleEventDescriptor *)event withReplyEvent:(NSAppleEventDescriptor *)reply
+{
+    NSString *address = [[event paramDescriptorForKeyword:keyDirectObject] stringValue];
+
+    if ([address length] == 0)
+        return;
+    [self openAddress:address];
+}
+
+- (BOOL)application:(NSApplication *)application openFile:(NSString *)path
+{
+    NSURL *url = [NSURL fileURLWithPath:path];
+
+    if (url == nil)
+        return NO;
+    [self openAddress:[url absoluteString]];
+    return YES;
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
     NSString *debugURL = [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugURL"];
@@ -406,6 +485,24 @@ static size_t CPStatisticCount(Class statistics, NSString *name)
         [self newWindow:self];
     if (debugURL != nil)
         [[browserWindows lastObject] loadAddressString:debugURL];
+    // Testing aid: CPDebugPanel opens a window at launch, for the test
+    // scripts to photograph ("preferences", "downloads", "bookmarks").
+    {
+        NSString *panel = [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugPanel"];
+        if ([panel length] > 0 && CPDebugSnapshotPath() != nil)
+            [self performSelector:@selector(writeDebugPanelSnapshot) withObject:nil afterDelay:6.0];
+        if ([panel isEqualToString:@"preferences"])
+            [self performSelector:@selector(showPreferences:) withObject:self afterDelay:1.0];
+        else if ([panel isEqualToString:@"downloads"])
+            [self performSelector:@selector(showDownloads:) withObject:self afterDelay:1.0];
+        else if ([panel isEqualToString:@"tabs"])
+            [[browserWindows lastObject] performSelector:@selector(toggleTabOverview:)
+                                              withObject:self afterDelay:4.0];
+        else if ([panel isEqualToString:@"bookmarks"])
+            [[CPBookmarksController sharedController] performSelector:@selector(showWindow:)
+                                                           withObject:self afterDelay:1.0];
+    }
+
     // Testing aid: CPDebugTabs, an array of addresses, opens one tab each.
     debugTabs = [[NSUserDefaults standardUserDefaults] arrayForKey:@"CPDebugTabs"];
     for (index = 0; index < [debugTabs count]; index++) {

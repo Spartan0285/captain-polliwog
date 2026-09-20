@@ -8,6 +8,7 @@
 #import "CPTab.h"
 #import "CPSiteModes.h"
 #import "CPTabBarView.h"
+#import "CPTabOverview.h"
 #import "CPIcons.h"
 #import "CPAddressBar.h"
 #import "CPBookmarks.h"
@@ -535,6 +536,12 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 }
 
 #pragma mark CPTabBarView data source
+
+// View > Show All Tabs, and the button in the toolbar.
+- (IBAction)toggleTabOverview:(id)sender
+{
+    [CPTabOverview toggleInWindow:[self window] controller:self];
+}
 
 - (NSArray *)tabsForTabBar
 {

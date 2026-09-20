@@ -5,8 +5,10 @@
 #import "CPPreferencesController.h"
 #import "CPSettings.h"
 #import "CPSiteModes.h"
+#import "CPSiteSettings.h"
 #import "CPDebugSnapshot.h"
 #import "CPAccelerator.h"
+#import "CPDefaultBrowser.h"
 
 #define CPWindowWidth   520.0f
 #define CPWindowHeight  500.0f
@@ -47,6 +49,10 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
 }
 
 @interface CPPreferencesController (Private)
+- (IBAction)makeDefaultBrowser:(id)sender;
+- (IBAction)removeWebsiteSettings:(id)sender;
+- (IBAction)removeAllWebsiteSettings:(id)sender;
+- (IBAction)updatesChanged:(id)sender;
 - (void)buildInterface;
 - (void)refresh;
 @end
@@ -143,6 +149,12 @@ static struct {
     [updatesBox release];
     CPLabel(view, NSMakeRect(36.0f, top - 18.0f, 430.0f, 14.0f),
             @"Once a day. Nothing is ever installed without asking you first.", YES, NO);
+
+    top -= 46.0f;
+    CPLabel(view, NSMakeRect(10.0f, top, 120.0f, 17.0f), @"Default browser:", NO, YES);
+    defaultBrowserStatus = CPLabel(view, NSMakeRect(138.0f, top + 1.0f, 200.0f, 14.0f), @"", YES, NO);
+    defaultBrowserButton = CPButton(view, NSMakeRect(340.0f, top - 5.0f, 130.0f, 24.0f),
+                                    @"Set as Default", self, @selector(makeDefaultBrowser:));
     [tabs addTabViewItem:item];
 
     // Performance
@@ -196,6 +208,57 @@ static struct {
     }
     [tabs addTabViewItem:item];
 
+    // Websites: everything remembered about particular sites, in one place,
+    // so a setting made months ago on one site can be found and undone.
+    item = [[[NSTabViewItem alloc] initWithIdentifier:@"websites"] autorelease];
+    [item setLabel:@"Websites"];
+    view = [item view];
+    top = CPWindowHeight - 90.0f;
+
+    CPLabel(view, NSMakeRect(10.0f, top + 4.0f, 460.0f, 17.0f),
+            @"Settings you have made for particular websites:", NO, NO);
+    {
+        NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:
+            NSMakeRect(10.0f, 58.0f, CPWindowWidth - 40.0f, top - 62.0f)];
+        NSRect inner = NSMakeRect(0.0f, 0.0f, CPWindowWidth - 42.0f, top - 64.0f);
+        struct { NSString *identifier; NSString *title; float width; } columns[] = {
+            { @"site", @"Website", 170.0f }, { @"mode", @"Shown as", 80.0f },
+            { @"text", @"Text", 46.0f }, { @"reader", @"Reader", 52.0f },
+            { @"scripts", @"Scripts", 56.0f }, { @"images", @"Images", 56.0f },
+            { nil, nil, 0.0f }
+        };
+        unsigned column;
+
+        websitesTable = [[NSTableView alloc] initWithFrame:inner];
+        for (column = 0; columns[column].identifier != nil; column++) {
+            NSTableColumn *tableColumn = [[NSTableColumn alloc]
+                initWithIdentifier:columns[column].identifier];
+            [[tableColumn headerCell] setStringValue:columns[column].title];
+            [tableColumn setWidth:columns[column].width];
+            [tableColumn setEditable:NO];
+            [websitesTable addTableColumn:tableColumn];
+            [tableColumn release];
+        }
+        [websitesTable setDataSource:self];
+        [websitesTable setDelegate:self];
+        [websitesTable setAllowsMultipleSelection:YES];
+        [websitesTable setUsesAlternatingRowBackgroundColors:YES];
+        [scroll setDocumentView:websitesTable];
+        [scroll setHasVerticalScroller:YES];
+        [scroll setBorderType:NSBezelBorder];
+        [scroll setAutohidesScrollers:YES];
+        [view addSubview:scroll];
+        [websitesTable release];
+        [scroll release];
+    }
+    CPButton(view, NSMakeRect(10.0f, 24.0f, 90.0f, 24.0f), @"Remove", self,
+             @selector(removeWebsiteSettings:));
+    CPButton(view, NSMakeRect(104.0f, 24.0f, 120.0f, 24.0f), @"Remove All", self,
+             @selector(removeAllWebsiteSettings:));
+    CPLabel(view, NSMakeRect(232.0f, 30.0f, 250.0f, 14.0f),
+            @"A removed site goes back to the defaults.", YES, NO);
+    [tabs addTabViewItem:item];
+
     // PowerEmu's Web Accelerator (see CPAccelerator.h)
     item = [[[NSTabViewItem alloc] initWithIdentifier:@"poweremu"] autorelease];
     [item setLabel:@"PowerEmu"];
@@ -242,6 +305,88 @@ static struct {
 - (IBAction)acceleratorChanged:(id)sender
 {
     [CPAccelerator setEnabled:[acceleratorBox state] == NSOnState];
+}
+
+#pragma mark The websites table
+
+- (int)numberOfRowsInTableView:(NSTableView *)table
+{
+    return (int)[configuredSites count];
+}
+
+- (id)tableView:(NSTableView *)table objectValueForTableColumn:(NSTableColumn *)column row:(int)row
+{
+    NSString *site = row < (int)[configuredSites count] ? [configuredSites objectAtIndex:row] : nil;
+    NSString *identifier = [column identifier];
+    NSDictionary *settings = [CPSiteSettings settingsForSite:site];
+    NSURL *url;
+
+    if (site == nil)
+        return nil;
+    if ([identifier isEqualToString:@"site"])
+        return site;
+
+    url = [NSURL URLWithString:[@"http://" stringByAppendingString:site]];
+    if ([identifier isEqualToString:@"mode"]) {
+        if (![CPSiteModes hasModeForURL:url])
+            return @"";
+        return [CPSiteModes nameForMode:[CPSiteModes modeForSite:site]];
+    }
+    if ([identifier isEqualToString:@"text"]) {
+        NSNumber *size = [settings objectForKey:@"textSize"];
+        return size != nil ? [NSString stringWithFormat:@"%d%%", (int)([size floatValue] * 100)] : @"";
+    }
+    if ([identifier isEqualToString:@"reader"])
+        return [[settings objectForKey:@"reader"] boolValue] ? @"On" : @"";
+    if ([identifier isEqualToString:@"scripts"]) {
+        NSNumber *enabled = [settings objectForKey:@"javaScript"];
+        return enabled != nil ? ([enabled boolValue] ? @"On" : @"Off") : @"";
+    }
+    if ([identifier isEqualToString:@"images"]) {
+        NSNumber *enabled = [settings objectForKey:@"images"];
+        return enabled != nil ? ([enabled boolValue] ? @"On" : @"Off") : @"";
+    }
+    return nil;
+}
+
+// Forgetting a site means forgetting both halves: its settings and its
+// version, which are kept apart (CPSiteSettings and CPSiteModes).
+- (IBAction)removeWebsiteSettings:(id)sender
+{
+    NSEnumerator *rows = [websitesTable selectedRowEnumerator];
+    NSMutableArray *chosen = [NSMutableArray array];
+    NSNumber *row;
+    unsigned index;
+
+    while ((row = [rows nextObject]) != nil) {
+        if ([row intValue] < (int)[configuredSites count])
+            [chosen addObject:[configuredSites objectAtIndex:[row intValue]]];
+    }
+    for (index = 0; index < [chosen count]; index++) {
+        [CPSiteSettings removeSettingsForSite:[chosen objectAtIndex:index]];
+        [CPSiteModes removeModeForSite:[chosen objectAtIndex:index]];
+    }
+    [self refresh];
+}
+
+- (IBAction)removeAllWebsiteSettings:(id)sender
+{
+    NSArray *sites = [[configuredSites copy] autorelease];
+    unsigned index;
+
+    for (index = 0; index < [sites count]; index++) {
+        [CPSiteSettings removeSettingsForSite:[sites objectAtIndex:index]];
+        [CPSiteModes removeModeForSite:[sites objectAtIndex:index]];
+    }
+    [self refresh];
+}
+
+#pragma mark
+
+- (IBAction)makeDefaultBrowser:(id)sender
+{
+    [CPDefaultBrowser makeDefault];
+    [self refresh];
 }
 
 - (IBAction)updatesChanged:(id)sender
@@ -296,6 +441,21 @@ static struct {
     [downloadsField setStringValue:[[settings downloadsFolder] stringByAbbreviatingWithTildeInPath]];
     [updatesBox setState:[[NSUserDefaults standardUserDefaults] boolForKey:@"CPChecksForUpdates"]
         ? NSOnState : NSOffState];
+    {
+        NSMutableSet *sites = [NSMutableSet setWithArray:[CPSiteSettings configuredSites]];
+        [sites addObjectsFromArray:[CPSiteModes configuredSites]];
+        [configuredSites release];
+        configuredSites = [[[sites allObjects] sortedArrayUsingSelector:@selector(compare:)] retain];
+        [websitesTable reloadData];
+    }
+    if ([CPDefaultBrowser isDefault]) {
+        [defaultBrowserStatus setStringValue:@"Captain Polliwog"];
+        [defaultBrowserButton setEnabled:NO];
+    } else {
+        NSString *name = [CPDefaultBrowser currentDefaultName];
+        [defaultBrowserStatus setStringValue:name != nil ? name : @"another browser"];
+        [defaultBrowserButton setEnabled:YES];
+    }
     [acceleratorBox setState:[CPAccelerator isEnabled] ? NSOnState : NSOffState];
     [acceleratorStatus setStringValue:[CPAccelerator statusDescription]];
     [[pairingField cell] setPlaceholderString:([[CPAccelerator pairingCode] length] > 0 ? @"Saved" : @"0000-0000")];
