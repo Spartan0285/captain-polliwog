@@ -700,6 +700,24 @@ static NSString *CPAcceptLanguageHeader(void)
     }
 }
 
+// Headers that belong to one hop of a connection, not to the message (RFC
+// 7230 section 6.1). libcurl has already applied them by the time the body
+// reaches us - it de-chunks a chunked response itself - so passing them on
+// would have WebKit apply them a second time. A chunked response through a
+// proxy is the case that bites: WebKit waits for a terminating chunk that
+// will never arrive in an already de-chunked body, and the page never
+// finishes loading.
+static BOOL CPIsHopByHopHeader(NSString *lowercaseName)
+{
+    static NSSet *names = nil;
+    if (names == nil) {
+        names = [[NSSet alloc] initWithObjects:@"transfer-encoding", @"connection",
+                 @"keep-alive", @"proxy-authenticate", @"proxy-authorization",
+                 @"proxy-connection", @"te", @"trailer", @"upgrade", nil];
+    }
+    return [names containsObject:lowercaseName];
+}
+
 // 'strict-dynamic' means "ignore the host list; a script loaded by a script
 // you already trusted is trusted too". WebKit 604 predates it, ignores the
 // keyword, and then enforces the host and nonce list as written - so it
@@ -758,6 +776,8 @@ static NSString *CPPolicyWithoutStrictDynamic(NSString *policy)
     if (colon.location != NSNotFound) {
         NSString *name = CPTrimmed([trimmed substringToIndex:colon.location]);
         NSString *value = CPTrimmed([trimmed substringFromIndex:NSMaxRange(colon)]);
+        if (CPIsHopByHopHeader([name lowercaseString]))
+            return length;      // libcurl already dealt with it; see above
         if ([[name lowercaseString] hasPrefix:@"content-security-policy"])
             value = CPPolicyWithoutStrictDynamic(value);
         [responseHeaders setObject:value forKey:[name lowercaseString]];

@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #import "CPAccelerator.h"
+#include <pthread.h>
 #include <Security/Security.h>
 #import "CPDebugSnapshot.h"
 #import <WebKit/WebKit.h>
@@ -28,6 +29,7 @@ static NSLock *stateLock = nil;
 static NSString *baseURL = nil;             // nil: not available
 static NSString *serverName = nil;          // "Adam's MacBook Air"
 static NSString *token = nil;               // for a PowerEmu on the network
+static NSString *cachedPairingCode = nil;   // nil: not read from the Keychain yet
 static NSTimeInterval failedUntil = 0;
 static BOOL probing = NO;
 static BOOL sawServiceWithoutCode = NO;
@@ -38,6 +40,8 @@ static NSMutableArray *services = nil;
 static NSTimer *retryTimer = nil;
 
 @interface CPAccelerator (Private)
++ (NSString *)readPairingCodeFromKeychain;
++ (void)loadPairingCodeThread:(id)unused;
 + (void)probe;
 + (void)probeThread:(id)unused;
 + (NSDictionary *)helloAt:(NSString *)base token:(NSString *)code connectTimeoutMs:(long)timeout status:(long *)status;
@@ -93,24 +97,37 @@ static BOOL CPIsLocalHost(NSString *host)
     [self start];
 }
 
+// Reading the Keychain can block for a long time: the first read from a
+// rebuilt or newly installed copy of the app puts up "Captain Polliwog wants
+// to use your keychain", and the call does not return until that is answered.
+// So it is read once, on a thread, and kept in memory afterwards - never from
+// the main thread, where it would freeze the whole browser while a page is
+// loading. Bonjour discovery used to do exactly that.
 + (NSString *)pairingCode
 {
-    UInt32 length = 0;
-    void *data = NULL;
-    NSString *code = nil;
+    NSString *code;
 
-    if (SecKeychainFindGenericPassword(NULL, strlen(CPAcceleratorKeychainService), CPAcceleratorKeychainService,
-                                       strlen(CPAcceleratorKeychainAccount), CPAcceleratorKeychainAccount,
-                                       &length, &data, NULL) == noErr) {
-        code = [[[NSString alloc] initWithBytes:data length:length encoding:NSUTF8StringEncoding] autorelease];
-        SecKeychainItemFreeContent(NULL, data);
+    [stateLock lock];
+    code = [[cachedPairingCode retain] autorelease];
+    [stateLock unlock];
+    if (code != nil)
+        return [code length] > 0 ? code : nil;
+
+    if (pthread_main_np()) {
+        // Not here. Read it in the background and answer with what we have.
+        [NSThread detachNewThreadSelector:@selector(loadPairingCodeThread:) toTarget:self withObject:nil];
+        return nil;
     }
-    return code;
+    return [self readPairingCodeFromKeychain];
 }
 
 + (void)setPairingCode:(NSString *)code
 {
     code = [code stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    [stateLock lock];
+    [cachedPairingCode release];
+    cachedPairingCode = [code copy];
+    [stateLock unlock];
     {
         SecKeychainItemRef item = NULL;
         const char *secret = [code UTF8String];
@@ -290,6 +307,37 @@ static BOOL CPIsLocalHost(NSString *host)
 
 @implementation CPAccelerator (Private)
 
+// Only ever called off the main thread.
++ (NSString *)readPairingCodeFromKeychain
+{
+    UInt32 length = 0;
+    void *data = NULL;
+    NSString *code = nil;
+
+    if (SecKeychainFindGenericPassword(NULL, strlen(CPAcceleratorKeychainService), CPAcceleratorKeychainService,
+                                       strlen(CPAcceleratorKeychainAccount), CPAcceleratorKeychainAccount,
+                                       &length, &data, NULL) == noErr) {
+        code = [[[NSString alloc] initWithBytes:data length:length encoding:NSUTF8StringEncoding] autorelease];
+        SecKeychainItemFreeContent(NULL, data);
+    }
+    [stateLock lock];
+    [cachedPairingCode release];
+    cachedPairingCode = [(code != nil ? code : @"") copy];
+    [stateLock unlock];
+    return code;
+}
+
++ (void)loadPairingCodeThread:(id)unused
+{
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    NSString *code = [self readPairingCodeFromKeychain];
+    // Found one after discovery had already given up for want of it: look again.
+    if ([code length] > 0)
+        [self performSelectorOnMainThread:@selector(start) withObject:nil waitUntilDone:NO];
+    [pool release];
+}
+
+
 + (void)postStatus
 {
     [[NSNotificationCenter defaultCenter] postNotificationName:CPAcceleratorStatusDidChangeNotification object:nil];
@@ -313,6 +361,9 @@ static BOOL CPIsLocalHost(NSString *host)
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     long status = 0;
+
+    // Here rather than in the Bonjour callback, which runs on the main thread.
+    [self readPairingCodeFromKeychain];
     NSDictionary *hello = [self helloAt:CPAcceleratorVMBase token:nil connectTimeoutMs:300 status:&status];
 
     if (hello != nil) {
