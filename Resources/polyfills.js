@@ -1843,4 +1843,68 @@
         });
     })();
 
+    // The unprefixed Fullscreen API, over WebKit's prefixed one.
+    //
+    // This engine has webkitRequestFullScreen and its whole family, and
+    // nothing unprefixed. A page written any time in the last decade calls
+    // element.requestFullscreen() and, finding it missing, either does
+    // nothing or hides its own fullscreen button - which is what YouTube's
+    // mobile player does. Aliasing costs nothing and fixes both.
+    //
+    // The two spellings of the prefixed method are both real: Safari 5.1
+    // shipped webkitRequestFullScreen with a capital S, and the lowercase
+    // webkitRequestFullscreen came later.
+    (function () {
+        var element = global.Element && global.Element.prototype;
+        if (!element || element.requestFullscreen)
+            return;
+        var request = element.webkitRequestFullscreen || element.webkitRequestFullScreen;
+        if (!request)
+            return;
+
+        define(element, "requestFullscreen", function () {
+            var self = this;
+            // ALLOW_KEYBOARD_INPUT: without it the prefixed call drops
+            // keyboard events in the fullscreen window, which the
+            // unprefixed API does not do.
+            var flag = global.Element.ALLOW_KEYBOARD_INPUT;
+            function run() { request.call(self, flag); }
+            if (!global.Promise) {
+                run();
+                return;
+            }
+            return new global.Promise(function (resolve, reject) {
+                try { run(); } catch (e) { reject(e); return; }
+                resolve();
+            });
+        });
+
+        define(document, "exitFullscreen", function () {
+            var exit = document.webkitExitFullscreen || document.webkitCancelFullScreen;
+            if (exit)
+                exit.call(document);
+            return global.Promise ? global.Promise.resolve() : undefined;
+        });
+        defineGetter(document, "fullscreenElement", function () {
+            return document.webkitFullscreenElement || document.webkitCurrentFullScreenElement || null;
+        });
+        defineGetter(document, "fullscreenEnabled", function () {
+            return !!(document.webkitFullscreenEnabled || document.webkitIsFullScreen !== undefined);
+        });
+
+        // The events are prefixed too, and a page listening for the
+        // unprefixed name never hears anything.
+        var pairs = [["webkitfullscreenchange", "fullscreenchange"],
+                     ["webkitfullscreenerror", "fullscreenerror"]];
+        for (var i = 0; i < pairs.length; i++) {
+            (function (from, to) {
+                document.addEventListener(from, function (event) {
+                    var forwarded = document.createEvent("Event");
+                    forwarded.initEvent(to, true, false);
+                    (event.target || document).dispatchEvent(forwarded);
+                }, false);
+            })(pairs[i][0], pairs[i][1]);
+        }
+    })();
+
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);

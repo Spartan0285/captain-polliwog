@@ -316,8 +316,13 @@ CPBooleanSetting(stopsLongScripts, setStopsLongScripts, CPStopsLongScriptsKey)
 
 + (void)enableModernFeatures:(WebPreferences *)preferences
 {
+    // setFullScreenEnabled: is why the fullscreen button on a video does
+    // nothing by default. WebKit's own preference for it is off, and
+    // -[WebView _supportsFullScreenForElement:withKeyboard:] reads it before
+    // anything else happens, so requestFullscreen() is refused by the engine
+    // before the page ever hears back.
     static NSString *names[] = { @"setDisplayContentsEnabled:", @"setIsSecureContextAttributeEnabled:",
-                                 @"setDownloadAttributeEnabled:", nil };
+                                 @"setDownloadAttributeEnabled:", @"setFullScreenEnabled:", nil };
     unsigned i;
     for (i = 0; names[i] != nil; i++) {
         if ([preferences respondsToSelector:NSSelectorFromString(names[i])])

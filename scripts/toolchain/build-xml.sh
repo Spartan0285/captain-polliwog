@@ -15,7 +15,16 @@ INT=powerpc-apple-darwin9-install_name_tool
 FLAGS="-O2 -mmacosx-version-min=10.4"
 # pkg-config sees only what is built here, never the Linux host's libraries.
 export PKG_CONFIG_LIBDIR=$P/lib/pkgconfig PKG_CONFIG_PATH=
-LINK="-mmacosx-version-min=10.4 -static-libgcc -Wl,-no_function_starts,-no_data_in_code_info,-no_version_load_command,-no_source_version"
+# libiconv comes from Tiger's SDK, everything else from Leopard's.
+# -mmacosx-version-min only sets the deployment target; the stub libraries
+# still come from whichever SDK the linker searches, and Leopard's libiconv
+# stub records compatibility version 7.0.0 against Tiger's 5.0.0. A libxml2
+# linked to that refuses to load on Tiger - "Incompatible library version",
+# in dyld, before main. Pointing the whole link at the 10.4 SDK does not
+# work: our ld64 cannot read that SDK's crt1.o, so every configure test that
+# builds a program fails. /opt/ppc/tiger-stubs holds the one stub we need and
+# nothing else, so programs still find crt1.o where they always did.
+LINK="-mmacosx-version-min=10.4 -static-libgcc -L/opt/ppc/tiger-stubs -Wl,-no_function_starts,-no_data_in_code_info,-no_version_load_command,-no_source_version"
 
 mkdir -p ~/src/deps && cd ~/src/deps
 [ -f libxml2-$XML2.tar.xz ] || wget -q https://download.gnome.org/sources/libxml2/${XML2%.*}/libxml2-$XML2.tar.xz

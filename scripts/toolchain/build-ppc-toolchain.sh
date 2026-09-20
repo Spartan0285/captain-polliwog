@@ -70,6 +70,11 @@ printf '#!/bin/sh\nexit 0\n' | sudo tee /opt/ppc/bin/powerpc-apple-darwin9-dsymu
 sudo cp /opt/ppc/bin/powerpc-apple-darwin9-dsymutil /opt/ppc/bin/dsymutil
 sudo chmod +x /opt/ppc/bin/*dsymutil
 
+# One stub library taken from the Tiger SDK: see the note in build-xml.sh.
+# Everything else links against the 10.5 SDK as usual.
+sudo mkdir -p /opt/ppc/tiger-stubs
+sudo cp -L /opt/ppc/SDKs/MacOSX10.4u.sdk/usr/lib/libiconv.dylib /opt/ppc/tiger-stubs/libiconv.dylib
+
 if [ ! -d gcc-6.5.0 ]; then
     wget -q https://ftp.gnu.org/gnu/gcc/gcc-6.5.0/gcc-6.5.0.tar.xz
     echo "7ef1796ce497e89479183702635b14bb7a46b53249209a5e0f999bebf4740945  gcc-6.5.0.tar.xz" | sha256sum -c

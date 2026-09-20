@@ -29,5 +29,9 @@ ssh -4 -o ConnectTimeout=90 "$host" '
     A="/Applications/Captain Polliwog.app"
     killall CaptainPolliwog 2>/dev/null; sleep 2
     rm -rf "$A" && ditto -x -k /tmp/cp-install.zip /Applications/
-    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$A"
+    # LaunchServices moved into CoreServices in 10.5; on Tiger it is still
+    # under ApplicationServices.
+    for ls in /System/Library/Frameworks/{CoreServices,ApplicationServices}.framework/Frameworks/LaunchServices.framework/Support/lsregister; do
+        [ -x "$ls" ] && "$ls" -f "$A" && break
+    done
     echo "==> installed: $(ls "$A/Contents/Frameworks" | wc -l | tr -d " ") bundled frameworks and libraries"'

@@ -11,8 +11,11 @@
 #
 # Variants:
 #   leopard-g4      Leopard, G4 (AltiVec): reproduces Leopard WebKit's ppc7400 build.
-#   leopard-g4-jit  The same with JavaScriptCore's baseline JIT (work in
-#                   progress), in its own build directory.
+#   leopard-g4-jit  The same with JavaScriptCore's baseline JIT.
+#   tiger-g3        Tiger, G3 (750): no AltiVec, 10.4 deployment target.
+#   tiger-g3-jit    The same with the JIT.
+#
+# A variant whose name ends in -jit builds JavaScriptCore's baseline JIT.
 set -e
 ACTION=$1 VARIANT=$2
 shift 2 || true
@@ -28,10 +31,15 @@ case $VARIANT in
     # 7400 instructions (every G4), scheduled for the 7447/7450 "G4e" core
     # that later G4 Macs, the iBook and aluminum PowerBooks among them, have.
     leopard-g4|leopard-g4-jit) TARGET=10.5; CPU="-mcpu=7400 -mtune=7450 -maltivec" ;;
-    *) echo "usage: $0 configure|build leopard-g4[-jit] [targets...]" >&2; exit 1 ;;
+    # The 750 in a Pismo or a tray-loading iMac: no AltiVec, no frsqrte to
+    # rely on, and 10.4 as the floor. The toolchain already builds against
+    # the 10.5 SDK with a 10.4 deployment target, so Leopard-only functions
+    # are weakly linked and simply absent here.
+    tiger-g3|tiger-g3-jit) TARGET=10.4; CPU="-mcpu=750 -mtune=750" ;;
+    *) echo "usage: $0 configure|build leopard-g4[-jit]|tiger-g3[-jit] [targets...]" >&2; exit 1 ;;
 esac
 JIT=OFF
-[ "$VARIANT" = leopard-g4-jit ] && JIT=ON
+case $VARIANT in *-jit) JIT=ON ;; esac
 # WebCore is about 30MB of code, past the reach of PowerPC's branch
 # instruction; ld64 bridges that with branch islands, but only within one
 # section. Fewer cold and hot sections for the linker to fold back into
@@ -69,5 +77,5 @@ build)
     ninja -k 0 -j8 "${@:-WebKit}"
     ;;
 *)
-    echo "usage: $0 configure|build leopard-g4 [targets...]" >&2; exit 1 ;;
+    echo "usage: $0 configure|build leopard-g4[-jit]|tiger-g3[-jit] [targets...]" >&2; exit 1 ;;
 esac
