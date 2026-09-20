@@ -38,6 +38,10 @@ JIT=OFF
 # __text (see ppc-darwin.cmake), and better locality on small caches.
 CPU="$CPU -fno-reorder-blocks-and-partition -fno-reorder-functions"
 
+# An escape hatch for trying a compiler flag across a whole build without
+# committing to it: EXTRA_FLAGS=-fvisibility=hidden webkit.sh configure ...
+CPU="$CPU ${EXTRA_FLAGS:-}"
+
 # rsync -c compares contents, so a synced file's timestamp changes only when
 # the file did, and ninja rebuilds only what was edited.
 mkdir -p "$SRC"

@@ -23,7 +23,7 @@ shift
 case "$step" in
 build|configure)
     sync
-    ssh "$STUDIO" "$LIMACTL shell ppcbuild -- bash '$REPO/scripts/toolchain/webkit.sh' $step $*" ;;
+    ssh "$STUDIO" "$LIMACTL shell ppcbuild -- env EXTRA_FLAGS='${EXTRA_FLAGS:-}' bash '$REPO/scripts/toolchain/webkit.sh' $step $*" ;;
 package)
     variant=${1:?variant}
     ssh "$STUDIO" "$LIMACTL shell ppcbuild -- bash '$REPO/scripts/toolchain/package-webkit.sh' $variant"

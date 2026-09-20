@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>JavaScript kernels</title>
+<!--
+  Where our JavaScript loses to PowerFox, in seconds rather than in the
+  better part of an hour.
+
+  We beat PowerFox on nineteen of Speedometer's twenty suites; the one
+  we lose, Charts-chartjs, we lose badly. engine/tests/canvas-paths.html
+  ruled out the obvious suspect - our canvas path drawing is twice as
+  fast as theirs - which leaves the JavaScript. PowerFox runs
+  IonMonkey, an optimising JIT; we run JavaScriptCore's baseline JIT,
+  which compiles each bytecode once with no type feedback. This page
+  asks which shapes of code that difference actually costs us, so the
+  answer is a list of things to fix rather than "write an optimising
+  tier".
+
+  Each kernel runs for a fixed number of iterations and reports
+  milliseconds. Lower is better; the useful number is the ratio against
+  the same page in PowerFox.
+-->
+<style>
+body { font: 13px/1.6 'Lucida Grande', sans-serif; margin: 20px; }
+table { border-collapse: collapse; }
+td, th { padding: 2px 14px 2px 0; text-align: left; }
+td.n { text-align: right; font-family: Monaco, monospace; }
+</style>
+<h1>JavaScript kernels</h1>
+<table id="t"><tr><th>kernel<th>ms</table>
+<script>
+var results = {};
+var rows = document.getElementById("t");
+
+function time(name, iterations, body) {
+    body(2);                                    // warm the JIT
+    var start = new Date().getTime();
+    body(iterations);
+    var ms = new Date().getTime() - start;
+    results[name] = ms;
+    var tr = rows.insertRow(-1);
+    tr.insertCell(-1).appendChild(document.createTextNode(name));
+    var cell = tr.insertCell(-1);
+    cell.className = "n";
+    cell.appendChild(document.createTextNode(ms + ""));
+}
+
+var sink = 0;
+
+// 1. Monomorphic property access through a constructor: the shape a
+// charting library's Point or Scale is.
+function Point(x, y) { this.x = x; this.y = y; }
+Point.prototype.length = function () { return Math.sqrt(this.x * this.x + this.y * this.y); };
+time("monomorphic-property", 300, function (n) {
+    var total = 0;
+    for (var i = 0; i < n; i++) {
+        for (var j = 0; j < 2000; j++) {
+            var p = new Point(j, j + 1);
+            total += p.length();
+        }
+    }
+    sink += total;
+});
+
+// 2. The same call site seeing four different shapes, which is what a
+// library's generic helpers see.
+function A(v) { this.v = v; } A.prototype.get = function () { return this.v; };
+function B(v) { this.w = v; this.v = v; } B.prototype.get = function () { return this.v + 1; };
+function C(v) { this.a = 0; this.b = 0; this.v = v; } C.prototype.get = function () { return this.v + 2; };
+function D(v) { this.v = v; this.z = 0; } D.prototype.get = function () { return this.v + 3; };
+var shapes = [];
+for (var i = 0; i < 400; i++) shapes.push(new A(i), new B(i), new C(i), new D(i));
+time("polymorphic-call", 300, function (n) {
+    var total = 0;
+    for (var i = 0; i < n; i++)
+        for (var j = 0; j < shapes.length; j++)
+            total += shapes[j].get();
+    sink += total;
+});
+
+// 3. Object literals as option bags, read by string key: every
+// charting library's configuration handling.
+time("object-literal-options", 300, function (n) {
+    var total = 0;
+    for (var i = 0; i < n; i++) {
+        for (var j = 0; j < 800; j++) {
+            var options = { x: j, y: j * 2, radius: 3, fill: "#fff", stroke: "#000", width: 1 };
+            total += options.x + options.y + options.radius + options.width;
+        }
+    }
+    sink += total;
+});
+
+// 4. Arrays of numbers: the data a chart actually plots.
+var numbers = [];
+for (var i = 0; i < 4000; i++) numbers.push((i * 37 % 1000) / 1000);
+time("array-numeric", 300, function (n) {
+    var total = 0;
+    for (var i = 0; i < n; i++)
+        for (var j = 0; j < numbers.length; j++)
+            total += numbers[j] * 2 - 1;
+    sink += total;
+});
+
+// 5. Closures and callbacks per element, which is how the library
+// iterates.
+time("closure-callback", 200, function (n) {
+    var total = 0;
+    for (var i = 0; i < n; i++) {
+        var local = i;
+        for (var j = 0; j < 1500; j++)
+            total += (function (v) { return v + local; })(j);
+    }
+    sink += total;
+});
+
+// 6. Strings: labels, colours, and the concatenation that builds them.
+time("string-build", 200, function (n) {
+    var last = "";
+    for (var i = 0; i < n; i++)
+        for (var j = 0; j < 600; j++)
+            last = "rgba(" + (j & 255) + "," + ((j * 3) & 255) + ",0,0.5)";
+    sink += last.length;
+});
+
+// 7. Floating point: the scale arithmetic between data and pixels.
+time("float-math", 300, function (n) {
+    var total = 0;
+    for (var i = 0; i < n; i++)
+        for (var j = 0; j < 2000; j++)
+            total += Math.round(Math.sin(j * 0.01) * 100) / 100 + Math.max(0, Math.min(1, j / 2000));
+    sink += total;
+});
+
+// 8. Array methods with a function argument, which JavaScriptCore
+// cannot inline without an optimising tier.
+time("array-higher-order", 200, function (n) {
+    var total = 0;
+    for (var i = 0; i < n; i++)
+        total += numbers.map(function (v) { return v * 2; })
+                        .filter(function (v) { return v > 0.5; }).length;
+    sink += total;
+});
+
+results.label = location.search.replace(/^\?/, "") || "js-kernels";
+results.sink = sink;
+try {
+    var request = new XMLHttpRequest();
+    request.open("POST", "/js-kernels", true);
+    request.setRequestHeader("Content-Type", "application/json");
+    request.send(JSON.stringify(results));
+} catch (e) { }
+</script>

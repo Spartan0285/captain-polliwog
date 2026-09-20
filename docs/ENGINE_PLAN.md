@@ -690,3 +690,84 @@ tells you what is running, and the thing to ask of any hot symbol is not "how
 do I make this faster" but "who called it, and did they need to?". A counter
 on `Document::updateLayout()`, printed per test step, would have found this in
 minutes; it is worth having permanently.
+
+## 20 September: a register nobody was using
+
+GCC's PowerPC/Darwin backend decides whether to save r31 by asking one
+question - is -fPIC on? - and on Darwin the answer is always yes, because
+-fPIC is the default. The prologue, meanwhile, only *sets up* r31 when the
+function needs a picbase. So every function that never touches r31 still
+opened with `stw r31,-4(r1)` and closed with `lwz r31,-4(r1)`.
+
+In our WebCore that was 23,167 functions. With the fix it is 7,239. Fifteen
+thousand nine hundred functions lost two instructions, a stack store and a
+stack load, and the binary lost 87KB.
+
+It is GCC PR target/88343 - Iain Sandoe's own Darwin bug, fixed for 7.5 and
+8.3 in 2019, with a note on the bug saying 6.x would need someone maintaining
+a branch to apply it. Nobody was. `scripts/toolchain/gcc-pr88343-darwin-picbase.patch`
+carries the 7.5 form of the fix, which is the one to take: the first attempt
+was reverted on both branches for under-saving r30 on 32-bit soft-float Linux.
+That failure was entirely on the ABI_V4 side and cannot reach a Darwin-only
+cross compiler, but the settled form is the settled form.
+
+Three checks before trusting a patched compiler with the whole engine: a leaf
+function compiles to `blr` alone; a function that touches a static still saves
+and restores r31 around its picbase; and the twelve checks in
+`engine/tests/features-modern.html` pass on a full rebuild.
+
+## 20 September: two instruments, and what they found
+
+A Speedometer run costs the better part of an hour, which makes it a poor way
+to answer a specific question. Two pages in `engine/tests/` answer specific
+questions in seconds.
+
+`canvas-paths.html` draws a Chart.js-shaped chart in a loop: grid lines, a
+filled area, a polyline, a small filled-and-stroked circle at every point,
+axis labels. It reports milliseconds per chart. The first thing it said:
+
+| | ms per chart |
+|---|---|
+| Captain Polliwog | **48.2** |
+| PowerFox | 99.1 |
+
+We are twice as fast as PowerFox at drawing exactly what Chart.js draws. So
+the one suite we lose - Charts-chartjs, 3011 against 1575 - is not lost in the
+rasteriser, and the planned sprite-stamp cache for CoreGraphics would have
+been a great deal of work aimed at the wrong half of the test. A profile of
+that suite agrees: about a third of the main thread is under the canvas
+`fill()` and `stroke()` entry points, which leaves two thirds somewhere else.
+
+`js-kernels.html` is the instrument for the other two thirds: eight small
+kernels in the shapes a charting library actually writes - monomorphic
+property access, a call site seeing four shapes, option-bag literals, numeric
+arrays, closures, string building, scale arithmetic, and array methods taking
+a function. PowerFox runs IonMonkey; we run JavaScriptCore's baseline JIT,
+which compiles each bytecode once with no type feedback. The ratio per kernel
+should say which parts of that difference are worth attacking one at a time,
+rather than leaving "write an optimising tier" as the only answer.
+
+## 20 September: five and a half thousand stubs to our own code
+
+WebCore's `__picsymbolstub1` section is 242KB - 7,564 stubs of eight
+instructions each, every one ending in a `bctr` the processor cannot predict.
+But WebCore has only 2,777 undefined symbols. **5,484 of those stubs point at
+symbols WebCore itself defines.**
+
+They are there because the build exports everything: 73,627 symbols, against
+the few thousand Apple's own WebCore exports. Apple's Xcode build sets
+`GCC_SYMBOLS_PRIVATE_EXTERN` and lists what to export in a `.exp` file; the
+CMake Mac port we build from has neither, so every template instantiation and
+every out-of-line inline is a coalesced, interposable, exported symbol - and a
+call to one of those has to go through a stub, because dyld is entitled to
+choose a different definition.
+
+The sampled cost is real: 6.8% of the main thread in TodoMVC-JavaScript-ES5,
+and 4.1% in Charts-chartjs, is spent *inside* stub code, before counting the
+mispredicted branch at the end of each one.
+
+The fix is already written into the source. `WEBCORE_EXPORT`, `WTF_EXPORT_PRIVATE`
+and `JS_EXPORT_PRIVATE` expand to `visibility("default")` on Cocoa, and they
+annotate exactly what crosses a framework boundary; the GTK port builds this
+way. All that is missing is `-fvisibility=hidden`, which
+`scripts/toolchain/webkit.sh` now takes through `EXTRA_FLAGS`.
