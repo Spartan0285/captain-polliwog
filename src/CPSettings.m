@@ -87,6 +87,7 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPAnimatedImagesKey];
     [defaults setObject:[NSNumber numberWithBool:NO] forKey:CPWebGLKey];
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPStopsLongScriptsKey];
+    [defaults setObject:[NSNumber numberWithBool:YES] forKey:@"CPChecksForUpdates"];
     [defaults setObject:@"" forKey:CPHomePageKey];
     [defaults setObject:[NSNumber numberWithInt:CPNewTabShowsStartPage] forKey:CPNewTabPageKey];
     [[NSUserDefaults standardUserDefaults] registerDefaults:defaults];

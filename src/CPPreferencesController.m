@@ -132,6 +132,17 @@ static struct {
     downloadsField = CPLabel(view, NSMakeRect(138.0f, top + 1.0f, 230.0f, 14.0f), @"", YES, NO);
     [[downloadsField cell] setLineBreakMode:NSLineBreakByTruncatingMiddle];
     CPButton(view, NSMakeRect(370.0f, top - 5.0f, 90.0f, 24.0f), @"Choose...", self, @selector(chooseDownloadsFolder:));
+
+    top -= 40.0f;
+    updatesBox = [[NSButton alloc] initWithFrame:NSMakeRect(18.0f, top, 440.0f, 18.0f)];
+    [updatesBox setButtonType:NSSwitchButton];
+    [updatesBox setTitle:@"Check for updates automatically"];
+    [updatesBox setTarget:self];
+    [updatesBox setAction:@selector(updatesChanged:)];
+    [view addSubview:updatesBox];
+    [updatesBox release];
+    CPLabel(view, NSMakeRect(36.0f, top - 18.0f, 430.0f, 14.0f),
+            @"Once a day. Nothing is ever installed without asking you first.", YES, NO);
     [tabs addTabViewItem:item];
 
     // Performance
@@ -233,6 +244,12 @@ static struct {
     [CPAccelerator setEnabled:[acceleratorBox state] == NSOnState];
 }
 
+- (IBAction)updatesChanged:(id)sender
+{
+    [[NSUserDefaults standardUserDefaults] setBool:([updatesBox state] == NSOnState)
+                                            forKey:@"CPChecksForUpdates"];
+}
+
 - (IBAction)pairingCodeChanged:(id)sender
 {
     [CPAccelerator setPairingCode:[pairingField stringValue]];
@@ -277,6 +294,8 @@ static struct {
     [homePageField setStringValue:[settings homePage]];
     [newTabPopUp selectItemAtIndex:(int)[settings newTabPage]];
     [downloadsField setStringValue:[[settings downloadsFolder] stringByAbbreviatingWithTildeInPath]];
+    [updatesBox setState:[[NSUserDefaults standardUserDefaults] boolForKey:@"CPChecksForUpdates"]
+        ? NSOnState : NSOffState];
     [acceleratorBox setState:[CPAccelerator isEnabled] ? NSOnState : NSOffState];
     [acceleratorStatus setStringValue:[CPAccelerator statusDescription]];
     [[pairingField cell] setPlaceholderString:([[CPAccelerator pairingCode] length] > 0 ? @"Saved" : @"0000-0000")];

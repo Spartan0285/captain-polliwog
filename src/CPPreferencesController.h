@@ -17,6 +17,7 @@
     NSTextField   *downloadsField;
     NSPopUpButton *siteModePopUp;
     NSButton      *acceleratorBox;
+    NSButton      *updatesBox;
     NSTextField   *acceleratorStatus;
     NSTextField   *pairingField;
 }

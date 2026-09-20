@@ -18,6 +18,8 @@
 #import "CPHistory.h"
 #import "CPDownloadsController.h"
 #import "CPPrivateBrowsing.h"
+#import "CPUpdater.h"
+#import "CPUpdateController.h"
 #import <WebKit/WebKit.h>
 
 static NSMenuItem *CPAddItem(NSMenu *menu, NSString *title, SEL action, NSString *key)
@@ -98,6 +100,7 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
 
     menu = CPAddSubmenu(mainMenu, @"Captain Polliwog");
     CPAddItem(menu, @"About Captain Polliwog", @selector(orderFrontStandardAboutPanel:), nil);
+    CPAddItem(menu, @"Check for Updates...", @selector(checkForUpdates:), nil);
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Private Browsing", @selector(togglePrivateBrowsing:), nil);
     [menu addItem:[NSMenuItem separatorItem]];
@@ -234,6 +237,11 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
 - (IBAction)showPreferences:(id)sender
 {
     [[CPPreferencesController sharedController] showWindow:sender];
+}
+
+- (IBAction)checkForUpdates:(id)sender
+{
+    [[CPUpdateController sharedController] checkAsked:sender];
 }
 
 - (IBAction)newWindow:(id)sender
@@ -383,6 +391,10 @@ static size_t CPStatisticCount(Class statistics, NSString *name)
     // Before any page can ask for video.
     [CPMediaRelay start];
     [CPAccelerator start];
+    // Not during launch: the first page matters more than the update feed.
+    [[CPUpdater sharedUpdater] performSelector:@selector(checkInBackground)
+                                    withObject:nil
+                                    afterDelay:20.0];
 
     [[CPSettings sharedSettings] apply];
     // Testing aid: start straight in private browsing, without the question.
