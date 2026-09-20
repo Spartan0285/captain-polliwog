@@ -115,6 +115,16 @@ static NSURL *CPRelayedURL(NSString *mediaURL)
         @"http://127.0.0.1:%d/media?token=%@&url=%@", port, token, escaped]];
 }
 
+// The players that read an address from argv. Both of these are ports of
+// command-line programs and have always taken one.
+static BOOL CPTakesURLArgument(NSString *bundlePath)
+{
+    NSString *identifier = [[[NSBundle bundleWithPath:bundlePath] infoDictionary]
+                            objectForKey:@"CFBundleIdentifier"];
+    return [identifier hasPrefix:@"org.videolan"] || [identifier hasPrefix:@"com.videolan"]
+        || [identifier rangeOfString:@"mplayer" options:NSCaseInsensitiveSearch].location != NSNotFound;
+}
+
 + (BOOL)playMediaURL:(NSString *)mediaURL
 {
     NSString *player = [self preferredPlayer];
@@ -140,9 +150,25 @@ static NSURL *CPRelayedURL(NSString *mediaURL)
             [environment removeObjectForKey:name];
     }
 
+    // How the URL reaches the player differs, and getting it wrong looks
+    // like success: `open -a VLC <http url>` launches VLC and leaves it
+    // sitting on an empty window, because LaunchServices has no reason to
+    // route http at it. VLC and MPlayer both take the address as an
+    // argument, so they are run directly. QuickTime Player does not, and
+    // does accept it through LaunchServices, so it goes the other way.
     task = [[[NSTask alloc] init] autorelease];
-    [task setLaunchPath:@"/usr/bin/open"];
-    [task setArguments:[NSArray arrayWithObjects:@"-a", player, [relayed absoluteString], nil]];
+    if (CPTakesURLArgument(player)) {
+        NSString *executable = [[[NSBundle bundleWithPath:player] infoDictionary]
+                                objectForKey:@"CFBundleExecutable"];
+        if (executable == nil)
+            return NO;
+        [task setLaunchPath:[[player stringByAppendingPathComponent:@"Contents/MacOS"]
+                             stringByAppendingPathComponent:executable]];
+        [task setArguments:[NSArray arrayWithObject:[relayed absoluteString]]];
+    } else {
+        [task setLaunchPath:@"/usr/bin/open"];
+        [task setArguments:[NSArray arrayWithObjects:@"-a", player, [relayed absoluteString], nil]];
+    }
     [task setEnvironment:environment];
     NS_DURING
         [task launch];
