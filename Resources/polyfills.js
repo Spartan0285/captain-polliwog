@@ -1505,14 +1505,21 @@
         }
 
         // Watching the whole document costs something on every node a page
-        // inserts, and almost no page has a dialog at all. So nothing is
-        // watched until one turns up - in the markup, or from createElement.
-        var watching = false;
-        function watchForDialogs() {
-            if (watching || !global.MutationObserver)
+        // inserts, and almost no page has a dialog at all. So the watch runs
+        // while the page is parsing - where a dialog can appear before any
+        // script has run, and where the cost is small beside the parsing
+        // itself - and is dropped at DOMContentLoaded unless the page has
+        // turned out to deal in dialogs. A page whose whole life is DOM
+        // churn, which is what this costs, pays nothing after it has loaded.
+        var watcher = null;
+        var keepWatching = false;
+
+        function watchForDialogs(permanently) {
+            if (permanently)
+                keepWatching = true;
+            if (watcher || !global.MutationObserver)
                 return;
-            watching = true;
-            new MutationObserver(function (records) {
+            watcher = new MutationObserver(function (records) {
                 for (var i = 0; i < records.length; i++) {
                     var added = records[i].addedNodes;
                     for (var j = 0; j < added.length; j++) {
@@ -1525,17 +1532,30 @@
                             patchAll(node);
                     }
                 }
-            }).observe(document, { childList: true, subtree: true });
+            });
+            watcher.observe(document, { childList: true, subtree: true });
+        }
+
+        function stopWatchingUnlessNeeded() {
+            if (watcher && !keepWatching) {
+                watcher.disconnect();
+                watcher = null;
+            }
         }
 
         // Dialogs that are in the page, made later, or created in script.
+        // The watch has to be running during parsing: a page can have a
+        // dialog in its markup and call showModal() from an inline script,
+        // which happens before DOMContentLoaded.
         if (document.readyState === "loading") {
+            watchForDialogs(false);
             document.addEventListener("DOMContentLoaded", function () {
                 if (patchAll(document))
-                    watchForDialogs();
+                    keepWatching = true;
+                stopWatchingUnlessNeeded();
             }, false);
         } else if (patchAll(document))
-            watchForDialogs();
+            watchForDialogs(true);
 
         if (document.createElement) {
             var createElement = document.createElement;
@@ -1543,7 +1563,7 @@
                 var element = createElement.apply(this, arguments);
                 if (String(name).toLowerCase() === "dialog") {
                     patch(element);
-                    watchForDialogs();      // this page deals in dialogs
+                    watchForDialogs(true);      // this page deals in dialogs
                 }
                 return element;
             };

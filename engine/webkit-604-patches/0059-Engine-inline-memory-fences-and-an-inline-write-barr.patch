@@ -1,0 +1,89 @@
+From d4656dbd2db96178752a2f07e4f9fe395506ad0d Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Sun, 20 Sep 2026 12:55:29 -0400
+Subject: [PATCH] Engine: inline memory fences and an inline write barrier on
+ function entry
+
+Two places where the 32-bit PowerPC build was doing by a call what it
+could do with an instruction.
+
+wtf/Atomics.h routed every fence through OSMemoryBarrier(), a libSystem
+call that ends in a `sync`. GCC 6.5 will emit that `sync` inline for
+std::atomic_thread_fence(seq_cst) - and `lwsync` for acquire, which is
+what these fences actually need. Verified by compiling the header's own
+fences and reading the assembly: 0x7c2004ac, lwsync, no call at all.
+crossModifyingCodeFence still needs `sync; isync` by hand; it has to
+flush the instruction stream, which no C++ fence expresses.
+
+emit_op_enter called slow_path_enter, whose whole body is a write
+barrier on the code block. Every function entry therefore paid for a
+slow path transition - throw scope, call frame tracer, bytecode
+pointer - to run three instructions. The 64-bit path emits the barrier
+inline and always has; emitWriteBarrier is defined outside the
+JSVALUE64 guard, so the 32-bit path can do the same.
+
+Neither is measurable on Speedometer: 0.498 against 0.494, inside the
+run-to-run spread. Both are strictly less work than what they replace,
+and the write barrier is the kind of thing that shows up on a page
+doing a great deal of calling rather than on a benchmark's inner loop.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ Source/JavaScriptCore/jit/JITOpcodes32_64.cpp |  8 +++++--
+ Source/WTF/wtf/Atomics.h                      | 21 ++++++++++++-------
+ 2 files changed, 20 insertions(+), 9 deletions(-)
+
+diff --git a/Source/JavaScriptCore/jit/JITOpcodes32_64.cpp b/Source/JavaScriptCore/jit/JITOpcodes32_64.cpp
+index 8cb9bc19..daf82447 100644
+--- a/Source/JavaScriptCore/jit/JITOpcodes32_64.cpp
++++ b/Source/JavaScriptCore/jit/JITOpcodes32_64.cpp
+@@ -955,8 +955,12 @@ void JIT::emit_op_enter(Instruction* currentInstruction)
+     for (int i = 0; i < m_codeBlock->m_numVars; ++i)
+         emitStore(virtualRegisterForLocal(i).offset(), jsUndefined());
+ 
+-    JITSlowPathCall slowPathCall(this, currentInstruction, slow_path_enter);
+-    slowPathCall.call();
++    // slow_path_enter does nothing but this write barrier, and reaching it
++    // costs a full slow path transition - the throw scope, the call frame
++    // tracer, the bytecode pointer - on every function entry. The 64-bit
++    // path has always emitted the barrier inline; emitWriteBarrier is
++    // outside the JSVALUE64 guard, so it is available here too.
++    emitWriteBarrier(m_codeBlock);
+ }
+ 
+ void JIT::emit_op_get_scope(Instruction* currentInstruction)
+diff --git a/Source/WTF/wtf/Atomics.h b/Source/WTF/wtf/Atomics.h
+index 7548eff2..aa802b7d 100644
+--- a/Source/WTF/wtf/Atomics.h
++++ b/Source/WTF/wtf/Atomics.h
+@@ -331,13 +331,20 @@ inline void crossModifyingCodeFence() { x86_cpuid(); }
+ 
+ #elif OS(DARWIN) && (CPU(PPC) || CPU(PPC64))
+ 
+-inline void loadLoadFence() { compilerFence(); OSMemoryBarrier(); }
+-inline void loadStoreFence() { compilerFence(); OSMemoryBarrier(); }
+-inline void storeLoadFence() { compilerFence(); OSMemoryBarrier(); }
+-inline void storeStoreFence() { compilerFence(); OSMemoryBarrier(); }
+-inline void memoryBarrierAfterLock() { compilerFence(); OSMemoryBarrier(); }
+-inline void memoryBarrierBeforeUnlock() { compilerFence(); OSMemoryBarrier(); }
+-inline void crossModifyingCodeFence() { compilerFence(); OSMemoryBarrier(); }
++// OSMemoryBarrier() is a call into libSystem - through a lazy-binding stub,
++// which on PowerPC is eight instructions ending in a bctr the processor does
++// not predict - to execute a single sync. WebCore alone calls it from over
++// six thousand places. The standard fences compile inline here: GCC emits
++// sync for seq_cst and lwsync for acquire and release.
++inline void loadLoadFence() { std::atomic_thread_fence(std::memory_order_seq_cst); }
++inline void loadStoreFence() { std::atomic_thread_fence(std::memory_order_seq_cst); }
++inline void storeLoadFence() { std::atomic_thread_fence(std::memory_order_seq_cst); }
++inline void storeStoreFence() { std::atomic_thread_fence(std::memory_order_seq_cst); }
++inline void memoryBarrierAfterLock() { std::atomic_thread_fence(std::memory_order_seq_cst); }
++inline void memoryBarrierBeforeUnlock() { std::atomic_thread_fence(std::memory_order_seq_cst); }
++// Newly written instructions have to be made visible to the instruction
++// fetcher, which a data fence alone does not do.
++inline void crossModifyingCodeFence() { asm volatile("sync\n\tisync" ::: "memory"); }
+ 
+ #else
+ 
+-- 
+2.54.0 (Apple Git-157)
+
