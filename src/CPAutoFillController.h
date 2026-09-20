@@ -12,6 +12,8 @@
     NSTableView *loginTable;
     NSArray *logins;
     NSMutableDictionary *addressFields;   // autocomplete name -> NSTextField
+    NSWindow            *contactsPanel;   // the Address Book chooser
+    id                   peoplePicker;    // ABPeoplePickerView
     NSTableView *cardTable;
     NSArray *cards;
     NSTextField *cardName, *cardNumber, *cardMonth, *cardYear;

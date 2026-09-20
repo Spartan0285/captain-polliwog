@@ -28,6 +28,7 @@
 // "Me" card. Keys are autocomplete names (given-name, postal-code, ...).
 + (NSDictionary *)address;
 + (NSDictionary *)addressFromMeCard;
++ (NSDictionary *)addressFromPerson:(id)person;     // an ABPerson
 + (void)setAddress:(NSDictionary *)address;
 
 @end

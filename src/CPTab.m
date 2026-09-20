@@ -8,6 +8,7 @@
 #import "CPDownloadsController.h"
 #import "CPReader.h"
 #import "CPAutoFill.h"
+#import "CPSafeBrowsing.h"
 #import "CPFavicons.h"
 #import "CPSiteSettings.h"
 #import "CPStartPage.h"
@@ -604,6 +605,7 @@ fromDataSource:(WebDataSource *)dataSource
     // Anything that replaces the reader page (a link, Back) leaves Reader.
     showingReader = readerLoadPending;
     readerLoadPending = NO;
+    warningLoadPending = NO;
     if (CPDebugLogging())
         NSLog(@"Captain Polliwog: committed %@%@", [[[frame dataSource] request] URL], showingReader ? @" (reader)" : @"");
     unreachableURL = [[frame dataSource] unreachableURL];
@@ -682,6 +684,37 @@ decisionListener:(id<WebPolicyDecisionListener>)listener
 {
     int type = [[action objectForKey:WebActionNavigationTypeKey] intValue];
     unsigned int modifiers = [[action objectForKey:WebActionModifierFlagsKey] unsignedIntValue];
+
+    // "Visit Anyway" on the warning page: the address it carries is loaded,
+    // and that site is not warned about again until the browser is reopened.
+    if ([[[[request URL] scheme] lowercaseString] isEqualToString:@"x-polliwog-proceed"]) {
+        NSURL *wanted = [NSURL URLWithString:[[[request URL] absoluteString]
+            substringFromIndex:[@"x-polliwog-proceed:" length]]];
+        [listener ignore];
+        if (wanted != nil) {
+            [CPSafeBrowsing allowOnce:wanted];
+            [[sender mainFrame] loadRequest:[NSURLRequest requestWithURL:wanted]];
+        }
+        return;
+    }
+
+    // A site on the list of places reported for phishing or malware: the
+    // warning stands in for the page, and nothing of the page is fetched.
+    if (frame == [sender mainFrame] && !readerLoadPending && !warningLoadPending
+        && [CPSafeBrowsing isDangerous:[request URL]]) {
+        [listener ignore];
+        [self setURL:[request URL]];
+        // The warning page is loaded with the site's own address as its base,
+        // so that the address bar still shows where this was going. That
+        // means this very method sees it again as it goes up: the flag is
+        // what stops the check firing on the warning itself, for ever.
+        warningLoadPending = YES;
+        [[sender mainFrame] loadHTMLString:[CPSafeBrowsing warningPageHTMLForURL:[request URL]]
+                                   baseURL:[request URL]];
+        if (CPDebugLogging())
+            NSLog(@"Captain Polliwog: safe browsing warning for %@", [request URL]);
+        return;
+    }
 
     // Leaving a page where a password was typed: offer to save it.
     if (frame == [sender mainFrame] && !readerLoadPending && type != WebNavigationTypeBackForward)

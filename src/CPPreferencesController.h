@@ -20,6 +20,8 @@
     NSButton      *updatesBox;
     NSButton      *defaultBrowserButton;
     NSTextField   *defaultBrowserStatus;
+    NSButton      *safeBrowsingBox;
+    NSTextField   *safeBrowsingStatus;
     NSTableView   *websitesTable;
     NSArray       *configuredSites;     // the rows of that table
     NSTextField   *acceleratorStatus;

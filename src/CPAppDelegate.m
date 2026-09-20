@@ -20,6 +20,7 @@
 #import "CPPrivateBrowsing.h"
 #import "CPUpdater.h"
 #import "CPDefaultBrowser.h"
+#import "CPSafeBrowsing.h"
 #import "CPUpdateController.h"
 #import <WebKit/WebKit.h>
 
@@ -470,6 +471,7 @@ static size_t CPStatisticCount(Class statistics, NSString *name)
     // Before any page can ask for video.
     [CPMediaRelay start];
     [CPAccelerator start];
+    [CPSafeBrowsing start];
     // Not during launch: the first page matters more than the update feed.
     [[CPUpdater sharedUpdater] performSelector:@selector(checkInBackground)
                                     withObject:nil

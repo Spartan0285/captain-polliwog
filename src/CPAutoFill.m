@@ -161,7 +161,12 @@ static id CPPrimaryValue(ABMultiValue *multi)
 
 + (NSDictionary *)addressFromMeCard
 {
-    ABPerson *me = [[ABAddressBook sharedAddressBook] me];
+    return [self addressFromPerson:[[ABAddressBook sharedAddressBook] me]];
+}
+
++ (NSDictionary *)addressFromPerson:(id)person
+{
+    ABPerson *me = (ABPerson *)person;
     NSMutableDictionary *address = [NSMutableDictionary dictionary];
     ABMultiValue *multi;
     NSDictionary *postal;

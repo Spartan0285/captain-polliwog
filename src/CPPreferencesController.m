@@ -9,6 +9,7 @@
 #import "CPDebugSnapshot.h"
 #import "CPAccelerator.h"
 #import "CPDefaultBrowser.h"
+#import "CPSafeBrowsing.h"
 
 #define CPWindowWidth   520.0f
 #define CPWindowHeight  500.0f
@@ -50,6 +51,7 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
 
 @interface CPPreferencesController (Private)
 - (IBAction)makeDefaultBrowser:(id)sender;
+- (IBAction)safeBrowsingChanged:(id)sender;
 - (IBAction)removeWebsiteSettings:(id)sender;
 - (IBAction)removeAllWebsiteSettings:(id)sender;
 - (IBAction)updatesChanged:(id)sender;
@@ -149,6 +151,16 @@ static struct {
     [updatesBox release];
     CPLabel(view, NSMakeRect(36.0f, top - 18.0f, 430.0f, 14.0f),
             @"Once a day. Nothing is ever installed without asking you first.", YES, NO);
+
+    top -= 40.0f;
+    safeBrowsingBox = [[NSButton alloc] initWithFrame:NSMakeRect(18.0f, top, 300.0f, 18.0f)];
+    [safeBrowsingBox setButtonType:NSSwitchButton];
+    [safeBrowsingBox setTitle:@"Warn about dangerous websites"];
+    [safeBrowsingBox setTarget:self];
+    [safeBrowsingBox setAction:@selector(safeBrowsingChanged:)];
+    [view addSubview:safeBrowsingBox];
+    [safeBrowsingBox release];
+    safeBrowsingStatus = CPLabel(view, NSMakeRect(36.0f, top - 18.0f, 430.0f, 14.0f), @"", YES, NO);
 
     top -= 46.0f;
     CPLabel(view, NSMakeRect(10.0f, top, 120.0f, 17.0f), @"Default browser:", NO, YES);
@@ -383,6 +395,12 @@ static struct {
 
 #pragma mark
 
+- (IBAction)safeBrowsingChanged:(id)sender
+{
+    [CPSafeBrowsing setEnabled:[safeBrowsingBox state] == NSOnState];
+    [self refresh];
+}
+
 - (IBAction)makeDefaultBrowser:(id)sender
 {
     [CPDefaultBrowser makeDefault];
@@ -448,6 +466,16 @@ static struct {
         configuredSites = [[[sites allObjects] sortedArrayUsingSelector:@selector(compare:)] retain];
         [websitesTable reloadData];
     }
+    [safeBrowsingBox setState:[CPSafeBrowsing isEnabled] ? NSOnState : NSOffState];
+    if ([CPSafeBrowsing entryCount] > 0) {
+        [safeBrowsingStatus setStringValue:[NSString stringWithFormat:
+            @"%u %@ on the list of %@. Checked here; no address is sent anywhere.",
+            [CPSafeBrowsing entryCount],
+            [CPSafeBrowsing entryCount] == 1 ? @"address" : @"addresses",
+            [[CPSafeBrowsing listDate] descriptionWithCalendarFormat:@"%e %B %Y"
+                                                            timeZone:nil locale:nil]]];
+    } else
+        [safeBrowsingStatus setStringValue:@"No list has been downloaded yet."];
     if ([CPDefaultBrowser isDefault]) {
         [defaultBrowserStatus setStringValue:@"Captain Polliwog"];
         [defaultBrowserButton setEnabled:NO];

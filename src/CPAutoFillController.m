@@ -5,6 +5,8 @@
 #import "CPAutoFillController.h"
 #import "CPAutoFill.h"
 #import "CPKeychain.h"
+#import <AddressBook/AddressBook.h>
+#import <AddressBook/AddressBookUI.h>
 
 #define CPWindowWidth   520.0f
 #define CPWindowHeight  420.0f
@@ -126,7 +128,8 @@ static NSString *CPAddressKinds[] = {
         [addressFields setObject:CPAutoFillField(view, NSMakeRect(108.0f, top, 300.0f, 22.0f)) forKey:CPAddressKinds[i]];
         top -= 28.0f;
     }
-    CPAutoFillButton(view, NSMakeRect(104.0f, 12.0f, 110.0f, 24.0f), @"Use My Card", self, @selector(useMeCard:));
+    CPAutoFillButton(view, NSMakeRect(12.0f, 12.0f, 86.0f, 24.0f), @"My Card", self, @selector(useMeCard:));
+    CPAutoFillButton(view, NSMakeRect(104.0f, 12.0f, 110.0f, 24.0f), @"Contacts...", self, @selector(chooseContact:));
     CPAutoFillButton(view, NSMakeRect(218.0f, 12.0f, 90.0f, 24.0f), @"Save", self, @selector(saveAddress:));
     [tabs addTabViewItem:item];
 
@@ -257,6 +260,55 @@ static NSString *CPAddressKinds[] = {
 - (IBAction)useMeCard:(id)sender
 {
     [self showAddress:[CPAutoFill addressFromMeCard]];
+}
+
+// Anyone in the Address Book, not only the card marked as you. The picker is
+// Address Book's own view, so the list looks and searches as it does there.
+- (IBAction)chooseContact:(id)sender
+{
+    if (contactsPanel == nil) {
+        NSRect frame = NSMakeRect(0.0f, 0.0f, 440.0f, 340.0f);
+        NSView *content;
+
+        contactsPanel = [[NSPanel alloc] initWithContentRect:frame
+                                                   styleMask:(NSTitledWindowMask | NSClosableWindowMask)
+                                                     backing:NSBackingStoreBuffered
+                                                       defer:YES];
+        [contactsPanel setTitle:@"Contacts"];
+        content = [contactsPanel contentView];
+
+        peoplePicker = [[ABPeoplePickerView alloc] initWithFrame:
+            NSMakeRect(12.0f, 52.0f, NSWidth(frame) - 24.0f, NSHeight(frame) - 64.0f)];
+        [peoplePicker setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+        [peoplePicker setAllowsMultipleSelection:NO];
+        [peoplePicker setAllowsGroupSelection:NO];
+        [content addSubview:peoplePicker];
+        [peoplePicker release];
+
+        CPAutoFillButton(content, NSMakeRect(NSWidth(frame) - 100.0f, 12.0f, 88.0f, 24.0f),
+                         @"Use Contact", self, @selector(useChosenContact:));
+        CPAutoFillButton(content, NSMakeRect(NSWidth(frame) - 194.0f, 12.0f, 88.0f, 24.0f),
+                         @"Cancel", self, @selector(cancelChooseContact:));
+        [contactsPanel center];
+    }
+    [contactsPanel makeKeyAndOrderFront:sender];
+}
+
+- (IBAction)useChosenContact:(id)sender
+{
+    NSArray *chosen = [peoplePicker selectedRecords];
+
+    if ([chosen count] > 0) {
+        id person = [chosen objectAtIndex:0];
+        if ([person isKindOfClass:[ABPerson class]])
+            [self showAddress:[CPAutoFill addressFromPerson:person]];
+    }
+    [contactsPanel orderOut:sender];
+}
+
+- (IBAction)cancelChooseContact:(id)sender
+{
+    [contactsPanel orderOut:sender];
 }
 
 - (IBAction)saveAddress:(id)sender

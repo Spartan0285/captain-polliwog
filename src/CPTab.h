@@ -41,6 +41,7 @@
     id        reader;           // a CPReader fetching the page, if any
     BOOL      showingReader;
     BOOL      readerLoadPending;
+    BOOL      warningLoadPending;   // the safe browsing page is going up
     NSImage  *favicon;
     WebPreferences *preferences; // this tab's own: sites differ in JavaScript and images
 }
