@@ -1,7 +1,7 @@
 From 53c79415065e2f66d4a03180f969dd5acfc25ffd Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 04:12:18 -0400
-Subject: [PATCH 25/57] WebCore: link libobjc, so -sub_library can re-export it
+Subject: [PATCH 25/58] WebCore: link libobjc, so -sub_library can re-export it
  (as WebCore.xcconfig)
 
 ---

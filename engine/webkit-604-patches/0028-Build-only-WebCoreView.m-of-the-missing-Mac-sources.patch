@@ -1,7 +1,7 @@
 From 0b83773b169fc5d8fa3ecd49b27515acbb2b62e2 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 11:28:22 -0400
-Subject: [PATCH 28/57] Build only WebCoreView.m of the missing Mac sources
+Subject: [PATCH 28/58] Build only WebCoreView.m of the missing Mac sources
 
 The other six (WebKitLegacy's DOM operations and NSNotificationCenter
 categories, DOMEntity, WebRenderLayer, WebRenderNode and

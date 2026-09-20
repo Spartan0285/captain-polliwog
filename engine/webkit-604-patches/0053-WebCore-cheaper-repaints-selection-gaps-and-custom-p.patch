@@ -1,7 +1,7 @@
 From 1efc4fe039af5e3cb7e5a77143165cc8853c8e59 Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Sat, 19 Sep 2026 18:26:01 -0400
-Subject: [PATCH 53/57] WebCore: cheaper repaints, selection gaps and custom
+Subject: [PATCH 53/58] WebCore: cheaper repaints, selection gaps and custom
  properties
 
 Three costs the Speedometer profiles showed on a G4:

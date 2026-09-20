@@ -1,7 +1,7 @@
 From ae56c7ccca76f5a7afa1687aefac234935189d97 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Sun, 20 Sep 2026 03:46:00 -0400
-Subject: [PATCH 56/57] clamp(), the dynamic viewport units,
+Subject: [PATCH 56/58] clamp(), the dynamic viewport units,
  prefers-color-scheme, rem in SVG
 
 Four things pages now reach for constantly, each cheap because the engine

@@ -632,3 +632,61 @@ a result without several runs on both sides.
 ### Where ES5 stands
 
 About 5152 ms against PowerFox's 4846: 6.3% behind, from 9-10%.
+
+## 20 September: the font panel
+
+Speedometer 3.1: **0.342 -> 0.494**, and **nineteen of twenty suites** are now
+faster than PowerFox. The change is five lines, and finding it took a profile
+read the right way round.
+
+The earlier profile of TodoMVC-JavaScript-ES5 was bucketed by *self* time:
+layout 34.8%, style 10.3%, parsing 2.4%. Every conclusion drawn from it was
+wrong, because the question it answers is "what code is running" rather than
+"who asked for it". Read *inclusively*, 2835 of the 4176 main-thread samples
+sit under one call:
+
+    -[WebHTMLView _selectionChanged] -> _updateFontPanel
+      -> Editor::fontForSelection -> styleForSelectionStart
+      -> VisiblePosition::canonicalPosition
+      -> Document::updateLayoutIgnorePendingStylesheets    (2817 samples)
+
+That function exists to tell the shared NSFontManager what font the selection
+is in, so an open Font panel shows the right thing. Finding out lays out the
+whole document, synchronously. TodoMVC assigns to `input.value` about two
+hundred times against a list of up to a hundred items, so the page was laid
+out two hundred times where once would do - O(N^2) layout, and 68% of the test.
+
+Nothing reads the shared font manager unless a Font panel exists, and this
+browser has no Format menu. Skipping the work when
+`+[NSFontPanel sharedFontPanelExists]` is false costs nothing and gave:
+
+| Suite | Before | After |
+|---|---|---|
+| TodoMVC-Svelte-Complex-DOM | 1272 | **428** |
+| TodoMVC-Preact-Complex-DOM | 1432 | **570** |
+| TodoMVC-WebComponents | 2091 | **995** |
+| TodoMVC-JavaScript-ES5 | 5332 | **1947** |
+| TodoMVC-JavaScript-ES6-Webpack | 5616 | **2238** |
+| TodoMVC-jQuery | 10222 | **6613** |
+| TodoMVC-Angular-Complex-DOM | 4197 | **2974** |
+
+The suites that never type into a text field - the news sites, the charts,
+Stockcharts, Perf-Dashboard - did not move, which is how you know the
+explanation is the right one.
+
+### What this invalidated
+
+Three pieces of planned work, all of them well argued from the old profile:
+
+- **The HTML fast-path parser.** Parsing was 2.4% of a test that was 68%
+  waste. Apple's ~20% for this suite was against their own baseline.
+- **Style rule collection and text measurement.** 100% and 99% of their
+  samples were inside the wasted layouts.
+- **`computedCSSPadding`**, the hottest single symbol: 89 of its 100 samples
+  were inside the waste. Inlining it had already measured 3% slower.
+
+The lesson is cheap to state and was expensive to learn: a self-time profile
+tells you what is running, and the thing to ask of any hot symbol is not "how
+do I make this faster" but "who called it, and did they need to?". A counter
+on `Document::updateLayout()`, printed per test step, would have found this in
+minutes; it is worth having permanently.

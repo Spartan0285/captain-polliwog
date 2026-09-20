@@ -1,0 +1,78 @@
+From 76498c504c07b77a88a5b0a3f2d776372a6ed990 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Sun, 20 Sep 2026 12:21:43 -0400
+Subject: [PATCH 58/58] Do not ask the font panel what font the selection is in
+
+Speedometer 3.1 on the PowerBook G4 goes from 0.342 to 0.494, and nineteen of
+the twenty suites are now faster than PowerFox. The change is five lines.
+
+-[WebHTMLView _updateFontPanel] exists to tell the shared NSFontManager what
+font the selection uses, so that an open Font panel shows the right thing.
+Finding out costs a synchronous layout of the whole document:
+
+  _selectionChanged -> _updateFontPanel -> Editor::fontForSelection
+    -> styleForSelectionStart -> adjustedSelectionStartForStyleComputation
+    -> VisiblePosition::canonicalPosition
+    -> Document::updateLayoutIgnorePendingStylesheets
+
+WebKit is careful about this elsewhere: FrameSelection::setSelection defers
+the appearance update when a style recalc or a layout is already pending. That
+deferral was being defeated, because respondToChangedSelection runs first and
+cleans layout on the way.
+
+So a page assigning to input.value in a loop relaid out the document on every
+assignment. TodoMVC does exactly that - about two hundred times, against a
+list growing to a hundred items - and it was 68% of the ES5 test's main thread
+(2835 samples of 4176, 2817 of them inside that one layout call).
+
+Nothing reads the shared font manager unless a Font panel exists, and a panel
+that is opened later picks up the selection on the next change. So the whole
+thing is skipped when +[NSFontPanel sharedFontPanelExists] is false, which for
+a browser with no Format menu is always.
+
+  TodoMVC-Svelte-Complex-DOM   1272 -> 428    TodoMVC-JavaScript-ES5   5332 -> 1947
+  TodoMVC-Preact-Complex-DOM   1432 -> 570    ES6-Webpack-Complex-DOM  5616 -> 2238
+  TodoMVC-WebComponents        2091 -> 995    TodoMVC-jQuery          10222 -> 6613
+  TodoMVC-Angular-Complex-DOM  4197 -> 2974   TodoMVC-React-Complex    3887 -> 2758
+
+The suites that do not type into a text field - the news sites, the charts,
+Stockcharts, Perf-Dashboard - are unchanged, which is the expected shape.
+
+This also closes out two pieces of work that the profile had argued for
+before this was found: the HTML fast-path parser (parsing was 2.4% of a test
+that was 68% waste) and anything aimed at style rule collection or text
+measurement, which were 100% and 99% inside the wasted layouts.
+---
+ Source/WebKitLegacy/mac/WebView/WebHTMLView.mm | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm b/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm
+index 3a7e1f3a..284e1df6 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm
+@@ -6364,6 +6364,22 @@ static BOOL writingDirectionKeyBindingsEnabled()
+     // FIXME: NSTextView bails out if becoming or resigning first responder, for which it has ivar flags. Not
+     // sure if we need to do something similar.
+ 
++    // Everything below exists to tell the shared font manager what font the
++    // selection is in, which nothing reads unless a Font panel has been
++    // opened - and finding out costs a synchronous layout of the whole
++    // document, through fontForSelection -> styleForSelectionStart ->
++    // canonicalPosition -> updateLayoutIgnorePendingStylesheets.
++    //
++    // A page that assigns to input.value in a loop therefore relaid out the
++    // document on every assignment. On Speedometer's TodoMVC-JavaScript-ES5,
++    // which does that about two hundred times against a list of up to a
++    // hundred items, this was 68% of the whole test.
++    //
++    // If a Font panel is ever opened it picks up the current selection on the
++    // next selection change.
++    if (![NSFontPanel sharedFontPanelExists])
++        return;
++
+     if (![self _canEdit])
+         return;
+ 
+-- 
+2.54.0 (Apple Git-157)
+

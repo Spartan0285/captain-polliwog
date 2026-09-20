@@ -1,7 +1,7 @@
 From b22982e508b173c5da500b911249215a6fd7500b Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Sun, 20 Sep 2026 11:05:26 -0400
-Subject: [PATCH 57/57] Hold the visible content rectangle for the length of a
+Subject: [PATCH 57/58] Hold the visible content rectangle for the length of a
  layout or a paint
 
 A fresh profile of TodoMVC-JavaScript-ES5 put 1.5% of the main thread in
