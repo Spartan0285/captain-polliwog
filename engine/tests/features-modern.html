@@ -1,0 +1,42 @@
+<!DOCTYPE html><meta charset="utf-8"><title>features</title>
+<!-- What patches 0056 and the browser-layer polyfills added: clamp(), the
+     dynamic viewport units, prefers-color-scheme, rem in SVG geometry
+     attributes, <dialog>, pointer events and element.animate(). Open it and
+     read the title bar: every entry should say ok. -->
+<style>
+  #c { width: clamp(120px, 50%, 200px); height: clamp(2rem, 10vh, 60px); background: #ccc; }
+  #d { height: 50dvh; width: 25svw; background: #eee; }
+  @media (prefers-color-scheme: light) { #l { color: rgb(1, 2, 3); } }
+  @media (prefers-color-scheme: dark) { #l { color: rgb(9, 9, 9); } }
+</style>
+<div id="c"></div><div id="d"></div><div id="l">scheme</div>
+<svg width="40" height="40"><rect id="r" x="0" y="0" width="0.75rem" height="1rem" fill="green"/></svg>
+<dialog id="dlg">hello <button id="ok">ok</button></dialog>
+<div id="anim"></div>
+<script>
+var out = [];
+function check(n, got, want) { out.push(n + "=" + got + (String(got) === String(want) ? " ok" : " FAIL want " + want)); }
+var cs = getComputedStyle(document.getElementById('c'));
+check("clamp-w", cs.width, "200px");                       // 50% of body > 200
+check("clamp-h", cs.height, Math.min(60, Math.max(32, innerHeight / 10)) + "px");
+check("dvh", getComputedStyle(document.getElementById('d')).height, (innerHeight / 2) + "px");
+check("scheme", getComputedStyle(document.getElementById('l')).color, "rgb(1, 2, 3)");
+check("svg-rem", document.getElementById('r').width.baseVal.value, 12);
+var dlg = document.getElementById('dlg');
+check("dialog-api", typeof dlg.showModal, "function");
+check("plain-el-clean", typeof document.body.showModal, "undefined");
+dlg.showModal();
+check("dialog-open", dlg.open, "true");
+dlg.close("done");
+check("dialog-return", dlg.returnValue, "done");
+check("pointer", typeof window.PointerEvent, "function");
+var seen = "no";
+document.getElementById('ok').addEventListener('pointerdown', function () { seen = "yes"; }, false);
+var ev = document.createEvent("MouseEvent");
+ev.initMouseEvent("mousedown", true, true, window, 0, 0, 0, 5, 5, false, false, false, false, 0, null);
+document.getElementById('ok').dispatchEvent(ev);
+check("pointerdown", seen, "yes");
+var a = document.getElementById('anim').animate([{opacity: 1}, {opacity: 0}], 50);
+check("animate", typeof a.cancel, "function");
+setTimeout(function () { document.title = out.join(" | "); }, 200);
+</script>

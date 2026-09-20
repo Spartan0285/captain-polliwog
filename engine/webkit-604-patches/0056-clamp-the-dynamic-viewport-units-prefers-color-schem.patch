@@ -1,0 +1,370 @@
+From ae56c7ccca76f5a7afa1687aefac234935189d97 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Sun, 20 Sep 2026 03:46:00 -0400
+Subject: [PATCH 56/56] clamp(), the dynamic viewport units,
+ prefers-color-scheme, rem in SVG
+
+Four things pages now reach for constantly, each cheap because the engine
+already had most of what they need:
+
+clamp(a, b, c) is parsed as max(a, min(b, c)), which is what it is defined to
+be, so it lands on the min() and max() support that is already there. A
+declaration using clamp() was being dropped entirely, which is how fluid type
+and spacing collapse to the initial value.
+
+dvh, svh, lvh and their width counterparts are the viewport units this window
+already has: a desktop browser has no toolbar that comes and goes, so the
+large, small and dynamic viewports are the same viewport, and aliasing them is
+the correct answer rather than an approximation.
+
+prefers-color-scheme answers "light", which these systems always are. It has
+to answer at all: a stylesheet that puts its ordinary colours inside a
+(prefers-color-scheme: light) block loses them otherwise. Note a media feature
+needs registering in three places - the name list, the evaluator, and both
+validity lists in MediaQueryExpression - or the query parses into nothing and
+the rule is silently dropped.
+
+SVG geometry attributes accept rem, as SVG 2 says they may. Icons sized
+width="0.75rem" were coming out at zero, which is a large share of the missing
+icons on amazon.com.
+---
+ Source/WebCore/css/CSSCalculationValue.cpp    | 50 +++++++++++++++++++
+ Source/WebCore/css/CSSValueKeywords.in        |  5 ++
+ Source/WebCore/css/MediaFeatureNames.h        |  1 +
+ Source/WebCore/css/MediaQueryEvaluator.cpp    | 12 +++++
+ Source/WebCore/css/MediaQueryExpression.cpp   |  2 +
+ Source/WebCore/css/parser/CSSParserToken.cpp  | 22 ++++++++
+ .../css/parser/CSSPropertyParserHelpers.cpp   |  3 +-
+ Source/WebCore/svg/SVGLengthContext.cpp       | 29 +++++++++++
+ Source/WebCore/svg/SVGLengthContext.h         |  5 +-
+ Source/WebCore/svg/SVGLengthValue.cpp         | 13 ++++-
+ 10 files changed, 139 insertions(+), 3 deletions(-)
+
+diff --git a/Source/WebCore/css/CSSCalculationValue.cpp b/Source/WebCore/css/CSSCalculationValue.cpp
+index b7583010..5e4fde53 100644
+--- a/Source/WebCore/css/CSSCalculationValue.cpp
++++ b/Source/WebCore/css/CSSCalculationValue.cpp
+@@ -730,6 +730,8 @@ public:
+             ok = parseValueExpression(tokens, 0, &result);
+         else if (function == CSSValueMin || function == CSSValueMax)
+             ok = parseMinMaxExpression(tokens, function, 0, &result);
++        else if (function == CSSValueClamp)
++            ok = parseClampExpression(tokens, 0, &result);
+         if (!ok || !tokens.atEnd())
+             return nullptr;
+         return result.value;
+@@ -783,6 +785,13 @@ private:
+             innerRange.consumeWhitespace();
+             return parseMinMaxExpression(innerRange, functionId, depth, result);
+         }
++
++        if (functionId == CSSValueClamp) {
++            CSSParserTokenRange innerRange = tokens.consumeBlock();
++            tokens.consumeWhitespace();
++            innerRange.consumeWhitespace();
++            return parseClampExpression(innerRange, depth, result);
++        }
+         
+         return parseValue(tokens, result);
+     }
+@@ -875,6 +884,47 @@ private:
+         return result->value;
+     }
+ 
++    // clamp(minimum, preferred, maximum) is defined as
++    // max(minimum, min(preferred, maximum)), which is what it is built as:
++    // everything below this point already knows how to handle those.
++    bool parseClampExpression(CSSParserTokenRange& tokens, int depth, Value* result)
++    {
++        Value minimum, preferred, maximum;
++
++        if (checkDepthAndIndex(&depth, tokens) != OK)
++            return false;
++        if (!parseValueExpression(tokens, depth, &minimum))
++            return false;
++        tokens.consumeWhitespace();
++        if (tokens.consume().type() != CommaToken)
++            return false;
++        tokens.consumeWhitespace();
++        if (!parseValueExpression(tokens, depth, &preferred))
++            return false;
++        tokens.consumeWhitespace();
++        if (tokens.consume().type() != CommaToken)
++            return false;
++        tokens.consumeWhitespace();
++        if (!parseValueExpression(tokens, depth, &maximum))
++            return false;
++        tokens.consumeWhitespace();
++        if (!tokens.atEnd())
++            return false;
++
++        Vector<Ref<CSSCalcExpressionNode>> inner;
++        inner.append(preferred.value.releaseNonNull());
++        inner.append(maximum.value.releaseNonNull());
++        auto upperBounded = CSSCalcOperation::createMinOrMax(CalcMin, WTFMove(inner), m_destinationCategory);
++        if (!upperBounded)
++            return false;
++
++        Vector<Ref<CSSCalcExpressionNode>> outer;
++        outer.append(minimum.value.releaseNonNull());
++        outer.append(upperBounded.releaseNonNull());
++        result->value = CSSCalcOperation::createMinOrMax(CalcMax, WTFMove(outer), m_destinationCategory);
++        return result->value;
++    }
++
+     bool parseValueExpression(CSSParserTokenRange& tokens, int depth, Value* result)
+     {
+         return parseAdditiveValueExpression(tokens, depth, result);
+diff --git a/Source/WebCore/css/CSSValueKeywords.in b/Source/WebCore/css/CSSValueKeywords.in
+index 500ed272..782077b0 100644
+--- a/Source/WebCore/css/CSSValueKeywords.in
++++ b/Source/WebCore/css/CSSValueKeywords.in
+@@ -1261,6 +1261,7 @@ calc
+ -webkit-calc
+ min
+ max
++clamp
+ 
+ #if defined(ENABLE_CSS_IMAGE_RESOLUTION) && ENABLE_CSS_IMAGE_RESOLUTION
+ from-image
+@@ -1343,6 +1344,10 @@ rec2020
+ sRGB
+ display-p3
+ 
++// prefers-color-scheme
++light
++dark
++
+ // prefers-reduced-motion
+ reduce
+ no-preference
+diff --git a/Source/WebCore/css/MediaFeatureNames.h b/Source/WebCore/css/MediaFeatureNames.h
+index 664d34f1..b2735af6 100644
+--- a/Source/WebCore/css/MediaFeatureNames.h
++++ b/Source/WebCore/css/MediaFeatureNames.h
+@@ -69,6 +69,7 @@
+     macro(monochrome, "monochrome") \
+     macro(orientation, "orientation") \
+     macro(pointer, "pointer") \
++    macro(prefersColorScheme, "prefers-color-scheme") \
+     macro(prefersReducedMotion, "prefers-reduced-motion") \
+     macro(resolution, "resolution") \
+     macro(transform2d, "-webkit-transform-2d") \
+diff --git a/Source/WebCore/css/MediaQueryEvaluator.cpp b/Source/WebCore/css/MediaQueryEvaluator.cpp
+index fdb2d968..82eaf97b 100644
+--- a/Source/WebCore/css/MediaQueryEvaluator.cpp
++++ b/Source/WebCore/css/MediaQueryEvaluator.cpp
+@@ -679,6 +679,18 @@ static bool anyPointerEvaluate(CSSValue* value, const CSSToLengthConversionData&
+     return pointerEvaluate(value, cssToLengthConversionData, frame, prefix);
+ }
+ 
++// Tiger and Leopard have no dark mode, so the answer is always light - but it
++// has to be answered, because a stylesheet that puts its ordinary colours in
++// a (prefers-color-scheme: light) block loses them otherwise.
++static bool prefersColorSchemeEvaluate(CSSValue* value, const CSSToLengthConversionData&, Frame&, MediaFeaturePrefix)
++{
++    if (!value)
++        return true;
++    if (!is<CSSPrimitiveValue>(value))
++        return false;
++    return downcast<CSSPrimitiveValue>(*value).valueID() == CSSValueLight;
++}
++
+ static bool prefersReducedMotionEvaluate(CSSValue* value, const CSSToLengthConversionData&, Frame& frame, MediaFeaturePrefix)
+ {
+     bool userPrefersReducedMotion = false;
+diff --git a/Source/WebCore/css/MediaQueryExpression.cpp b/Source/WebCore/css/MediaQueryExpression.cpp
+index 30e5d824..32142120 100644
+--- a/Source/WebCore/css/MediaQueryExpression.cpp
++++ b/Source/WebCore/css/MediaQueryExpression.cpp
+@@ -48,6 +48,7 @@ static inline bool featureWithValidIdent(const AtomicString& mediaFeature)
+     || mediaFeature == MediaFeatureNames::hover
+     || mediaFeature == MediaFeatureNames::invertedColors
+     || mediaFeature == MediaFeatureNames::pointer
++    || mediaFeature == MediaFeatureNames::prefersColorScheme
+     || mediaFeature == MediaFeatureNames::prefersReducedMotion;
+ }
+ 
+@@ -155,6 +156,7 @@ static inline bool isFeatureValidWithoutValue(const AtomicString& mediaFeature)
+         || mediaFeature == MediaFeatureNames::viewMode
+ #endif
+         || mediaFeature == MediaFeatureNames::pointer
++        || mediaFeature == MediaFeatureNames::prefersColorScheme
+         || mediaFeature == MediaFeatureNames::prefersReducedMotion
+         || mediaFeature == MediaFeatureNames::devicePixelRatio
+         || mediaFeature == MediaFeatureNames::resolution
+diff --git a/Source/WebCore/css/parser/CSSParserToken.cpp b/Source/WebCore/css/parser/CSSParserToken.cpp
+index 7b8e6033..52aef363 100644
+--- a/Source/WebCore/css/parser/CSSParserToken.cpp
++++ b/Source/WebCore/css/parser/CSSParserToken.cpp
+@@ -120,8 +120,30 @@ CSSPrimitiveValue::UnitType cssPrimitiveValueUnitFromTrie(const CharacterType* d
+                 if (toASCIILower(data[2]) == 'i')
+                     return CSSPrimitiveValue::UnitType::CSS_DPI;
+                 break;
++            // The dynamic viewport units. A window here has no toolbar that
++            // comes and goes, so the large, small and dynamic viewports are
++            // all the same viewport.
++            case 'v':
++                switch (toASCIILower(data[2])) {
++                case 'h':
++                    return CSSPrimitiveValue::UnitType::CSS_VH;
++                case 'w':
++                    return CSSPrimitiveValue::UnitType::CSS_VW;
++                }
++                break;
+             }
+         break;
++        case 'l':
++        case 's':
++            if (toASCIILower(data[1]) == 'v') {
++                switch (toASCIILower(data[2])) {
++                case 'h':
++                    return CSSPrimitiveValue::UnitType::CSS_VH;
++                case 'w':
++                    return CSSPrimitiveValue::UnitType::CSS_VW;
++                }
++            }
++            break;
+         case 'k':
+             if (toASCIILower(data[1]) == 'h' && toASCIILower(data[2]) == 'z')
+                 return CSSPrimitiveValue::UnitType::CSS_KHZ;
+diff --git a/Source/WebCore/css/parser/CSSPropertyParserHelpers.cpp b/Source/WebCore/css/parser/CSSPropertyParserHelpers.cpp
+index bbe20b86..7b3c22bc 100644
+--- a/Source/WebCore/css/parser/CSSPropertyParserHelpers.cpp
++++ b/Source/WebCore/css/parser/CSSPropertyParserHelpers.cpp
+@@ -84,7 +84,8 @@ public:
+     {
+         const CSSParserToken& token = range.peek();
+         auto functionId = token.functionId();
+-        if (functionId == CSSValueCalc || functionId == CSSValueWebkitCalc || functionId == CSSValueMin || functionId == CSSValueMax)
++        if (functionId == CSSValueCalc || functionId == CSSValueWebkitCalc || functionId == CSSValueMin
++            || functionId == CSSValueMax || functionId == CSSValueClamp)
+             m_calcValue = CSSCalcValue::create(functionId, consumeFunction(m_range), destinationCategory, valueRange);
+     }
+ 
+diff --git a/Source/WebCore/svg/SVGLengthContext.cpp b/Source/WebCore/svg/SVGLengthContext.cpp
+index 89ee8682..f1011ca9 100644
+--- a/Source/WebCore/svg/SVGLengthContext.cpp
++++ b/Source/WebCore/svg/SVGLengthContext.cpp
+@@ -144,6 +144,8 @@ ExceptionOr<float> SVGLengthContext::convertValueToUserUnits(float value, SVGLen
+         return value * cssPixelsPerInch / 72;
+     case LengthTypePC:
+         return value * cssPixelsPerInch / 6;
++    case LengthTypeREMS:
++        return convertValueFromREMSToUserUnits(value);
+     }
+ 
+     ASSERT_NOT_REACHED();
+@@ -175,6 +177,8 @@ ExceptionOr<float> SVGLengthContext::convertValueFromUserUnits(float value, SVGL
+         return value * 72 / cssPixelsPerInch;
+     case LengthTypePC:
+         return value * 6 / cssPixelsPerInch;
++    case LengthTypeREMS:
++        return convertValueFromUserUnitsToREMS(value);
+     }
+ 
+     ASSERT_NOT_REACHED();
+@@ -249,6 +253,31 @@ ExceptionOr<float> SVGLengthContext::convertValueFromUserUnitsToEMS(float value)
+     return value / fontSize;
+ }
+ 
++// rem is the root element's font size, whatever this element's own is.
++ExceptionOr<float> SVGLengthContext::convertValueFromREMSToUserUnits(float value) const
++{
++    auto* style = m_context && m_context->document().documentElement()
++        ? m_context->document().documentElement()->renderStyle() : nullptr;
++    if (!style)
++        return Exception { NOT_SUPPORTED_ERR };
++
++    return value * style->computedFontPixelSize();
++}
++
++ExceptionOr<float> SVGLengthContext::convertValueFromUserUnitsToREMS(float value) const
++{
++    auto* style = m_context && m_context->document().documentElement()
++        ? m_context->document().documentElement()->renderStyle() : nullptr;
++    if (!style)
++        return Exception { NOT_SUPPORTED_ERR };
++
++    float fontSize = style->computedFontPixelSize();
++    if (!fontSize)
++        return Exception { NOT_SUPPORTED_ERR };
++
++    return value / fontSize;
++}
++
+ ExceptionOr<float> SVGLengthContext::convertValueFromEMSToUserUnits(float value) const
+ {
+     auto* style = renderStyleForLengthResolving(m_context);
+diff --git a/Source/WebCore/svg/SVGLengthContext.h b/Source/WebCore/svg/SVGLengthContext.h
+index b03eb1f8..f13c3576 100644
+--- a/Source/WebCore/svg/SVGLengthContext.h
++++ b/Source/WebCore/svg/SVGLengthContext.h
+@@ -41,7 +41,8 @@ enum SVGLengthType {
+     LengthTypeMM,
+     LengthTypeIN,
+     LengthTypePT,
+-    LengthTypePC
++    LengthTypePC,
++    LengthTypeREMS
+ };
+ 
+ enum SVGLengthMode {
+@@ -77,6 +78,8 @@ private:
+     ExceptionOr<float> convertValueFromPercentageToUserUnits(float value, SVGLengthMode) const;
+ 
+     ExceptionOr<float> convertValueFromUserUnitsToEMS(float value) const;
++    ExceptionOr<float> convertValueFromREMSToUserUnits(float value) const;
++    ExceptionOr<float> convertValueFromUserUnitsToREMS(float value) const;
+     ExceptionOr<float> convertValueFromEMSToUserUnits(float value) const;
+ 
+     ExceptionOr<float> convertValueFromUserUnitsToEXS(float value) const;
+diff --git a/Source/WebCore/svg/SVGLengthValue.cpp b/Source/WebCore/svg/SVGLengthValue.cpp
+index 6387e4a9..05d8df2e 100644
+--- a/Source/WebCore/svg/SVGLengthValue.cpp
++++ b/Source/WebCore/svg/SVGLengthValue.cpp
+@@ -76,6 +76,8 @@ static inline const char* lengthTypeToString(SVGLengthType type)
+         return "pt";
+     case LengthTypePC:
+         return "pc";
++    case LengthTypeREMS:
++        return "rem";
+     }
+ 
+     ASSERT_NOT_REACHED();
+@@ -94,8 +96,11 @@ inline SVGLengthType parseLengthType(const UChar* ptr, const UChar* end)
+ 
+     const UChar secondChar = *ptr;
+ 
+-    if (++ptr != end)
++    if (++ptr != end) {
++        if (end - ptr == 1 && firstChar == 'r' && secondChar == 'e' && *ptr == 'm')
++            return LengthTypeREMS;
+         return LengthTypeUnknown;
++    }
+ 
+     if (firstChar == 'e' && secondChar == 'm')
+         return LengthTypeEMS;
+@@ -300,6 +305,9 @@ SVGLengthValue SVGLengthValue::fromCSSPrimitiveValue(const CSSPrimitiveValue& va
+     case CSSPrimitiveValue::CSS_PC:
+         type = LengthTypePC;
+         break;
++    case CSSPrimitiveValue::CSS_REMS:
++        type = LengthTypeREMS;
++        break;
+     case CSSPrimitiveValue::CSS_UNKNOWN:
+     default:
+         return { };
+@@ -346,6 +354,9 @@ Ref<CSSPrimitiveValue> SVGLengthValue::toCSSPrimitiveValue(const SVGLengthValue&
+     case LengthTypePC:
+         cssType = CSSPrimitiveValue::CSS_PC;
+         break;
++    case LengthTypeREMS:
++        cssType = CSSPrimitiveValue::CSS_REMS;
++        break;
+     };
+ 
+     return CSSPrimitiveValue::create(length.valueInSpecifiedUnits(), cssType);
+-- 
+2.54.0 (Apple Git-157)
+

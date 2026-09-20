@@ -1,7 +1,7 @@
 From d3b272fb8be99717eab65834f68e76cf19580aab Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Fri, 18 Sep 2026 23:57:46 -0400
-Subject: [PATCH 42/55] CSS: gap for flexbox, column-gap/row-gap/gap for grid,
+Subject: [PATCH 42/56] CSS: gap for flexbox, column-gap/row-gap/gap for grid,
  logical properties, inset, :has(), overflow: clip
 
 - Flexbox lays out column-gap and row-gap between items and lines.

@@ -1,7 +1,7 @@
 From 107908f07e6edc9e92a3b687bdfb612dc73d0580 Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Fri, 18 Sep 2026 20:15:15 -0400
-Subject: [PATCH 40/55] A BigInt stand-in that reads as absent
+Subject: [PATCH 40/56] A BigInt stand-in that reads as absent
 
 typeof BigInt is "undefined" (it masquerades, as document.all does), so
 code that checks takes its no-BigInt path; calling it anyway returns a

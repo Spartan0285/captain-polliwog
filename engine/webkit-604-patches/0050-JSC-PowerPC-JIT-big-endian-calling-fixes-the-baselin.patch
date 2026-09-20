@@ -1,7 +1,7 @@
 From d63220ff2102f39bc6d789e15d0ad7a443155bbc Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Sat, 19 Sep 2026 12:41:09 -0400
-Subject: [PATCH 50/55] JSC PowerPC JIT: big-endian calling fixes; the baseline
+Subject: [PATCH 50/56] JSC PowerPC JIT: big-endian calling fixes; the baseline
  JIT passes the tests
 
 JSValue arguments to C functions go tag first (JSVALUE_ARGUMENT_WORDS), and

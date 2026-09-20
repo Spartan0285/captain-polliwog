@@ -1,7 +1,7 @@
 From 4687aea85fcf24a5bc0266598f06c9b9120017e0 Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Sat, 19 Sep 2026 00:33:25 -0400
-Subject: [PATCH 43/55] JavaScript: async generators and for await (ES2018)
+Subject: [PATCH 43/56] JavaScript: async generators and for await (ES2018)
 
 async function*, async generator methods, for await (x of y) and
 Symbol.asyncIterator. An async generator's body is compiled as a

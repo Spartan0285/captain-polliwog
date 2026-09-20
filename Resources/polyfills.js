@@ -1387,4 +1387,393 @@
         defineAdopted(global.ShadowRoot && ShadowRoot.prototype);
         defineAdopted(global.Document && Document.prototype);
     })();
+
+    // <dialog>. 604 has no HTMLDialogElement at all, so showModal() throws and
+    // login and consent dialogs never appear. This gives the element the
+    // behaviour and the styling the specification asks for: modal dialogs sit
+    // above the page behind a backdrop, Escape closes them, and close() fires
+    // the close event with a return value.
+    (function () {
+        if (!global.HTMLElement || !global.document)
+            return;
+        var test = document.createElement("dialog");
+        if (typeof test.showModal === "function")
+            return;
+
+        var openModals = [];
+        var styled = false;
+
+        function addStyle() {
+            var style, css;
+            if (styled || !document.head)
+                return;
+            styled = true;
+            css = "dialog:not([open]) { display: none; }" +
+                "dialog[open] { display: block; position: absolute; left: 0; right: 0;" +
+                " width: -webkit-fit-content; height: -webkit-fit-content; margin: auto;" +
+                " border: solid; padding: 1em; background: white; color: black; z-index: 100; }" +
+                "dialog[open].__polliwog-modal { position: fixed; top: 0; bottom: 0; }" +
+                ".__polliwog-backdrop { position: fixed; left: 0; top: 0; right: 0; bottom: 0;" +
+                " background: rgba(0, 0, 0, 0.1); z-index: 99; }";
+            style = document.createElement("style");
+            style.appendChild(document.createTextNode(css));
+            document.head.appendChild(style);
+        }
+
+        function fire(element, name) {
+            var event = document.createEvent("Event");
+            event.initEvent(name, false, false);
+            element.dispatchEvent(event);
+        }
+
+        function backdropFor(element) {
+            var backdrop = document.createElement("div");
+            backdrop.className = "__polliwog-backdrop";
+            element.parentNode.insertBefore(backdrop, element);
+            return backdrop;
+        }
+
+        function open(element, modal) {
+            if (element.hasAttribute("open"))
+                return;
+            addStyle();
+            element.setAttribute("open", "");
+            if (!modal)
+                return;
+            element.className += (element.className ? " " : "") + "__polliwog-modal";
+            element.__polliwogBackdrop = backdropFor(element);
+            openModals.push(element);
+            // The first focusable thing inside, as a modal dialog should.
+            var focusable = element.querySelector("input, select, textarea, button, a[href], [tabindex]");
+            if (focusable && focusable.focus)
+                try { focusable.focus(); } catch (e) { }
+        }
+
+        // Patched onto the dialogs themselves, not onto HTMLElement: giving
+        // every element a close() would break the feature detection pages do.
+        function patch(element) {
+            if (element.__polliwogDialog)
+                return;
+            element.__polliwogDialog = true;
+            element.returnValue = element.returnValue || "";
+            element.show = function show() { open(element, false); };
+            element.showModal = function showModal() {
+                if (!element.parentNode)
+                    throw new Error("InvalidStateError: the dialog is not in a document");
+                open(element, true);
+            };
+            element.close = function close(returnValue) {
+                var index;
+                if (!element.hasAttribute("open"))
+                    return;
+                if (returnValue !== undefined)
+                    element.returnValue = returnValue;
+                element.removeAttribute("open");
+                element.className = element.className.replace(/\s*__polliwog-modal/, "");
+                if (element.__polliwogBackdrop) {
+                    if (element.__polliwogBackdrop.parentNode)
+                        element.__polliwogBackdrop.parentNode.removeChild(element.__polliwogBackdrop);
+                    element.__polliwogBackdrop = null;
+                }
+                index = openModals.indexOf(element);
+                if (index >= 0)
+                    openModals.splice(index, 1);
+                fire(element, "close");
+            };
+            try {
+                Object.defineProperty(element, "open", {
+                    get: function () { return element.hasAttribute("open"); },
+                    set: function (value) {
+                        if (value)
+                            element.setAttribute("open", "");
+                        else
+                            element.close();
+                    },
+                    configurable: true
+                });
+            } catch (e) { }
+        }
+
+        function patchAll(root) {
+            var dialogs, i;
+            if (!root || !root.querySelectorAll)
+                return;
+            dialogs = root.querySelectorAll("dialog");
+            for (i = 0; i < dialogs.length; i++)
+                patch(dialogs[i]);
+        }
+
+        // Dialogs that are in the page, made later, or created in script.
+        if (document.readyState === "loading")
+            document.addEventListener("DOMContentLoaded", function () { patchAll(document); }, false);
+        else
+            patchAll(document);
+        if (global.MutationObserver) {
+            new MutationObserver(function (records) {
+                for (var i = 0; i < records.length; i++) {
+                    var added = records[i].addedNodes;
+                    for (var j = 0; j < added.length; j++) {
+                        var node = added[j];
+                        if (node.nodeType !== 1)
+                            continue;
+                        if (String(node.tagName).toLowerCase() === "dialog")
+                            patch(node);
+                        patchAll(node);
+                    }
+                }
+            }).observe(document, { childList: true, subtree: true });
+        }
+        if (document.createElement) {
+            var createElement = document.createElement;
+            document.createElement = function (name) {
+                var element = createElement.apply(this, arguments);
+                if (String(name).toLowerCase() === "dialog")
+                    patch(element);
+                return element;
+            };
+        }
+
+        document.addEventListener("keydown", function (event) {
+            var top;
+            if (event.keyCode !== 27 || !openModals.length)
+                return;
+            top = openModals[openModals.length - 1];
+            fire(top, "cancel");
+            top.close();
+            event.preventDefault();
+        }, false);
+
+        // A form with method="dialog" closes its dialog instead of submitting.
+        document.addEventListener("click", function (event) {
+            var target = event.target, form, dialog;
+            while (target && target !== document) {
+                if (target.form && String(target.formMethod || "").toLowerCase() === "dialog")
+                    break;
+                target = target.parentNode;
+            }
+            if (!target || target === document)
+                return;
+            form = target.form;
+            dialog = form;
+            while (dialog && String(dialog.tagName).toLowerCase() !== "dialog")
+                dialog = dialog.parentNode;
+            if (!dialog)
+                return;
+            event.preventDefault();
+            dialog.close(target.value || "");
+        }, false);
+    })();
+
+    // Pointer events, from the mouse. Pages that only listen for pointerdown
+    // - sliders, drawing canvases, map widgets, drag and drop - are otherwise
+    // completely dead here, since 604 predates the specification.
+    (function () {
+        if (!global.document || global.PointerEvent || !document.addEventListener)
+            return;
+
+        var pairs = [["mousedown", "pointerdown"], ["mouseup", "pointerup"],
+                     ["mousemove", "pointermove"], ["mouseover", "pointerover"],
+                     ["mouseout", "pointerout"], ["mouseenter", "pointerenter"],
+                     ["mouseleave", "pointerleave"]];
+
+        function PointerEvent(type, init) {
+            var event = document.createEvent("MouseEvent");
+            init = init || {};
+            event.initMouseEvent(type, init.bubbles !== false, init.cancelable !== false,
+                global, init.detail || 0, init.screenX || 0, init.screenY || 0,
+                init.clientX || 0, init.clientY || 0, !!init.ctrlKey, !!init.altKey,
+                !!init.shiftKey, !!init.metaKey, init.button || 0, init.relatedTarget || null);
+            decorate(event, init.pointerType || "mouse");
+            return event;
+        }
+        global.PointerEvent = PointerEvent;
+
+        function decorate(event, pointerType) {
+            var values = {
+                pointerId: 1, width: 1, height: 1, pressure: event.type === "pointerup" ? 0 : 0.5,
+                tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0,
+                pointerType: pointerType, isPrimary: true
+            };
+            for (var name in values) {
+                if (hasOwn.call(values, name) && !(name in event)) {
+                    try {
+                        Object.defineProperty(event, name, { value: values[name], enumerable: true });
+                    } catch (e) {
+                        event[name] = values[name];
+                    }
+                }
+            }
+        }
+
+        function forward(from, to) {
+            document.addEventListener(from, function (event) {
+                var copy, target;
+                if (event.__polliwogPointer)
+                    return;
+                copy = document.createEvent("MouseEvent");
+                copy.initMouseEvent(to, event.bubbles, event.cancelable, event.view || global,
+                    event.detail, event.screenX, event.screenY, event.clientX, event.clientY,
+                    event.ctrlKey, event.altKey, event.shiftKey, event.metaKey,
+                    event.button, event.relatedTarget);
+                copy.__polliwogPointer = true;
+                decorate(copy, "mouse");
+                target = event.target || document;
+                if (!target.dispatchEvent(copy) && event.cancelable)
+                    event.preventDefault();      // the page cancelled the pointer event
+            }, true);
+        }
+        for (var i = 0; i < pairs.length; i++)
+            forward(pairs[i][0], pairs[i][1]);
+
+        // There is one mouse, so capture is only bookkeeping.
+        define(ElementPrototype, "setPointerCapture", function setPointerCapture() { });
+        define(ElementPrototype, "releasePointerCapture", function releasePointerCapture() { });
+        define(ElementPrototype, "hasPointerCapture", function hasPointerCapture() { return false; });
+    })();
+
+    // element.animate(). 604 compiles Web Animations but never implemented
+    // animate() itself, so the property exists in the IDL and does nothing;
+    // component libraries that animate only through it show no animation at
+    // all. This interpolates numbers, lengths, colours and transforms between
+    // the first and last keyframe, which is what almost every caller uses it
+    // for.
+    (function () {
+        if (!ElementPrototype || typeof ElementPrototype.animate === "function")
+            return;
+        if (!global.requestAnimationFrame && !global.setTimeout)
+            return;
+
+        var frame = global.requestAnimationFrame || function (callback) {
+            return global.setTimeout(function () { callback(Date.now()); }, 16);
+        };
+        var now = function () { return Date.now ? Date.now() : new Date().getTime(); };
+
+        var easings = {
+            linear: function (t) { return t; },
+            ease: function (t) { return t * t * (3 - 2 * t); },
+            "ease-in": function (t) { return t * t; },
+            "ease-out": function (t) { return t * (2 - t); },
+            "ease-in-out": function (t) { return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; }
+        };
+
+        function numbersIn(value) {
+            var found = String(value).match(/-?\d*\.?\d+/g);
+            return found ? found.map(Number) : [];
+        }
+
+        // Interpolates by replacing the numbers in the "from" string one at a
+        // time, so "translateX(0px) scale(1)" and "rgb(0, 0, 0)" both work.
+        function blend(from, to, progress) {
+            var fromNumbers = numbersIn(from), toNumbers = numbersIn(to), index = 0;
+            if (!fromNumbers.length || fromNumbers.length !== toNumbers.length)
+                return progress < 1 ? from : to;
+            return String(to).replace(/-?\d*\.?\d+/g, function () {
+                var a = fromNumbers[index], b = toNumbers[index];
+                index++;
+                return String(a + (b - a) * progress);
+            });
+        }
+
+        function camel(name) {
+            return name.replace(/-([a-z])/g, function (all, letter) { return letter.toUpperCase(); });
+        }
+
+        define(ElementPrototype, "animate", function animate(keyframes, options) {
+            var element = this;
+            var frames = keyframes || [];
+            var duration = typeof options === "number" ? options : (options && options.duration) || 0;
+            var delay = (options && options.delay) || 0;
+            var fill = (options && options.fill) || "none";
+            var easing = easings[(options && options.easing) || "linear"] || easings.linear;
+            var started = now() + delay;
+            var cancelled = false, finished = false, paused = false;
+            var properties = [];
+            var animation, first, last, name;
+
+            if (!frames.length || !frames[0])
+                frames = [{}, {}];
+            first = frames[0];
+            last = frames[frames.length - 1];
+            for (name in last) {
+                if (hasOwn.call(last, name) && name !== "offset" && name !== "easing") {
+                    properties.push([camel(name),
+                        first[name] !== undefined ? String(first[name])
+                            : (element.style[camel(name)] || ""),
+                        String(last[name])]);
+                }
+            }
+
+            function apply(progress) {
+                for (var i = 0; i < properties.length; i++) {
+                    var property = properties[i];
+                    if (property[1] === "")
+                        continue;
+                    element.style[property[0]] = blend(property[1], property[2], progress);
+                }
+            }
+
+            function step() {
+                var elapsed, progress;
+                if (cancelled || finished)
+                    return;
+                if (paused) {
+                    frame(step);
+                    return;
+                }
+                elapsed = now() - started;
+                if (elapsed < 0) {
+                    frame(step);
+                    return;
+                }
+                progress = duration > 0 ? Math.min(elapsed / duration, 1) : 1;
+                apply(easing(progress));
+                if (progress < 1) {
+                    frame(step);
+                    return;
+                }
+                finished = true;
+                if (fill === "none" || fill === "backwards") {
+                    for (var i = 0; i < properties.length; i++)
+                        element.style[properties[i][0]] = "";
+                }
+                animation.playState = "finished";
+                if (typeof animation.onfinish === "function")
+                    animation.onfinish.call(animation, { target: animation });
+                if (animation.__resolve)
+                    animation.__resolve(animation);
+            }
+
+            animation = {
+                playState: "running",
+                currentTime: 0,
+                onfinish: null,
+                play: function () { paused = false; this.playState = "running"; },
+                pause: function () { paused = true; this.playState = "paused"; },
+                reverse: function () { },
+                cancel: function () {
+                    cancelled = true;
+                    this.playState = "idle";
+                    for (var i = 0; i < properties.length; i++)
+                        element.style[properties[i][0]] = "";
+                },
+                finish: function () {
+                    apply(1);
+                    finished = true;
+                    this.playState = "finished";
+                    if (typeof this.onfinish === "function")
+                        this.onfinish.call(this, { target: this });
+                    if (this.__resolve)
+                        this.__resolve(this);
+                }
+            };
+            if (global.Promise) {
+                animation.finished = new global.Promise(function (resolve) {
+                    animation.__resolve = resolve;
+                });
+            }
+            frame(step);
+            return animation;
+        });
+    })();
+
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);

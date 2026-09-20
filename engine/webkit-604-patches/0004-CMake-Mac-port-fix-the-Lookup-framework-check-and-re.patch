@@ -1,7 +1,7 @@
 From b196e8f3566303ed0a83b85f4418ff3af4db0854 Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Thu, 17 Sep 2026 23:53:20 -0400
-Subject: [PATCH 04/55] CMake Mac port: fix the Lookup framework check and
+Subject: [PATCH 04/56] CMake Mac port: fix the Lookup framework check and
  readline's name
 
 "if (NOT LOOKUP_FRAMEWORK-NOTFOUND)" tests a variable that never exists,

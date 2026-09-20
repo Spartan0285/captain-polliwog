@@ -1,7 +1,7 @@
 From 5b292b578f559eb8bb5d9ec29aef5f2b650d363e Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Sat, 19 Sep 2026 10:19:24 -0400
-Subject: [PATCH 48/55] JSC: native LLInt for 32-bit PowerPC
+Subject: [PATCH 48/56] JSC: native LLInt for 32-bit PowerPC
 
 An offlineasm PPC backend (Darwin ABI, cctools syntax) and ENABLE(C_LOOP),
 split from !ENABLE(JIT) so the assembly LLInt runs with the JIT off.

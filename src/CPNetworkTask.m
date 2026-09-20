@@ -656,7 +656,12 @@ static NSString *CPAcceptLanguageHeader(void)
         if (![method isEqualToString:@"POST"])
             curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, [method UTF8String]);
     } else if (![method isEqualToString:@"GET"]) {
+        // A POST or PUT with no body still has a body of nothing: without
+        // Content-Length: 0 the server has no way to know the request is
+        // complete, and answers 411. Beacons and some API calls send these.
         curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, [method UTF8String]);
+        curl_easy_setopt(easy, CURLOPT_POSTFIELDS, "");
+        curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)0);
     }
 
     return YES;
@@ -695,6 +700,35 @@ static NSString *CPAcceptLanguageHeader(void)
     }
 }
 
+// 'strict-dynamic' means "ignore the host list; a script loaded by a script
+// you already trusted is trusted too". WebKit 604 predates it, ignores the
+// keyword, and then enforces the host and nonce list as written - so it
+// blocks exactly the scripts a modern browser would run, which is how Google
+// and Microsoft properties end up half-loaded. Dropping the directive it
+// appears in leaves the rest of the policy (frame-ancestors, object-src,
+// base-uri) in force, and matches what the site expects of a browser that
+// understands the keyword.
+static NSString *CPPolicyWithoutStrictDynamic(NSString *policy)
+{
+    NSArray *directives;
+    NSMutableArray *kept;
+    unsigned i;
+
+    if ([policy rangeOfString:@"strict-dynamic"].location == NSNotFound)
+        return policy;
+
+    directives = [policy componentsSeparatedByString:@";"];
+    kept = [NSMutableArray arrayWithCapacity:[directives count]];
+    for (i = 0; i < [directives count]; i++) {
+        NSString *directive = [directives objectAtIndex:i];
+        if ([directive rangeOfString:@"strict-dynamic"].location != NSNotFound)
+            continue;
+        if ([CPTrimmed(directive) length] > 0)
+            [kept addObject:directive];
+    }
+    return [kept componentsJoinedByString:@";"];
+}
+
 - (size_t)handleHeaderLine:(const char *)bytes length:(size_t)length
 {
     NSString *line = [[[NSString alloc] initWithBytes:bytes length:length
@@ -724,6 +758,8 @@ static NSString *CPAcceptLanguageHeader(void)
     if (colon.location != NSNotFound) {
         NSString *name = CPTrimmed([trimmed substringToIndex:colon.location]);
         NSString *value = CPTrimmed([trimmed substringFromIndex:NSMaxRange(colon)]);
+        if ([[name lowercaseString] hasPrefix:@"content-security-policy"])
+            value = CPPolicyWithoutStrictDynamic(value);
         [responseHeaders setObject:value forKey:[name lowercaseString]];
         [responseHeaderOrder addObject:name];
         [responseHeaderOrder addObject:value];
