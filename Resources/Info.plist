@@ -6,6 +6,8 @@
 	<string>English</string>
 	<key>CFBundleExecutable</key>
 	<string>CaptainPolliwog</string>
+	<key>CFBundleIconFile</key>
+	<string>CaptainPolliwog</string>
 	<key>CFBundleIdentifier</key>
 	<string>org.captainpolliwog.browser</string>
 	<key>CFBundleInfoDictionaryVersion</key>

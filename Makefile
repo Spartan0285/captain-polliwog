@@ -56,13 +56,13 @@ ARCH_BINARIES = $(patsubst %,$(BUILD)/%/$(EXEC),$(ARCHS))
 $(BUILD)/$(EXEC): $(ARCH_BINARIES)
 	lipo -create $(ARCH_BINARIES) -output $@
 
-app: $(BUILD)/$(EXEC) Resources/Info.plist Resources/start.html Resources/cacert.pem Resources/polyfills.js Resources/autofill.js
+app: $(BUILD)/$(EXEC) Resources/Info.plist Resources/CaptainPolliwog.icns Resources/start.html Resources/cacert.pem Resources/polyfills.js Resources/autofill.js
 	@rm -rf "$(APP)"
 	@mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	@cp $(BUILD)/$(EXEC) "$(APP)/Contents/MacOS/$(EXEC)"
 	@sed -e 's/@VERSION@/$(VERSION)/g' Resources/Info.plist > "$(APP)/Contents/Info.plist"
 	@printf 'APPLCPwg' > "$(APP)/Contents/PkgInfo"
-	@cp Resources/start.html Resources/cacert.pem Resources/polyfills.js Resources/autofill.js "$(APP)/Contents/Resources/"
+	@cp Resources/start.html Resources/cacert.pem Resources/polyfills.js Resources/autofill.js Resources/CaptainPolliwog.icns "$(APP)/Contents/Resources/"
 	@echo "Built $(APP) ($$(lipo -info $(BUILD)/$(EXEC) | sed 's/.*: //'))"
 
 clean:
