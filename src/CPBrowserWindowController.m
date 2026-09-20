@@ -4,6 +4,7 @@
 
 #import "CPBrowserWindowController.h"
 #import "CPAutoFill.h"
+#import "CPExternalPlayer.h"
 #import "CPAppDelegate.h"
 #import "CPTab.h"
 #import "CPSiteModes.h"
@@ -645,6 +646,30 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [self updateChromeForSelectedTab];
 }
 
+// Hand what the page is playing to VLC or MPlayer, which decode H.264 with
+// AltiVec and make a resolution or so more of it watchable than QuickTime
+// does. See CPExternalPlayer.
+- (IBAction)playVideoExternally:(id)sender
+{
+    NSString *media = [CPExternalPlayer playingMediaURLInWebView:[[self selectedTab] webView]];
+    NSString *player = [CPExternalPlayer preferredPlayer];
+
+    if (media == nil) {
+        NSBeginInformationalAlertSheet(@"No video on this page", @"OK", nil, nil, [self window],
+            nil, NULL, NULL, NULL,
+            @"Nothing here is playing a video file this browser can hand over. A site that "
+            @"streams in pieces, rather than as one file, cannot be passed on.");
+        return;
+    }
+    if (player == nil || ![CPExternalPlayer playMediaURL:media]) {
+        NSBeginInformationalAlertSheet(@"Could not open the video", @"OK", nil, nil, [self window],
+            nil, NULL, NULL, NULL,
+            @"%@ would not start. VLC and MPlayer play these faster than QuickTime does; "
+            @"either one in /Applications will be found and used.",
+            player != nil ? [CPExternalPlayer displayNameForPlayer:player] : @"No media player");
+    }
+}
+
 // Text size steps, kept for each site.
 static float CPTextSizes[] = { 0.7f, 0.8f, 0.9f, 1.0f, 1.1f, 1.2f, 1.35f, 1.5f, 1.75f, 2.0f };
 #define CPTextSizeCount (sizeof(CPTextSizes) / sizeof(CPTextSizes[0]))
@@ -1115,6 +1140,13 @@ static NSMenuItem *CPMenuItem(NSMenu *menu, NSString *title, SEL action, id targ
         return findBarVisible;
     if (action == @selector(reopenClosedTab:))
         return [closedTabURLs count] > 0;
+    if (action == @selector(playVideoExternally:)) {
+        NSString *player = [CPExternalPlayer preferredPlayer];
+        [item setTitle:player != nil
+            ? [NSString stringWithFormat:@"Play Video in %@", [CPExternalPlayer displayNameForPlayer:player]]
+            : @"Play Video in Media Player"];
+        return page != nil;
+    }
     if (action == @selector(toggleReader:)) {
         [item setState:[selectedTab isShowingReader] ? NSOnState : NSOffState];
         return [selectedTab isShowingReader] || [selectedTab canShowReader];

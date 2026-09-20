@@ -168,6 +168,8 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     CPAddItem(menu, @"Make Text Smaller", @selector(makeTextSmaller:), @"-");
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Reader", @selector(toggleReader:), @"R");
+    // Retitled in validateMenuItem: to name the player that will be used.
+    CPAddItem(menu, @"Play Video in Media Player", @selector(playVideoExternally:), @"E");
     {
         // Which version of the current site to ask for; see CPSiteModes.
         NSMenuItem *siteItem = [menu addItemWithTitle:@"Site Version" action:NULL keyEquivalent:@""];

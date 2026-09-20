@@ -56,6 +56,7 @@
 - (IBAction)addressEntered:(id)sender;
 - (IBAction)autoFillForm:(id)sender;
 - (IBAction)toggleReader:(id)sender;
+- (IBAction)playVideoExternally:(id)sender;
 - (IBAction)toggleFavorite:(id)sender;
 - (IBAction)showShareMenu:(id)sender;
 - (IBAction)showPageMenu:(id)sender;
