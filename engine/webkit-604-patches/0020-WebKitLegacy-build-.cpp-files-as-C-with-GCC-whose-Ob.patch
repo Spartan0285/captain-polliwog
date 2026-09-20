@@ -1,7 +1,7 @@
 From c03810b8cd1fff8e9cffa054f14b02068157c0ce Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 03:53:10 -0400
-Subject: [PATCH 20/54] WebKitLegacy: build .cpp files as C++ with GCC, whose
+Subject: [PATCH 20/55] WebKitLegacy: build .cpp files as C++ with GCC, whose
  Objective-C++ rejects lambda init-captures
 
 Reverts the capture renames, which were not the cause.

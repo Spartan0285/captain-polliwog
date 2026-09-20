@@ -1,7 +1,7 @@
 From b8fcf93baf24cfda3126f2c1113dfc8933259a5e Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 00:52:47 -0400
-Subject: [PATCH 13/54] Make the Leopard-only features real options, so
+Subject: [PATCH 13/55] Make the Leopard-only features real options, so
  generators see them
 
 ---

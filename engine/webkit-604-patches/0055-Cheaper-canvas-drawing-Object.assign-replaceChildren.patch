@@ -1,0 +1,519 @@
+From a589619033b902920550ab526d1c8371a11500de Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Sun, 20 Sep 2026 01:04:06 -0400
+Subject: [PATCH 55/55] Cheaper canvas drawing, Object.assign, replaceChildren,
+ sticky, :focus-visible
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Canvas, from a profile of Speedometer's Charts-chartjs (5,366 points, each a
+filled and stroked circle):
+
+  - HTMLCanvasElement::didDraw asked the renderer for contentBoxRect() once
+    per drawing operation, and resolving the CSS padding and border was most
+    of its cost. It only changes when the canvas is laid out, so it is kept
+    until then.
+  - Path caches its fast bounding rectangle. GraphicsContext computed it
+    twice per drawn path with CGPathGetBoundingBox and the canvas computed it
+    again for the dirty rectangle; every mutator goes through
+    ensurePlatformPath(), so one flag there covers them all.
+  - Path::clear() leaves the path empty instead of allocating a fresh
+    CGMutablePathRef that beginPath() often never draws into.
+
+Object.assign copies a plain object's properties straight out of its
+structure, in order, when nothing about the source can observe the read: no
+getters, no custom or non-enumerable properties, no indexed properties and no
+override of property lookup. Values are read before any of them is assigned,
+since assigning can run script that changes the source. Chart.js constructs
+every point with Object.assign.
+
+ParentNode.replaceChildren() is implemented natively. The polyfill emptied
+the node one child at a time, which is a mutation record, a children-changed
+notification and a style invalidation each; this replaces the children in one
+or two batches. Note 604's replaceAllChildren() only accepts a single node —
+several nodes arrive as a DocumentFragment, which it would have inserted into
+the tree as a child (an assertion catches this in a debug build only).
+
+position: sticky is accepted and serialized unprefixed; the layout support was
+already there under -webkit-sticky, so this is a keyword. :focus-visible is
+accepted as :focus, which stops a whole selector being dropped for containing
+it, and stops querySelector(":focus-visible") throwing SyntaxError — that was
+killing scripts outright on github.com, bbc.com and outlook.live.com.
+
+JavaScriptCore turns off concurrent collection, concurrent barriers and
+concurrent compilation on PowerPC: these Macs have one processor, so the
+second thread only competes with the mutator for it.
+---
+ .../runtime/ObjectConstructor.cpp             | 27 ++++++++++++++++
+ Source/JavaScriptCore/runtime/Options.cpp     |  9 ++++++
+ Source/JavaScriptCore/runtime/Structure.h     |  5 +++
+ .../JavaScriptCore/runtime/StructureInlines.h | 14 ++++++++
+ .../WebCore/css/CSSPrimitiveValueMappings.h   |  4 ++-
+ Source/WebCore/css/CSSProperties.json         |  4 +++
+ Source/WebCore/css/CSSValueKeywords.in        |  1 +
+ ...orPseudoClassAndCompatibilityElementMap.in |  1 +
+ .../WebCore/css/parser/CSSParserFastPaths.cpp |  2 +-
+ Source/WebCore/dom/ContainerNode.cpp          | 32 +++++++++++++++++++
+ Source/WebCore/dom/ContainerNode.h            |  1 +
+ Source/WebCore/dom/ParentNode.idl             |  1 +
+ Source/WebCore/html/HTMLCanvasElement.cpp     |  9 +++++-
+ Source/WebCore/html/HTMLCanvasElement.h       |  4 +++
+ Source/WebCore/platform/graphics/Path.h       |  8 +++++
+ .../graphics/cg/GraphicsContextCG.cpp         | 20 ++++++------
+ .../WebCore/platform/graphics/cg/PathCG.cpp   | 17 ++++++++--
+ Source/WebCore/rendering/RenderHTMLCanvas.cpp |  7 ++++
+ Source/WebCore/rendering/RenderHTMLCanvas.h   |  1 +
+ 19 files changed, 151 insertions(+), 16 deletions(-)
+
+diff --git a/Source/JavaScriptCore/runtime/ObjectConstructor.cpp b/Source/JavaScriptCore/runtime/ObjectConstructor.cpp
+index afd79890..1aa20c4b 100644
+--- a/Source/JavaScriptCore/runtime/ObjectConstructor.cpp
++++ b/Source/JavaScriptCore/runtime/ObjectConstructor.cpp
+@@ -315,6 +315,33 @@ EncodedJSValue JSC_HOST_CALL objectConstructorAssign(ExecState* exec)
+         JSObject* source = sourceValue.toObject(exec);
+         RETURN_IF_EXCEPTION(scope, { });
+ 
++        // A plain object whose properties can all be read straight out of it
++        // (no getters, no custom or non-enumerable properties, no indexed
++        // ones, nothing that overrides property lookup) is copied from its
++        // structure, which saves building the name array and looking each
++        // property up again. Values are read first and only then assigned,
++        // since assigning can run script that changes the source.
++        Structure* sourceStructure = source->structure(vm);
++        if (sourceStructure->typeInfo().type() == FinalObjectType
++            && !sourceStructure->typeInfo().overridesGetOwnPropertySlot()
++            && !sourceStructure->hasCustomGetterSetterProperties()
++            && !hasIndexedProperties(sourceStructure->indexingType())
++            && sourceStructure->canAccessPropertiesQuicklyForEnumeration()) {
++            Vector<RefPtr<UniquedStringImpl>, 8> keys;
++            MarkedArgumentBuffer values;
++            sourceStructure->forEachOwnPropertyInOrder(vm, [&] (const PropertyMapEntry& entry) -> bool {
++                keys.append(entry.key);
++                values.append(source->getDirect(entry.offset));
++                return true;
++            });
++            for (unsigned j = 0; j < keys.size(); ++j) {
++                PutPropertySlot putPropertySlot(target, true);
++                target->putInline(exec, Identifier::fromUid(&vm, keys[j].get()), values.at(j), putPropertySlot);
++                RETURN_IF_EXCEPTION(scope, { });
++            }
++            continue;
++        }
++
+         PropertyNameArray properties(exec, PropertyNameMode::StringsAndSymbols);
+         source->methodTable(vm)->getOwnPropertyNames(source, exec, properties, EnumerationMode(DontEnumPropertiesMode::Include));
+         RETURN_IF_EXCEPTION(scope, { });
+diff --git a/Source/JavaScriptCore/runtime/Options.cpp b/Source/JavaScriptCore/runtime/Options.cpp
+index 857a8af3..e16373dd 100644
+--- a/Source/JavaScriptCore/runtime/Options.cpp
++++ b/Source/JavaScriptCore/runtime/Options.cpp
+@@ -368,6 +368,15 @@ static void overrideDefaults()
+ 
+ static void recomputeDependentOptions()
+ {
++#if CPU(PPC)
++    // These Macs have one processor. Concurrent collection then buys no
++    // parallelism and still pays for the barriers and the mutator slices,
++    // and a concurrent compile is a second thread competing for the one
++    // core the mutator is running on.
++    Options::useConcurrentGC() = false;
++    Options::useConcurrentBarriers() = false;
++    Options::useConcurrentJIT() = false;
++#endif
+ #if !defined(NDEBUG)
+     Options::validateDFGExceptionHandling() = true;
+ #endif
+diff --git a/Source/JavaScriptCore/runtime/Structure.h b/Source/JavaScriptCore/runtime/Structure.h
+index 860f2b3b..ed33d831 100644
+--- a/Source/JavaScriptCore/runtime/Structure.h
++++ b/Source/JavaScriptCore/runtime/Structure.h
+@@ -384,6 +384,11 @@ public:
+     // to continue or false if it's done.
+     template<typename Functor>
+     void forEachPropertyConcurrently(const Functor&);
++
++    // The object's own properties, in the order they were added. Only for
++    // callers that have checked canAccessPropertiesQuicklyForEnumeration().
++    template<typename Functor>
++    void forEachOwnPropertyInOrder(VM&, const Functor&);
+     
+     PropertyOffset getConcurrently(UniquedStringImpl* uid);
+     PropertyOffset getConcurrently(UniquedStringImpl* uid, unsigned& attributes);
+diff --git a/Source/JavaScriptCore/runtime/StructureInlines.h b/Source/JavaScriptCore/runtime/StructureInlines.h
+index c83113c4..9526dc3c 100644
+--- a/Source/JavaScriptCore/runtime/StructureInlines.h
++++ b/Source/JavaScriptCore/runtime/StructureInlines.h
+@@ -405,4 +405,18 @@ inline void Structure::setPropertyTable(VM& vm, PropertyTable* table)
+     m_propertyTableUnsafe.setMayBeNull(vm, this, table);
+ }
+     
++template<typename Functor>
++inline void Structure::forEachOwnPropertyInOrder(VM& vm, const Functor& functor)
++{
++    PropertyTable* table = ensurePropertyTableIfNotEmpty(vm);
++    if (!table)
++        return;
++
++    PropertyTable::iterator end = table->end();
++    for (PropertyTable::iterator iter = table->begin(); iter != end; ++iter) {
++        if (!functor(*iter))
++            return;
++    }
++}
++
+ } // namespace JSC
+diff --git a/Source/WebCore/css/CSSPrimitiveValueMappings.h b/Source/WebCore/css/CSSPrimitiveValueMappings.h
+index e87b0470..c0ff4632 100644
+--- a/Source/WebCore/css/CSSPrimitiveValueMappings.h
++++ b/Source/WebCore/css/CSSPrimitiveValueMappings.h
+@@ -2378,7 +2378,8 @@ template<> inline CSSPrimitiveValue::CSSPrimitiveValue(EPosition e)
+         m_value.valueID = CSSValueFixed;
+         break;
+     case StickyPosition:
+-        m_value.valueID = CSSValueWebkitSticky;
++        // Serialized unprefixed, which is what pages test for.
++        m_value.valueID = CSSValueSticky;
+         break;
+     }
+ }
+@@ -2396,6 +2397,7 @@ template<> inline CSSPrimitiveValue::operator EPosition() const
+         return AbsolutePosition;
+     case CSSValueFixed:
+         return FixedPosition;
++    case CSSValueSticky:
+     case CSSValueWebkitSticky:
+         return StickyPosition;
+     default:
+diff --git a/Source/WebCore/css/CSSProperties.json b/Source/WebCore/css/CSSProperties.json
+index 8d7f1af4..7ad5cde4 100644
+--- a/Source/WebCore/css/CSSProperties.json
++++ b/Source/WebCore/css/CSSProperties.json
+@@ -2827,6 +2827,10 @@
+                     "value": "-webkit-sticky",
+                     "status": "experimental",
+                     "url": "https://www.w3.org/TR/css-position-3/#valdef-position-sticky"
++                },
++                {
++                    "value": "sticky",
++                    "url": "https://www.w3.org/TR/css-position-3/#valdef-position-sticky"
+                 }
+             ],
+             "specification": {
+diff --git a/Source/WebCore/css/CSSValueKeywords.in b/Source/WebCore/css/CSSValueKeywords.in
+index 356341bb..500ed272 100644
+--- a/Source/WebCore/css/CSSValueKeywords.in
++++ b/Source/WebCore/css/CSSValueKeywords.in
+@@ -1119,6 +1119,7 @@ alphabetic
+ 
+ // position
+ -webkit-sticky
++sticky
+ 
+ // (pointer:) media feature
+ // none
+diff --git a/Source/WebCore/css/SelectorPseudoClassAndCompatibilityElementMap.in b/Source/WebCore/css/SelectorPseudoClassAndCompatibilityElementMap.in
+index b160e306..7414bcd8 100644
+--- a/Source/WebCore/css/SelectorPseudoClassAndCompatibilityElementMap.in
++++ b/Source/WebCore/css/SelectorPseudoClassAndCompatibilityElementMap.in
+@@ -26,6 +26,7 @@ first-letter, PseudoClassUnknown, PseudoElementFirstLetter
+ first-line, PseudoClassUnknown, PseudoElementFirstLine
+ first-of-type
+ focus
++focus-visible, PseudoClassFocus, PseudoElementUnknown
+ focus-within
+ horizontal
+ host, PseudoClassHost, PseudoElementUnknown
+diff --git a/Source/WebCore/css/parser/CSSParserFastPaths.cpp b/Source/WebCore/css/parser/CSSParserFastPaths.cpp
+index a75cac72..f5a93d2e 100644
+--- a/Source/WebCore/css/parser/CSSParserFastPaths.cpp
++++ b/Source/WebCore/css/parser/CSSParserFastPaths.cpp
+@@ -604,7 +604,7 @@ bool CSSParserFastPaths::isValidKeywordPropertyAndValue(CSSPropertyID propertyId
+         // painted | fill | stroke | auto | all | bounding-box
+         return valueID == CSSValueVisible || valueID == CSSValueNone || valueID == CSSValueAll || valueID == CSSValueAuto || (valueID >= CSSValueVisiblePainted && valueID <= CSSValueStroke);
+     case CSSPropertyPosition: // static | relative | absolute | fixed | sticky
+-        return valueID == CSSValueStatic || valueID == CSSValueRelative || valueID == CSSValueAbsolute || valueID == CSSValueFixed || valueID == CSSValueWebkitSticky;
++        return valueID == CSSValueStatic || valueID == CSSValueRelative || valueID == CSSValueAbsolute || valueID == CSSValueFixed || valueID == CSSValueWebkitSticky || valueID == CSSValueSticky;
+     case CSSPropertyResize: // none | both | horizontal | vertical | auto
+         return valueID == CSSValueNone || valueID == CSSValueBoth || valueID == CSSValueHorizontal || valueID == CSSValueVertical || valueID == CSSValueAuto;
+     // FIXME-NEWPARSER: Investigate this property.
+diff --git a/Source/WebCore/dom/ContainerNode.cpp b/Source/WebCore/dom/ContainerNode.cpp
+index 4176f4d2..1807ed4b 100644
+--- a/Source/WebCore/dom/ContainerNode.cpp
++++ b/Source/WebCore/dom/ContainerNode.cpp
+@@ -959,6 +959,38 @@ ExceptionOr<void> ContainerNode::append(Vector<NodeOrString>&& vector)
+     return appendChild(*node);
+ }
+ 
++// https://dom.spec.whatwg.org/#dom-parentnode-replacechildren
++ExceptionOr<void> ContainerNode::replaceChildren(Vector<NodeOrString>&& vector)
++{
++    auto result = convertNodesOrStringsIntoNode(WTFMove(vector));
++    if (result.hasException())
++        return result.releaseException();
++
++    auto node = result.releaseReturnValue();
++    if (!node) {
++        replaceAllChildren(nullptr);
++        return { };
++    }
++
++    auto validityCheckResult = ensurePreInsertionValidity(*node, nullptr);
++    if (validityCheckResult.hasException())
++        return validityCheckResult.releaseException();
++
++    // One replacement, so one children-changed notification and one style
++    // invalidation, however many children the list had. replaceAllChildren()
++    // takes a single node; several nodes arrive as a fragment, which is
++    // removed and appended in two batches instead of one node at a time.
++    if (!is<DocumentFragment>(node.get())) {
++        replaceAllChildren(node.releaseNonNull());
++        return { };
++    }
++
++    Ref<ContainerNode> protectedThis(*this);
++    ChildListMutationScope mutation(*this);
++    removeChildren();
++    return appendChildWithoutPreInsertionValidityCheck(*node);
++}
++
+ ExceptionOr<void> ContainerNode::prepend(Vector<NodeOrString>&& vector)
+ {
+     auto result = convertNodesOrStringsIntoNode(WTFMove(vector));
+diff --git a/Source/WebCore/dom/ContainerNode.h b/Source/WebCore/dom/ContainerNode.h
+index 1ae87c2e..6d493521 100644
+--- a/Source/WebCore/dom/ContainerNode.h
++++ b/Source/WebCore/dom/ContainerNode.h
+@@ -121,6 +121,7 @@ public:
+     WEBCORE_EXPORT Element* lastElementChild() const;
+     WEBCORE_EXPORT unsigned childElementCount() const;
+     ExceptionOr<void> append(Vector<NodeOrString>&&);
++    ExceptionOr<void> replaceChildren(Vector<NodeOrString>&&);
+     ExceptionOr<void> prepend(Vector<NodeOrString>&&);
+ 
+     ExceptionOr<void> ensurePreInsertionValidity(Node& newChild, Node* refChild);
+diff --git a/Source/WebCore/dom/ParentNode.idl b/Source/WebCore/dom/ParentNode.idl
+index 6d79dc59..cb70f8ae 100644
+--- a/Source/WebCore/dom/ParentNode.idl
++++ b/Source/WebCore/dom/ParentNode.idl
+@@ -35,6 +35,7 @@
+ 
+     [CEReactions, Unscopable, MayThrowException] void prepend((Node or DOMString)... nodes);
+     [CEReactions, Unscopable, MayThrowException] void append((Node or DOMString)... nodes);
++    [CEReactions, Unscopable, MayThrowException] void replaceChildren((Node or DOMString)... nodes);
+ 
+     [MayThrowException] Element? querySelector(DOMString selectors);
+     [MayThrowException, NewObject] NodeList querySelectorAll(DOMString selectors);
+diff --git a/Source/WebCore/html/HTMLCanvasElement.cpp b/Source/WebCore/html/HTMLCanvasElement.cpp
+index 020866c7..a9b3a0e3 100644
+--- a/Source/WebCore/html/HTMLCanvasElement.cpp
++++ b/Source/WebCore/html/HTMLCanvasElement.cpp
+@@ -374,7 +374,14 @@ void HTMLCanvasElement::didDraw(const FloatRect& rect)
+ 
+     FloatRect dirtyRect = rect;
+     if (RenderBox* ro = renderBox()) {
+-        FloatRect destRect = ro->contentBoxRect();
++        // contentBoxRect() resolves the CSS padding and border every time, and
++        // a page drawing thousands of small shapes asks for it once per draw.
++        // It only changes when the canvas is laid out again.
++        if (!m_hasCachedContentBoxRect) {
++            m_cachedContentBoxRect = ro->contentBoxRect();
++            m_hasCachedContentBoxRect = true;
++        }
++        FloatRect destRect = m_cachedContentBoxRect;
+         // Inflate dirty rect to cover antialiasing on image buffers.
+         if (drawingContext() && drawingContext()->shouldAntialias())
+             dirtyRect.inflate(1);
+diff --git a/Source/WebCore/html/HTMLCanvasElement.h b/Source/WebCore/html/HTMLCanvasElement.h
+index 796db067..b4d0ff09 100644
+--- a/Source/WebCore/html/HTMLCanvasElement.h
++++ b/Source/WebCore/html/HTMLCanvasElement.h
+@@ -116,6 +116,8 @@ public:
+ 
+     // Used for rendering
+     void didDraw(const FloatRect&);
++    // The canvas has been laid out: didDraw's copy of its content box is stale.
++    void invalidateCachedContentBoxRect() { m_hasCachedContentBoxRect = false; }
+     void notifyObserversCanvasChanged(const FloatRect&);
+ 
+     void paint(GraphicsContext&, const LayoutRect&);
+@@ -182,6 +184,8 @@ private:
+     std::unique_ptr<CanvasRenderingContext> m_context;
+ 
+     FloatRect m_dirtyRect;
++    FloatRect m_cachedContentBoxRect;
++    bool m_hasCachedContentBoxRect { false };
+     IntSize m_size;
+ 
+     bool m_originClean { true };
+diff --git a/Source/WebCore/platform/graphics/Path.h b/Source/WebCore/platform/graphics/Path.h
+index 7caba4cb..12b3aa5a 100644
+--- a/Source/WebCore/platform/graphics/Path.h
++++ b/Source/WebCore/platform/graphics/Path.h
+@@ -209,6 +209,14 @@ namespace WebCore {
+         COMPtr<ID2D1GeometrySink> m_activePath;
+ #else
+         PlatformPathPtr m_path { nullptr };
++#endif
++#if USE(CG)
++        // fastBoundingRect() is asked for several times per drawn path (twice
++        // by GraphicsContext, again for the canvas's dirty rectangle), and
++        // CGPathGetBoundingBox walks the whole path each time. Every mutator
++        // goes through ensurePlatformPath(), which drops this.
++        mutable FloatRect m_cachedFastBoundingRect;
++        mutable bool m_hasCachedFastBoundingRect { false };
+ #endif
+     };
+ 
+diff --git a/Source/WebCore/platform/graphics/cg/GraphicsContextCG.cpp b/Source/WebCore/platform/graphics/cg/GraphicsContextCG.cpp
+index 9e14db68..181a4f2f 100644
+--- a/Source/WebCore/platform/graphics/cg/GraphicsContextCG.cpp
++++ b/Source/WebCore/platform/graphics/cg/GraphicsContextCG.cpp
+@@ -631,8 +631,8 @@ static inline bool calculateDrawingMode(const GraphicsContextState& state, CGPat
+ 
+ void GraphicsContext::drawPath(const Path& path)
+ {
+-    CGRect pathBoundingBox = CGPathGetBoundingBox(path.platformPath());
+-    if (fabsf(pathBoundingBox.size.width) > INT_MAX || fabsf(pathBoundingBox.size.height) > INT_MAX)
++    FloatRect pathBoundingBox = path.fastBoundingRect();
++    if (fabsf(pathBoundingBox.width()) > INT_MAX || fabsf(pathBoundingBox.height()) > INT_MAX)
+         return;
+ 
+     if (paintingDisabled() || path.isEmpty())
+@@ -669,8 +669,8 @@ void GraphicsContext::drawPath(const Path& path)
+ 
+ void GraphicsContext::fillPath(const Path& path)
+ {
+-    CGRect pathBoundingBox = CGPathGetBoundingBox(path.platformPath());
+-    if (fabsf(pathBoundingBox.size.width) > INT_MAX || fabsf(pathBoundingBox.size.height) > INT_MAX)
++    FloatRect pathBoundingBox = path.fastBoundingRect();
++    if (fabsf(pathBoundingBox.width()) > INT_MAX || fabsf(pathBoundingBox.height()) > INT_MAX)
+         return;
+ 
+     if (paintingDisabled() || path.isEmpty())
+@@ -736,8 +736,8 @@ void GraphicsContext::fillPath(const Path& path)
+ 
+ void GraphicsContext::strokePath(const Path& path)
+ {
+-    CGRect pathBoundingBox = CGPathGetBoundingBox(path.platformPath());
+-    if (fabsf(pathBoundingBox.size.width) > INT_MAX || fabsf(pathBoundingBox.size.height) > INT_MAX)
++    FloatRect pathBoundingBox = path.fastBoundingRect();
++    if (fabsf(pathBoundingBox.width()) > INT_MAX || fabsf(pathBoundingBox.height()) > INT_MAX)
+         return;
+ 
+     if (paintingDisabled() || path.isEmpty())
+@@ -1019,8 +1019,8 @@ void GraphicsContext::clipOut(const FloatRect& rect)
+ 
+ void GraphicsContext::clipOut(const Path& path)
+ {
+-    CGRect pathBoundingBox = CGPathGetBoundingBox(path.platformPath());
+-    if (fabsf(pathBoundingBox.size.width) > INT_MAX || fabsf(pathBoundingBox.size.height) > INT_MAX)
++    FloatRect pathBoundingBox = path.fastBoundingRect();
++    if (fabsf(pathBoundingBox.width()) > INT_MAX || fabsf(pathBoundingBox.height()) > INT_MAX)
+         return;
+ 
+     if (paintingDisabled())
+@@ -1040,8 +1040,8 @@ void GraphicsContext::clipOut(const Path& path)
+ 
+ void GraphicsContext::clipPath(const Path& path, WindRule clipRule)
+ {
+-    CGRect pathBoundingBox = CGPathGetBoundingBox(path.platformPath());
+-    if (fabsf(pathBoundingBox.size.width) > INT_MAX || fabsf(pathBoundingBox.size.height) > INT_MAX)
++    FloatRect pathBoundingBox = path.fastBoundingRect();
++    if (fabsf(pathBoundingBox.width()) > INT_MAX || fabsf(pathBoundingBox.height()) > INT_MAX)
+         return;
+ 
+     if (paintingDisabled())
+diff --git a/Source/WebCore/platform/graphics/cg/PathCG.cpp b/Source/WebCore/platform/graphics/cg/PathCG.cpp
+index 5e7b474e..92407a41 100644
+--- a/Source/WebCore/platform/graphics/cg/PathCG.cpp
++++ b/Source/WebCore/platform/graphics/cg/PathCG.cpp
+@@ -107,6 +107,7 @@ Path::~Path()
+ 
+ PlatformPathPtr Path::ensurePlatformPath()
+ {
++    m_hasCachedFastBoundingRect = false;
+     if (!m_path)
+         m_path = CGPathCreateMutable();
+     return m_path;
+@@ -119,6 +120,7 @@ Path::Path(const Path& other)
+ 
+ Path& Path::operator=(const Path& other)
+ {
++    m_hasCachedFastBoundingRect = false;
+     CGMutablePathRef path = other.m_path ? CGPathCreateMutableCopy(other.m_path) : 0;
+     if (m_path)
+         CGPathRelease(m_path);
+@@ -206,6 +208,8 @@ void Path::transform(const AffineTransform& transform)
+     if (transform.isIdentity() || isEmpty())
+         return;
+ 
++    m_hasCachedFastBoundingRect = false;
++
+     CGAffineTransform transformCG = transform;
+ #if PLATFORM(WIN) || (PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1060)
+     CGMutablePathRef path = CGPathCreateMutable();
+@@ -232,8 +236,12 @@ FloatRect Path::fastBoundingRect() const
+ {
+     if (isNull())
+         return CGRectZero;
+-    CGRect bound = CGPathGetBoundingBox(m_path);
+-    return CGRectIsNull(bound) ? CGRectZero : bound;
++    if (!m_hasCachedFastBoundingRect) {
++        CGRect bound = CGPathGetBoundingBox(m_path);
++        m_cachedFastBoundingRect = CGRectIsNull(bound) ? FloatRect() : FloatRect(bound);
++        m_hasCachedFastBoundingRect = true;
++    }
++    return m_cachedFastBoundingRect;
+ }
+ 
+ FloatRect Path::strokeBoundingRect(StrokeStyleApplier* applier) const
+@@ -367,11 +375,14 @@ void Path::addPath(const Path& path, const AffineTransform& transform)
+ 
+ void Path::clear()
+ {
++    m_hasCachedFastBoundingRect = false;
+     if (isNull())
+         return;
+ 
++    // Left empty rather than replaced: a path that is cleared and not drawn
++    // again, as beginPath() on an empty canvas region does, then costs nothing.
+     CGPathRelease(m_path);
+-    m_path = CGPathCreateMutable();
++    m_path = nullptr;
+ }
+ 
+ bool Path::isEmpty() const
+diff --git a/Source/WebCore/rendering/RenderHTMLCanvas.cpp b/Source/WebCore/rendering/RenderHTMLCanvas.cpp
+index c88cb135..79fc567a 100644
+--- a/Source/WebCore/rendering/RenderHTMLCanvas.cpp
++++ b/Source/WebCore/rendering/RenderHTMLCanvas.cpp
+@@ -87,6 +87,13 @@ void RenderHTMLCanvas::paintReplaced(PaintInfo& paintInfo, const LayoutPoint& pa
+     canvasElement().paint(context, replacedContentRect);
+ }
+ 
++void RenderHTMLCanvas::layout()
++{
++    RenderReplaced::layout();
++    // Where the canvas draws inside its box may have moved.
++    canvasElement().invalidateCachedContentBoxRect();
++}
++
+ void RenderHTMLCanvas::canvasSizeChanged()
+ {
+     IntSize canvasSize = canvasElement().size();
+diff --git a/Source/WebCore/rendering/RenderHTMLCanvas.h b/Source/WebCore/rendering/RenderHTMLCanvas.h
+index 77e5dde3..d2f2bc24 100644
+--- a/Source/WebCore/rendering/RenderHTMLCanvas.h
++++ b/Source/WebCore/rendering/RenderHTMLCanvas.h
+@@ -44,6 +44,7 @@ private:
+     bool requiresLayer() const override;
+     bool isCanvas() const override { return true; }
+     const char* renderName() const override { return "RenderHTMLCanvas"; }
++    void layout() override;
+     void paintReplaced(PaintInfo&, const LayoutPoint&) override;
+     void intrinsicSizeChanged() override { canvasSizeChanged(); }
+ };
+-- 
+2.54.0 (Apple Git-157)
+

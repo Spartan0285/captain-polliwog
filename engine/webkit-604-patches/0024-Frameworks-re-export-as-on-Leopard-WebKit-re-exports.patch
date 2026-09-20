@@ -1,7 +1,7 @@
 From c9b751b7d7de4391c9d67b0fb56caee3c333a8bb Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 04:09:03 -0400
-Subject: [PATCH 24/54] Frameworks re-export as on Leopard: WebKit re-exports
+Subject: [PATCH 24/55] Frameworks re-export as on Leopard: WebKit re-exports
  WebCore, JavaScriptCore re-exports libobjc
 
 Applications linked against the system WebKit bind Objective-C runtime

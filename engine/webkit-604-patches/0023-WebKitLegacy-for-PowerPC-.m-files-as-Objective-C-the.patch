@@ -1,7 +1,7 @@
 From 4de0053a8b4575cf73bee9b03f9759f724714766 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 04:01:41 -0400
-Subject: [PATCH 23/54] WebKitLegacy for PowerPC: .m files as Objective-C, the
+Subject: [PATCH 23/55] WebKitLegacy for PowerPC: .m files as Objective-C, the
  Growl provider, and no plug-in host process
 
 ---
