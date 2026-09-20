@@ -1,7 +1,7 @@
 From a6110b07647c427835245241479fcf51563f4bf6 Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Sat, 19 Sep 2026 11:49:34 -0400
-Subject: [PATCH 49/53] JSC: PowerPC baseline JIT, work in progress
+Subject: [PATCH 49/54] JSC: PowerPC baseline JIT, work in progress
 
 A new assembler and macro assembler (PPCAssemblerJIT.h,
 MacroAssemblerPPCJIT.h) used only when ENABLE(JIT), plus the PowerPC paths

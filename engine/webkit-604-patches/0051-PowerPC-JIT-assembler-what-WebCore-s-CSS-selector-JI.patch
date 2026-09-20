@@ -1,7 +1,7 @@
 From 8e334d17669426a42550f314b69e4d4d18b3aa1c Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Sat, 19 Sep 2026 13:29:20 -0400
-Subject: [PATCH 51/53] PowerPC JIT assembler: what WebCore's CSS selector JIT
+Subject: [PATCH 51/54] PowerPC JIT assembler: what WebCore's CSS selector JIT
  needs
 
 The CSS selector JIT emits a few instructions by their PPCAssembler.h names

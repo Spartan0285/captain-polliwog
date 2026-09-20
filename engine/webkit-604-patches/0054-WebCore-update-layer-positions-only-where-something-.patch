@@ -1,0 +1,265 @@
+From 2196349fc4ab9e63983b0b137114b101e2fb2363 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Sat, 19 Sep 2026 22:28:30 -0400
+Subject: [PATCH 54/54] WebCore: update layer positions only where something
+ moved
+
+After layout, RenderLayer::updateLayerPositions walked every layer in the
+page: recomputing each layer's position, its clip rects and its repaint
+rects, and pushing and popping the geometry map along the way. On a page
+with thousands of positioned elements that walk cost more than the layout
+that prompted it, and almost all of it recomputed values that hadn't
+changed.
+
+Each renderer now carries the number of the layer position update its
+subtree last needed (four bits in RenderElement, which had room to spare).
+A renderer that was laid out marks itself and its ancestors with the view's
+current generation, as do a layer that scrolled, one whose visible content
+changed, and one that needs a full repaint; the view advances the
+generation after each update. updateLayerPositions then skips a child whose
+subtree carries an older generation, unless something above it moved, in
+which case the subtree's positions really do have to be recomputed.
+
+On the PowerBook G4, Speedometer 3.1:
+
+  TodoMVC-Svelte-Complex-DOM         3393 -> 1255 ms
+  TodoMVC-Preact-Complex-DOM         3462 -> 1396 ms
+  TodoMVC-Angular-Complex-DOM        6498 -> 4319 ms
+  TodoMVC-JavaScript-ES5             5456 -> 5308 ms
+
+Checked against stale painting with a page that reaches its final state by
+mutating the DOM, compared to the same page built in one go: the window's
+own contents (CGWindowListCreateImage, not a fresh render) are identical
+pixel for pixel, at the top of the page and scrolled.
+---
+ Source/WebCore/page/FrameView.cpp          |  3 +++
+ Source/WebCore/rendering/RenderElement.cpp | 11 +++++++++++
+ Source/WebCore/rendering/RenderElement.h   | 12 +++++++++++
+ Source/WebCore/rendering/RenderLayer.cpp   | 23 +++++++++++++++++-----
+ Source/WebCore/rendering/RenderLayer.h     |  9 +++++++--
+ Source/WebCore/rendering/RenderObject.cpp  | 10 ++++++++++
+ Source/WebCore/rendering/RenderObject.h    |  3 +++
+ Source/WebCore/rendering/RenderView.h      |  5 +++++
+ 8 files changed, 69 insertions(+), 7 deletions(-)
+
+diff --git a/Source/WebCore/page/FrameView.cpp b/Source/WebCore/page/FrameView.cpp
+index 619c34c4..75937d21 100644
+--- a/Source/WebCore/page/FrameView.cpp
++++ b/Source/WebCore/page/FrameView.cpp
+@@ -1540,6 +1540,9 @@ void FrameView::layout(bool allowSubtree)
+     ASSERT(!root->needsLayout());
+ 
+     layer->updateLayerPositionsAfterLayout(renderView()->layer(), updateLayerPositionFlags(layer, subtree, m_needsFullRepaint));
++    // Everything marked for this pass has been updated (see
++    // RenderObject::markSubtreeForLayerPositionUpdate).
++    renderView()->advanceLayerPositionGeneration();
+ 
+     updateCompositingLayersAfterLayout();
+ 
+diff --git a/Source/WebCore/rendering/RenderElement.cpp b/Source/WebCore/rendering/RenderElement.cpp
+index 90b60fab..2236b859 100644
+--- a/Source/WebCore/rendering/RenderElement.cpp
++++ b/Source/WebCore/rendering/RenderElement.cpp
+@@ -92,11 +92,22 @@ struct SameSizeAsRenderElement : public RenderObject {
+ 
+ static_assert(sizeof(RenderElement) == sizeof(SameSizeAsRenderElement), "RenderElement should stay small");
+ 
++void RenderElement::markSubtreeForLayerPositionUpdate()
++{
++    unsigned generation = view().layerPositionGeneration();
++    for (RenderElement* renderer = this; renderer; renderer = renderer->parent()) {
++        if (renderer->m_layerPositionGeneration == generation)
++            return;
++        renderer->m_layerPositionGeneration = generation;
++    }
++}
++
+ bool RenderElement::s_affectsParentBlock = false;
+ bool RenderElement::s_noLongerAffectsParentBlock = false;
+     
+ inline RenderElement::RenderElement(ContainerNode& elementOrDocument, RenderStyle&& style, BaseTypeFlags baseTypeFlags)
+     : RenderObject(elementOrDocument)
++    , m_layerPositionGeneration(0)
+     , m_baseTypeFlags(baseTypeFlags)
+     , m_ancestorLineBoxDirty(false)
+     , m_hasInitializedStyle(false)
+diff --git a/Source/WebCore/rendering/RenderElement.h b/Source/WebCore/rendering/RenderElement.h
+index 4f8226b5..850c19dc 100644
+--- a/Source/WebCore/rendering/RenderElement.h
++++ b/Source/WebCore/rendering/RenderElement.h
+@@ -109,6 +109,9 @@ public:
+     bool ancestorLineBoxDirty() const { return m_ancestorLineBoxDirty; }
+     void setAncestorLineBoxDirty(bool f = true);
+ 
++    void markSubtreeForLayerPositionUpdate();
++    unsigned layerPositionGeneration() const { return m_layerPositionGeneration; }
++
+     void setChildNeedsLayout(MarkingBehavior = MarkContainingBlockChain);
+     void clearChildNeedsLayout();
+     void setNeedsPositionedMovementLayout(const RenderStyle* oldStyle);
+@@ -329,6 +332,15 @@ private:
+     bool shouldWillChangeCreateStackingContext() const;
+     void issueRepaintForOutlineAuto(float outlineSize);
+ 
++    // Which layer position update this renderer's subtree last needed: after
++    // layout only the layers whose renderers moved need their positions, clip
++    // rects and repaint rects recomputed, so a renderer that was laid out (or
++    // scrolled, or whose visibility changed) marks itself and its ancestors
++    // with the view's current generation, and RenderLayer::updateLayerPositions
++    // skips the subtrees that are not marked and whose ancestors did not move.
++    // The generation wraps, which can only make a clean subtree look dirty.
++    unsigned m_layerPositionGeneration : 4;
++
+     unsigned m_baseTypeFlags : 6;
+     unsigned m_ancestorLineBoxDirty : 1;
+     unsigned m_hasInitializedStyle : 1;
+diff --git a/Source/WebCore/rendering/RenderLayer.cpp b/Source/WebCore/rendering/RenderLayer.cpp
+index dd7fe062..1f1864ca 100644
+--- a/Source/WebCore/rendering/RenderLayer.cpp
++++ b/Source/WebCore/rendering/RenderLayer.cpp
+@@ -476,14 +476,18 @@ void RenderLayer::updateLayerPositionsAfterLayout(const RenderLayer* rootLayer,
+     RenderGeometryMap geometryMap(UseTransforms);
+     if (this != rootLayer)
+         geometryMap.pushMappingsToAncestor(parent(), nullptr);
+-    updateLayerPositions(&geometryMap, flags);
++    // This layer is where layout started, so nothing above it moved.
++    updateLayerPositions(&geometryMap, flags, false);
+ }
+ 
+-void RenderLayer::updateLayerPositions(RenderGeometryMap* geometryMap, UpdateLayerPositionsFlags flags)
++void RenderLayer::updateLayerPositions(RenderGeometryMap* geometryMap, UpdateLayerPositionsFlags flags, bool ancestorMoved)
+ {
+-    updateLayerPosition(); // For relpositioned layers or non-positioned layers,
++    IntSize oldSize = size();
++    bool moved = updateLayerPosition() || oldSize != size();
++                           // For relpositioned layers or non-positioned layers,
+                            // we need to keep in sync, since we may have shifted relative
+                            // to our parent layer.
++    moved |= ancestorMoved;
+ 
+     applyPostLayoutScrollPositionIfNeeded();
+ 
+@@ -575,8 +579,14 @@ void RenderLayer::updateLayerPositions(RenderGeometryMap* geometryMap, UpdateLay
+             flags |= Seen3DTransformedLayer;
+     }
+ 
+-    for (RenderLayer* child = firstChild(); child; child = child->nextSibling())
+-        child->updateLayerPositions(geometryMap, flags);
++    unsigned generation = renderer().view().layerPositionGeneration();
++    for (RenderLayer* child = firstChild(); child; child = child->nextSibling()) {
++        // Nothing here was laid out and nothing above it moved, so its
++        // positions, clip rects and repaint rects still hold.
++        if (!moved && child->renderer().layerPositionGeneration() != generation)
++            continue;
++        child->updateLayerPositions(geometryMap, flags, moved);
++    }
+ 
+     if ((flags & UpdateCompositingLayers) && isComposited()) {
+         RenderLayerBacking::UpdateAfterLayoutFlags updateFlags = RenderLayerBacking::CompositingChildrenOnly;
+@@ -1172,6 +1182,7 @@ void RenderLayer::setHasVisibleContent()
+ void RenderLayer::dirtyVisibleContentStatus() 
+ { 
+     m_visibleContentStatusDirty = true; 
++    renderer().markSubtreeForLayerPositionUpdate();
+     if (parent())
+         parent()->dirtyAncestorChainVisibleDescendantStatus();
+ }
+@@ -2388,6 +2399,8 @@ void RenderLayer::scrollTo(const ScrollPosition& position)
+     RenderBox* box = renderBox();
+     if (!box)
+         return;
++    // The layers inside move with the scroll.
++    renderer().markSubtreeForLayerPositionUpdate();
+ 
+     LOG_WITH_STREAM(Scrolling, stream << "RenderLayer::scrollTo " << position);
+ 
+diff --git a/Source/WebCore/rendering/RenderLayer.h b/Source/WebCore/rendering/RenderLayer.h
+index 023fe72a..a75a492a 100644
+--- a/Source/WebCore/rendering/RenderLayer.h
++++ b/Source/WebCore/rendering/RenderLayer.h
+@@ -588,7 +588,12 @@ public:
+     LayoutRect repaintRect() const { ASSERT(hasComputedRepaintRect()); return m_repaintRect; }
+     LayoutRect repaintRectIncludingNonCompositingDescendants() const;
+ 
+-    void setRepaintStatus(RepaintStatus status) { m_repaintStatus = status; }
++    void setRepaintStatus(RepaintStatus status)
++    {
++        m_repaintStatus = status;
++        if (status != NeedsNormalRepaint)
++            renderer().markSubtreeForLayerPositionUpdate();  // so the next update visits it
++    }
+     RepaintStatus repaintStatus() const { return static_cast<RepaintStatus>(m_repaintStatus); }
+ 
+     LayoutUnit staticInlinePosition() const { return m_staticInlinePosition; }
+@@ -797,7 +802,7 @@ private:
+     // Returns true if the position changed.
+     bool updateLayerPosition();
+ 
+-    void updateLayerPositions(RenderGeometryMap* = nullptr, UpdateLayerPositionsFlags = defaultFlags);
++    void updateLayerPositions(RenderGeometryMap* = nullptr, UpdateLayerPositionsFlags = defaultFlags, bool ancestorMoved = true);
+ 
+     enum UpdateLayerPositionsAfterScrollFlag {
+         NoFlag = 0,
+diff --git a/Source/WebCore/rendering/RenderObject.cpp b/Source/WebCore/rendering/RenderObject.cpp
+index 968a24c9..2f5c10d2 100644
+--- a/Source/WebCore/rendering/RenderObject.cpp
++++ b/Source/WebCore/rendering/RenderObject.cpp
+@@ -483,8 +483,18 @@ static inline bool objectIsRelayoutBoundary(const RenderElement* object)
+     return true;
+ }
+ 
++void RenderObject::markSubtreeForLayerPositionUpdate()
++{
++    // The marks live on RenderElement; a text renderer stands for its parent.
++    if (is<RenderElement>(*this))
++        downcast<RenderElement>(*this).markSubtreeForLayerPositionUpdate();
++    else if (auto* parent = this->parent())
++        parent->markSubtreeForLayerPositionUpdate();
++}
++
+ void RenderObject::clearNeedsLayout()
+ {
++    markSubtreeForLayerPositionUpdate();
+     m_bitfields.setNeedsLayout(false);
+     setEverHadLayout(true);
+     setPosChildNeedsLayoutBit(false);
+diff --git a/Source/WebCore/rendering/RenderObject.h b/Source/WebCore/rendering/RenderObject.h
+index b5a15d12..8a620518 100644
+--- a/Source/WebCore/rendering/RenderObject.h
++++ b/Source/WebCore/rendering/RenderObject.h
+@@ -522,6 +522,9 @@ public:
+     void markContainingBlocksForLayout(ScheduleRelayout = ScheduleRelayout::Yes, RenderElement* newRoot = nullptr);
+     void setNeedsLayout(MarkingBehavior = MarkContainingBlockChain);
+     void clearNeedsLayout();
++
++    // See RenderElement::markSubtreeForLayerPositionUpdate.
++    void markSubtreeForLayerPositionUpdate();
+     void setPreferredLogicalWidthsDirty(bool, MarkingBehavior = MarkContainingBlockChain);
+     void invalidateContainerPreferredLogicalWidths();
+     
+diff --git a/Source/WebCore/rendering/RenderView.h b/Source/WebCore/rendering/RenderView.h
+index 1a9c8947..cdbe016c 100644
+--- a/Source/WebCore/rendering/RenderView.h
++++ b/Source/WebCore/rendering/RenderView.h
+@@ -215,6 +215,10 @@ public:
+     // Whether any layer may hold block selection gaps: when none does, a
+     // selection change needn't walk every layer to repaint or clear them.
+     void setMayHaveBlockSelectionGaps() { m_mayHaveBlockSelectionGaps = true; }
++
++    // See RenderObject::markSubtreeForLayerPositionUpdate.
++    unsigned layerPositionGeneration() const { return m_layerPositionGeneration; }
++    void advanceLayerPositionGeneration() { m_layerPositionGeneration = (m_layerPositionGeneration + 1) & 0xf; }
+     bool hasSoftwareFilters() const { return m_hasSoftwareFilters; }
+ 
+     uint64_t rendererCount() const { return m_rendererCount; }
+@@ -381,6 +385,7 @@ private:
+     bool m_selectionWasCaret { false };
+     bool m_hasSoftwareFilters { false };
+     bool m_mayHaveBlockSelectionGaps { false };
++    unsigned m_layerPositionGeneration { 1 };
+     bool m_usesFirstLineRules { false };
+     bool m_usesFirstLetterRules { false };
+ #if !ASSERT_DISABLED
+-- 
+2.54.0 (Apple Git-157)
+

@@ -518,3 +518,55 @@ fixes worth trying, in order: relayout boundaries so the TodoMVC app doesn't
 drag the big DOM into its layout; layer position updates only for layers whose
 renderers moved; and cheaper repaint rectangle computation.
 
+
+## 19 September: layer positions, and eighteen suites out of twenty
+
+The second of the three fixes above turned out to be the big one.
+
+After every layout, `RenderLayer::updateLayerPositions` walked *every* layer in
+the page, recomputing each layer's position, its clip rectangles and its
+repaint rectangles, pushing and popping a geometry map along the way. On a
+TodoMVC page with a few thousand positioned elements that walk cost more than
+the layout that prompted it, and nearly all of it recomputed values that had
+not changed.
+
+Each renderer now carries the number of the layer position update its subtree
+last needed: four bits, in `RenderElement`, which had spare room in a bitfield
+word (`RenderObject` has none — it is guarded by a static assertion on its
+size). A renderer that was laid out marks itself and its ancestors with the
+view's current generation, and so do a layer that scrolled, one whose visible
+content changed, and one that needs a full repaint. The view advances the
+generation after each update, so the marks expire by themselves and nothing
+has to be cleared. `updateLayerPositions` then skips any child whose subtree
+carries an older generation — unless something above it moved, in which case
+its positions really have changed.
+
+| Suite | PowerFox | Before | After |
+|---|---|---|---|
+| TodoMVC-Svelte-Complex-DOM | 2698 | 3532 | **1277** |
+| TodoMVC-Preact-Complex-DOM | 2995 | 3668 | **1427** |
+| TodoMVC-Lit-Complex-DOM | 9758 | 4728 | **2223** |
+| TodoMVC-React-Complex-DOM | 7380 | 6276 | **3895** |
+| TodoMVC-Angular-Complex-DOM | 6022 | 6557 | **4250** |
+| TodoMVC-JavaScript-ES6-Webpack | 5864 | 8687 | **5633** |
+| TodoMVC-jQuery | 34840 | 11191 | **10237** |
+
+Speedometer 3.1 overall: 0.271 -> **0.345**, against PowerFox's 0.189.
+Eighteen of the twenty suites are now faster than PowerFox.
+
+Skipping paint work is exactly the kind of change that renders stale pixels, so
+it is checked against a page (`layertest.html`) that reaches its final state by
+mutating the DOM the way a TodoMVC app does, compared against the same page
+built in one go. The comparison uses the window's real contents through
+`CGWindowListCreateImage` rather than a fresh re-render, so anything left
+unpainted would show: the two are identical pixel for pixel, at the top of the
+page and scrolled.
+
+### What is left
+
+Two suites:
+
+1. **Charts-chartjs** (needs 50%): still Core Graphics rasterization, 60% of
+   its time. Canvas-level work, as before.
+2. **TodoMVC-JavaScript-ES5** (needs 9%): the remaining layout cost on a page
+   whose every change relayouts the list. Relayout boundaries are the fix.

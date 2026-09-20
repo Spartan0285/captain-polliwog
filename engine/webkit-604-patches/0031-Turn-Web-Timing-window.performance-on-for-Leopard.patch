@@ -1,7 +1,7 @@
 From 9d6e3c1cf43c8b0289ae79a45914dd2c72109547 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Fri, 18 Sep 2026 14:13:11 -0400
-Subject: [PATCH 31/53] Turn Web Timing (window.performance) on for Leopard
+Subject: [PATCH 31/54] Turn Web Timing (window.performance) on for Leopard
 
 Google Search and other sites fail with 'Can't find variable:
 performance' without it.

@@ -1,7 +1,7 @@
 From 014c5f3ad384c0863b9f4cc82f0f991e34584115 Mon Sep 17 00:00:00 2001
 From: Captain Polliwog build <build@captainpolliwog.invalid>
 Date: Sat, 19 Sep 2026 16:14:53 -0400
-Subject: [PATCH 52/53] PowerPC JIT: integer typed arrays are little-endian
+Subject: [PATCH 52/54] PowerPC JIT: integer typed arrays are little-endian
 
 Leopard WebKit keeps the integer typed arrays in little-endian order on
 big-endian Macs (JSGenericTypedArrayView.h flips their bytes), so the JIT's

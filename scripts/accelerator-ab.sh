@@ -35,7 +35,7 @@ for url in "$@"; do
     for run in $(seq 1 $runs); do
         for mode in off on; do
             enabled=NO; [ $mode = on ] && enabled=YES
-            line=$(ssh -o ConnectTimeout=90 "$host" "
+            line=$(ssh -4 -o ConnectTimeout=90 "$host" "
                 A='/Applications/Captain Polliwog.app'
                 D=org.captainpolliwog.browser S=/tmp/polliwog-ab.png
                 killall CaptainPolliwog 2>/dev/null; sleep 2
@@ -43,7 +43,7 @@ for url in "$@"; do
                 defaults write \$D CPAcceleratorEnabled -bool $enabled
                 defaults write \$D CPDebugLog -bool YES
                 defaults write \$D CPDebugSnapshotPath \$S
-                defaults write \$D CPDebugScript '$probe'
+                defaults write \$D CPDebugScript -string '$probe'
                 defaults write \$D CPDebugURL '$url'
                 open \"\$A\"; sleep 4
                 P=\$(ps -axww -o pid,command | awk '/[M]acOS\/CaptainPolliwog/ {print \$1}')
@@ -70,7 +70,7 @@ for url in "$@"; do
         done
     done
 done
-ssh -o ConnectTimeout=90 "$host" "defaults delete org.captainpolliwog.browser CPAcceleratorEnabled 2>/dev/null; true"
+ssh -4 -o ConnectTimeout=90 "$host" "defaults delete org.captainpolliwog.browser CPAcceleratorEnabled 2>/dev/null; true"
 
 # Medians per site and mode.
 python3 - "$results" <<'EOF'
