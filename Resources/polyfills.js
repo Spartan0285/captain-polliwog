@@ -1995,20 +1995,51 @@
             if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
         }
 
-        document.addEventListener("mouseover", function (event) {
-            var node = event.target;
-            // The pointer is usually on the page's own controls, inside the
-            // element rather than on it.
-            while (node && node.nodeName !== "VIDEO" && node !== document.body)
-                node = node.parentNode;
-            if (node && isWorthOffering(node))
-                show(node);
-        }, false);
+        // Which video, if any, the pointer is over - by where it is, not by
+        // what it landed on.
+        //
+        // Walking up from event.target finds the video only when the pointer
+        // is on the element or inside it. A real player covers its own video
+        // with sibling layers - YouTube's gradient, its controls, its click
+        // target - and the pointer lands on those, which are nowhere near
+        // the <video> in the tree. So this asks the geometry instead: is the
+        // pointer inside any video's rectangle. That is what "over the
+        // video" means to the person using it, and it does not care how the
+        // page is built.
+        function videoUnder(x, y) {
+            var videos = document.getElementsByTagName("video"), i, box;
+            for (i = 0; i < videos.length; i++) {
+                if (!isWorthOffering(videos[i]))
+                    continue;
+                box = videos[i].getBoundingClientRect();
+                if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom)
+                    return videos[i];
+            }
+            return null;
+        }
 
-        document.addEventListener("mouseout", function (event) {
-            if (target && event.relatedTarget !== button)
+        // getElementsByTagName returns a live collection, so this costs a
+        // rectangle per video and nothing else - but mouseover fires often
+        // on a busy page, so it is not done more than ten times a second.
+        var lastCheck = 0;
+        function pointerMoved(event) {
+            var now = new Date().getTime();
+            if (now - lastCheck < 100)
+                return;
+            lastCheck = now;
+            if (event.target === button)
+                return;
+            var video = videoUnder(event.clientX, event.clientY);
+            if (video)
+                show(video);
+            else if (target)
                 hideSoon();
-        }, false);
+        }
+
+        document.addEventListener("mouseover", pointerMoved, false);
+        // Inside a player nothing new is entered for seconds at a time, so
+        // mouseover alone can miss the pointer arriving over the video.
+        document.addEventListener("mousemove", pointerMoved, false);
     })();
 
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);

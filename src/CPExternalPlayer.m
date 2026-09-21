@@ -4,6 +4,8 @@
 
 #import "CPExternalPlayer.h"
 #import <WebKit/WebKit.h>
+#include <CoreServices/CoreServices.h>
+#include <signal.h>
 
 static NSString * const CPPreferredPlayerKey = @"CPExternalPlayerPath";
 
@@ -175,7 +177,36 @@ static BOOL CPTakesURLArgument(NSString *bundlePath)
     NS_HANDLER
         return NO;
     NS_ENDHANDLER
+
+    // Bring it forward. A program started from another program is not
+    // activated the way one opened from the Finder is, so without this VLC
+    // plays perfectly well behind the browser window and looks like nothing
+    // happened. It cannot be done at once: the process has to register with
+    // the window server first, which on a G4 takes several seconds, so this
+    // asks once a second until it works or a minute has passed.
+    [self performSelector:@selector(bringForward:)
+               withObject:[NSArray arrayWithObjects:[NSNumber numberWithInt:[task processIdentifier]],
+                                                    [NSNumber numberWithInt:0], nil]
+               afterDelay:0.5];
     return YES;
+}
+
++ (void)bringForward:(NSArray *)state
+{
+    pid_t pid = (pid_t)[[state objectAtIndex:0] intValue];
+    int attempt = [[state objectAtIndex:1] intValue];
+    ProcessSerialNumber serial;
+
+    if (GetProcessForPID(pid, &serial) == noErr) {
+        SetFrontProcess(&serial);
+        return;
+    }
+    if (attempt >= 60 || kill(pid, 0) != 0)
+        return;     // it gave up, or we have
+    [self performSelector:@selector(bringForward:)
+               withObject:[NSArray arrayWithObjects:[state objectAtIndex:0],
+                                                    [NSNumber numberWithInt:attempt + 1], nil]
+               afterDelay:1.0];
 }
 
 @end

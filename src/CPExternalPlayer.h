@@ -36,4 +36,8 @@
 // the player could not be launched.
 + (BOOL)playMediaURL:(NSString *)mediaURL;
 
+// Internal: keeps asking the window server to front the player until it has
+// finished launching.
++ (void)bringForward:(NSArray *)state;
+
 @end

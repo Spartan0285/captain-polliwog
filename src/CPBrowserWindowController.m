@@ -777,6 +777,20 @@ static NSMenuItem *CPMenuItem(NSMenu *menu, NSString *title, SEL action, id targ
         CPMenuItem(menu, @"Save PDF...", @selector(savePDF:), self, NSOffState);
     }
     CPMenuItem(menu, @"Open in Safari", @selector(openInSafari:), self, NSOffState);
+
+    // Only when there is one: the button drawn over a video cannot always
+    // get itself in front of a page's own player, and a menu always can.
+    {
+        NSString *media = [CPExternalPlayer playingMediaURLInWebView:[selectedTab webView]];
+        if (media != nil) {
+            NSString *player = [CPExternalPlayer preferredPlayer];
+            [menu addItem:[NSMenuItem separatorItem]];
+            CPMenuItem(menu, (player != nil
+                              ? [NSString stringWithFormat:@"Play Video in %@", [CPExternalPlayer displayNameForPlayer:player]]
+                              : @"Play Video in Media Player"),
+                       @selector(playVideoExternally:), self, NSOffState);
+        }
+    }
     [self popUpMenu:menu fromButton:shareButton];
 }
 

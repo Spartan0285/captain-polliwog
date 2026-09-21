@@ -22,7 +22,7 @@ CFLAGS  = -isysroot $(SDK) -Os -Wall -Wno-unused-parameter
 # G3 baseline so one PowerPC build runs on every PowerPC Mac; tuned for G4 laptops.
 CFLAGS_ppc  = -mcpu=G3 -mtune=G4
 CFLAGS_i386 =
-LDFLAGS = -isysroot $(SDK) -Wl,-syslibroot,$(SDK) -framework Cocoa -framework WebKit -framework SystemConfiguration -framework Security -framework AddressBook
+LDFLAGS = -isysroot $(SDK) -Wl,-syslibroot,$(SDK) -framework Cocoa -framework WebKit -framework ApplicationServices -framework CoreServices -framework SystemConfiguration -framework Security -framework AddressBook
 DEPS_LIBS = libcurl.a libssl.a libcrypto.a libz.a
 
 .PHONY: all app clean

@@ -5,12 +5,15 @@
 # frameworks back so engine-run.sh and site-survey.sh work as before.
 #   Usage: scripts/toolchain/studio.sh build|package|configure leopard-g4 [targets...]
 #          scripts/toolchain/studio.sh shell 'command'
-# STUDIO overrides the host (default adam@192.168.68.152).
+# STUDIO overrides the host (default adam@192.168.68.108, the MacBook Pro;
+# adam@192.168.68.152 is the Mac Studio, which has more of everything but is
+# not always the one in use). LIMACTL overrides the path to limactl, which
+# Homebrew and a standalone install put in different places.
 set -e
 cd "$(dirname "$0")/../.."
-STUDIO=${STUDIO:-adam@192.168.68.152}
+STUDIO=${STUDIO:-adam@192.168.68.108}
 REPO="$PWD"
-LIMACTL=/opt/homebrew/bin/limactl
+LIMACTL=${LIMACTL:-\$HOME/lima/bin/limactl}
 
 sync() {
     rsync -a --delete --exclude .git --exclude build/ \
