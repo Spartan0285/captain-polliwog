@@ -26,6 +26,17 @@ zip -qrX - Makefile src Resources scripts -x '*.DS_Store' |
                 changed=\$((changed + 1))
             fi
         done
+        # Anything here that is not there any more. Without this a deleted
+        # resource keeps being copied into the bundle and a deleted source
+        # keeps being compiled, and both look like the edit never arriving.
+        # Only the directories this script sends are touched.
+        removed=0
+        for f in \`cd \$HOME/$REMOTE_DIR && find src Resources scripts -type f 2>/dev/null\`; do
+            if [ ! -f \"/tmp/polliwog-sync/\$f\" ]; then
+                rm -f \"\$HOME/$REMOTE_DIR/\$f\"
+                removed=\$((removed + 1))
+            fi
+        done
         chmod +x \$HOME/$REMOTE_DIR/scripts/*.sh
         rm -rf /tmp/polliwog-sync
-        echo \"==> $host: \$changed files updated\""
+        echo \"==> $host: \$changed files updated, \$removed removed\""

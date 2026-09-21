@@ -115,7 +115,7 @@ static void CPDrawText(NSString *text, NSRect r, NSFont *font, NSColor *colour)
 
 @interface CPAboutView : NSView
 {
-    NSImage *appIcon, *mark;
+    NSImage *appIcon, *logo;
 }
 @end
 
@@ -126,16 +126,17 @@ static void CPDrawText(NSString *text, NSRect r, NSFont *font, NSColor *colour)
     if ((self = [super initWithFrame:frame]) == nil)
         return nil;
     appIcon = [CPApplicationIcon() retain];
-    // The mark only. The wordmark in the original artwork is set in a
-    // typeface no Mac here has, and rasterising it gives the lemon beside a
-    // row of fallback glyphs - so the name is drawn below in a face these
-    // systems do have.
-    mark = [[NSImage alloc] initWithContentsOfFile:
-               [[NSBundle mainBundle] pathForResource:@"cytrusmark" ofType:@"png"]];
+    // The whole lockup, rasterised where the brand's typeface exists. The
+    // artwork's wordmark is live text in Ariana Pro, which no Mac here has,
+    // so anything rendered on these machines would substitute a fallback
+    // face - which is why this arrives as a finished image rather than a
+    // mark to assemble a name beside.
+    logo = [[NSImage alloc] initWithContentsOfFile:
+               [[NSBundle mainBundle] pathForResource:@"cytruslogo" ofType:@"png"]];
     return self;
 }
 
-- (void)dealloc { [appIcon release]; [mark release]; [super dealloc]; }
+- (void)dealloc { [appIcon release]; [logo release]; [super dealloc]; }
 
 // Drawing top-down reads in the order the text is written. Note that this
 // also lays out subviews top-down, so the two buttons measure themselves
@@ -189,21 +190,13 @@ static void CPDrawText(NSString *text, NSRect r, NSFont *font, NSColor *colour)
                NSMakeRect(PAD, y, w - 2 * PAD, 58), [NSFont systemFontOfSize:11], [NSColor blackColor]);
     y += 56;
 
-    // The lockup: the mark, then the name beside it.
-    {
-        NSDictionary *big = [NSDictionary dictionaryWithObjectsAndKeys:
-            [NSFont boldSystemFontOfSize:21], NSFontAttributeName,
-            [NSColor colorWithCalibratedWhite:0.12f alpha:1], NSForegroundColorAttributeName, nil];
-        NSDictionary *small = [NSDictionary dictionaryWithObjectsAndKeys:
-            [NSFont boldSystemFontOfSize:14], NSFontAttributeName,
-            [NSColor colorWithCalibratedWhite:0.12f alpha:1], NSForegroundColorAttributeName, nil];
-        float textWidth = [@"SOFTWARE" sizeWithAttributes:small].width;
-        float markWidth = 46.0f, gap = 12.0f;
-        float x = (w - (markWidth + gap + textWidth)) / 2;
+    // The lockup, centred, at the artwork's own proportions.
+    if (logo != nil) {
+        NSSize size = [logo size];
+        float logoWidth = 260.0f;
+        float logoHeight = size.width > 0 ? logoWidth * size.height / size.width : 68.0f;
 
-        CPDrawImage(mark, NSMakeRect(x, y, markWidth, 56));
-        [@"CYTRUS" drawAtPoint:NSMakePoint(x + markWidth + gap, y + 8) withAttributes:big];
-        [@"SOFTWARE" drawAtPoint:NSMakePoint(x + markWidth + gap, y + 33) withAttributes:small];
+        CPDrawImage(logo, NSMakeRect((w - logoWidth) / 2, y, logoWidth, logoHeight));
     }
 }
 
