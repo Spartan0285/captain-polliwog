@@ -117,6 +117,17 @@ static NSURL *CPRelayedURL(NSString *mediaURL)
         @"http://127.0.0.1:%d/media?token=%@&url=%@", port, token, escaped]];
 }
 
+// The last player this browser started, so a second hand-over can end it
+// rather than leaving it open behind the new one.
+static pid_t lastLaunched = 0;
+
+static BOOL CPIsVLC(NSString *bundlePath)
+{
+    NSString *identifier = [[[NSBundle bundleWithPath:bundlePath] infoDictionary]
+                            objectForKey:@"CFBundleIdentifier"];
+    return [identifier hasPrefix:@"org.videolan"] || [identifier hasPrefix:@"com.videolan"];
+}
+
 // The players that read an address from argv. Both of these are ports of
 // command-line programs and have always taken one.
 static BOOL CPTakesURLArgument(NSString *bundlePath)
@@ -158,15 +169,32 @@ static BOOL CPTakesURLArgument(NSString *bundlePath)
     // route http at it. VLC and MPlayer both take the address as an
     // argument, so they are run directly. QuickTime Player does not, and
     // does accept it through LaunchServices, so it goes the other way.
+    // Running the binary means LaunchServices is not involved, and so the
+    // usual "the app is already open, give it this document" does not
+    // happen: every hand-over started another copy, and they piled up one
+    // per click. Two answers, because neither covers both players.
+    //
+    // VLC has --one-instance for exactly this: a second invocation passes
+    // the item to the one already running and exits. MPlayer has nothing of
+    // the kind, so the one we started last is ended first - only ever a
+    // process this browser launched, never a copy opened by hand.
+    if (lastLaunched > 0 && kill(lastLaunched, 0) == 0)
+        kill(lastLaunched, SIGTERM);
+    lastLaunched = 0;
+
     task = [[[NSTask alloc] init] autorelease];
     if (CPTakesURLArgument(player)) {
         NSString *executable = [[[NSBundle bundleWithPath:player] infoDictionary]
                                 objectForKey:@"CFBundleExecutable"];
+        NSMutableArray *arguments = [NSMutableArray array];
         if (executable == nil)
             return NO;
+        if (CPIsVLC(player))
+            [arguments addObject:@"--one-instance"];
+        [arguments addObject:[relayed absoluteString]];
         [task setLaunchPath:[[player stringByAppendingPathComponent:@"Contents/MacOS"]
                              stringByAppendingPathComponent:executable]];
-        [task setArguments:[NSArray arrayWithObject:[relayed absoluteString]]];
+        [task setArguments:arguments];
     } else {
         [task setLaunchPath:@"/usr/bin/open"];
         [task setArguments:[NSArray arrayWithObjects:@"-a", player, [relayed absoluteString], nil]];
@@ -184,8 +212,9 @@ static BOOL CPTakesURLArgument(NSString *bundlePath)
     // happened. It cannot be done at once: the process has to register with
     // the window server first, which on a G4 takes several seconds, so this
     // asks once a second until it works or a minute has passed.
+    lastLaunched = [task processIdentifier];
     [self performSelector:@selector(bringForward:)
-               withObject:[NSArray arrayWithObjects:[NSNumber numberWithInt:[task processIdentifier]],
+               withObject:[NSArray arrayWithObjects:[NSNumber numberWithInt:lastLaunched],
                                                     [NSNumber numberWithInt:0], nil]
                afterDelay:0.5];
     return YES;
