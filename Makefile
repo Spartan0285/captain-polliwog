@@ -8,7 +8,7 @@ VERSION  = 0.3
 # every build anyone else might have, where VERSION goes up when the release
 # does. Never put the stage in VERSION - the version string ends up in file
 # names, tags and signed statements, and a space in it finds every one.
-BUILDNUM = 8
+BUILDNUM = 9
 STAGE    = Alpha
 
 SDK       ?= /Developer/SDKs/MacOSX10.4u.sdk
