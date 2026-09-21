@@ -38,5 +38,6 @@
 - (IBAction)checkForUpdates:(id)sender;
 - (IBAction)showAbout:(id)sender;
 - (IBAction)sendFeedback:(id)sender;
+- (IBAction)showWelcome:(id)sender;
 
 @end

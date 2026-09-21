@@ -23,6 +23,7 @@
 #import "CPSafeBrowsing.h"
 #import "CPAbout.h"
 #import "CPFeedback.h"
+#import "CPWelcome.h"
 #import "CPUpdateController.h"
 #import <WebKit/WebKit.h>
 
@@ -108,6 +109,7 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     // Next to About, where someone annoyed enough to write is already
     // looking for a name to complain to.
     CPAddItem(menu, @"Send Feedback...", @selector(sendFeedback:), nil);
+    CPAddItem(menu, @"Welcome Aboard...", @selector(showWelcome:), nil);
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Private Browsing", @selector(togglePrivateBrowsing:), nil);
     [menu addItem:[NSMenuItem separatorItem]];
@@ -257,6 +259,11 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
 - (IBAction)showAbout:(id)sender
 {
     [CPAbout show];
+}
+
+- (IBAction)showWelcome:(id)sender
+{
+    [CPWelcome show];
 }
 
 - (IBAction)sendFeedback:(id)sender
@@ -513,6 +520,10 @@ static size_t CPStatisticCount(Class statistics, NSString *name)
         [self newWindow:self];
     if (debugURL != nil)
         [[browserWindows lastObject] loadAddressString:debugURL];
+    // After the first window, so it opens in front of something rather than
+    // on an empty screen - and never when a test is driving the browser.
+    if (debugURL == nil)
+        [CPWelcome showIfNeeded];
     // Testing aid: CPDebugPanel opens a window at launch, for the test
     // scripts to photograph ("preferences", "downloads", "bookmarks").
     {

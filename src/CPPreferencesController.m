@@ -11,6 +11,7 @@
 #import "CPDefaultBrowser.h"
 #import "CPSafeBrowsing.h"
 #import "CPExternalPlayer.h"
+#import "CPWelcome.h"
 
 #define CPWindowWidth   520.0f
 #define CPWindowHeight  500.0f
@@ -246,9 +247,22 @@ static struct {
         } else {
             NSString *only = [players count] == 1
                 ? [CPExternalPlayer displayNameForPlayer:[players objectAtIndex:0]] : @"No player found";
-            CPLabel(view, NSMakeRect(120.0f, top + 3.0f, 350.0f, 26.0f),
-                    [NSString stringWithFormat:@"%@. VLC and MPlayer decode video far faster on these "
-                     @"Macs; either one in your Applications folder will be found and used.", only], YES, NO);
+            // Recommending VLC on a Mac that cannot run it is worse than
+            // saying nothing: its PowerPC build decodes with AltiVec and
+            // quits on the first frame without a vector unit.
+            if ([CPWelcome hasAltiVec]) {
+                CPLabel(view, NSMakeRect(120.0f, top + 6.0f, 350.0f, 26.0f),
+                        [NSString stringWithFormat:@"%@. VLC decodes video far faster on these Macs; "
+                         @"put it in your Applications folder and it will be found and used.", only], YES, NO);
+                top -= 26.0f;
+                CPButton(view, NSMakeRect(118.0f, top, 180.0f, 24.0f), @"Download VLC...",
+                         self, @selector(downloadVLC:));
+            } else {
+                CPLabel(view, NSMakeRect(120.0f, top + 3.0f, 350.0f, 30.0f),
+                        [NSString stringWithFormat:@"%@. This Mac's processor has no vector unit, and "
+                         @"the PowerPC build of VLC needs one, so video plays here or not at all.", only],
+                        YES, NO);
+            }
         }
     }
     [tabs addTabViewItem:item];
@@ -626,6 +640,11 @@ static struct {
 {
     [CPSiteModes setDefaultMode:(CPSiteMode)[siteModePopUp indexOfSelectedItem]];
     [self refresh];
+}
+
+- (IBAction)downloadVLC:(id)sender
+{
+    [CPWelcome downloadVLC];
 }
 
 - (IBAction)playerChanged:(id)sender
