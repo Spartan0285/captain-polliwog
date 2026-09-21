@@ -1948,13 +1948,23 @@
             button.appendChild(document.createTextNode("Play in " + (settings.playerName || "player")));
             // Inline, and every property spelled out: the page's own styles
             // are not to be inherited, and this engine has no all:initial.
-            button.style.cssText = "position:absolute;z-index:2147483647;margin:0;padding:3px 9px;"
-                + "font:11px/1.4 'Lucida Grande',sans-serif;color:#fff;background:rgba(0,0,0,0.72);"
-                + "border:1px solid rgba(255,255,255,0.45);border-radius:4px;cursor:pointer;"
+            button.style.cssText = "position:absolute;z-index:2147483647;margin:0;padding:4px 10px;"
+                + "font:bold 11px/1.4 'Lucida Grande',sans-serif;color:#10240a;"
+                + "background:#8ede3c;"
+                + "background:-webkit-gradient(linear,left top,left bottom,from(#b6f36a),to(#6cc21e));"
+                + "background:linear-gradient(#b6f36a,#6cc21e);"
+                + "border:1px solid #4f9314;border-radius:4px;cursor:pointer;"
                 + "display:none;text-shadow:none;box-shadow:none;letter-spacing:0;text-transform:none;";
             button.onclick = function (event) {
                 if (event && event.preventDefault) { event.preventDefault(); event.stopPropagation(); }
                 var source = target && (target.currentSrc || target.src);
+                // Two copies of the same video playing at once, one of them
+                // behind a window you cannot see, is nobody's idea of an
+                // improvement - and on these machines the one being handed
+                // away is using the whole processor.
+                if (target && !target.paused) {
+                    try { target.pause(); } catch (e) { }
+                }
                 if (source)
                     // Caught in CPTab's navigation policy, which sends it to
                     // the player and never loads anything.
@@ -1991,7 +2001,9 @@
             // Top right, inside the video, clear of the play controls most
             // players put along the bottom.
             button.style.left = (box.left + scrollX + box.width - button.offsetWidth - 8) + "px";
-            button.style.top = (box.top + scrollY + 8) + "px";
+            // A button and a half below the top edge. Flush with it, this sat
+            // on top of YouTube's own controls, which live up there too.
+            button.style.top = (box.top + scrollY + 8 + button.offsetHeight * 1.5) + "px";
             if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
         }
 
@@ -2040,6 +2052,39 @@
         // Inside a player nothing new is entered for seconds at a time, so
         // mouseover alone can miss the pointer arriving over the video.
         document.addEventListener("mousemove", pointerMoved, false);
+    })();
+
+    // Nothing plays until you ask it to.
+    //
+    // WebKit has a preference for this and the browser sets it, but it only
+    // governs playback the engine starts; a page that calls play() from its
+    // own script - which is every video site - sails past it. On a G4 a
+    // video starting by itself is not a small thing: it is the whole
+    // processor, immediately, on a page you may only have opened to read.
+    //
+    // So a play that nobody asked for is undone. What counts as asking is a
+    // real mouse or key event, which is also what lets the page's own play
+    // button work normally afterwards.
+    (function () {
+        var settings = global.__polliwog;
+        if (!settings || settings.autoplay !== false || !global.document || !document.addEventListener)
+            return;
+
+        var asked = false;
+        var events = ["mousedown", "keydown", "touchstart"];
+        for (var i = 0; i < events.length; i++)
+            document.addEventListener(events[i], function () { asked = true; }, true);
+
+        // Capturing, because a page can stop the event reaching the document
+        // on the way back up.
+        document.addEventListener("play", function (event) {
+            if (asked)
+                return;
+            var media = event.target;
+            if (media && typeof media.pause === "function") {
+                try { media.pause(); } catch (e) { }
+            }
+        }, true);
     })();
 
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);

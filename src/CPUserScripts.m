@@ -52,9 +52,10 @@ typedef void (*CPAddUserScriptFunction)(id, SEL, NSString *, id, NSString *, NSU
         NSString *player = [CPExternalPlayer preferredPlayer];
         NSString *name = player != nil ? [CPExternalPlayer displayNameForPlayer:player] : @"Media Player";
         NSString *flags = [NSString stringWithFormat:
-            @"window.__polliwog = { playButton: %@, playerName: \"%@\" };",
+            @"window.__polliwog = { playButton: %@, playerName: \"%@\", autoplay: %@ };",
             ([[CPSettings sharedSettings] showsVideoPlayButton] && player != nil) ? @"true" : @"false",
-            [name stringByReplacingOccurrencesOfString:@"\"" withString:@""]];
+            [name stringByReplacingOccurrencesOfString:@"\"" withString:@""],
+            [[CPSettings sharedSettings] autoplaysVideo] ? @"true" : @"false"];
         ((CPAddUserScriptFunction)[WebView methodForSelector:addUserScript])(
             [WebView class], addUserScript, groupName, world, flags,
             [NSURL URLWithString:@"polliwog-settings:flags"],
