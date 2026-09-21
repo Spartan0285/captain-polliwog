@@ -13,6 +13,7 @@
     NSTextField   *locationField;
     NSMutableArray *switchBoxes;       // the Performance tab's switches, by tag
     NSPopUpButton  *playerPopUp;       // which media player a video is handed to
+    NSPopUpButton  *scrollSpeedPopUp;  // how far a wheel event moves a page
     NSTextField   *homePageField;
     NSPopUpButton *newTabPopUp;
     NSTextField   *downloadsField;

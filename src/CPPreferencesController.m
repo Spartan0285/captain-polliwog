@@ -171,6 +171,42 @@ static struct {
     defaultBrowserButton = CPButton(view, NSMakeRect(340.0f, top - 5.0f, 130.0f, 24.0f),
                                     @"Set as Default", self, @selector(makeDefaultBrowser:));
 
+    // Named rather than numbered. "Scroll 24 pixels per line of wheel
+    // movement" is precise and means nothing to anyone; these machines have
+    // no precise scrolling deltas and no momentum, so how far a flick goes is
+    // the only thing there is to choose, and four choices is enough to find
+    // one you like.
+    top -= 40.0f;
+    CPLabel(view, NSMakeRect(10.0f, top, 120.0f, 17.0f), @"Scrolling:", NO, YES);
+    {
+        struct { NSString *title; int pixels; } speeds[] = {
+            { @"Slow",        12 },
+            { @"Medium",      24 },
+            { @"Fast",        40 },      // what WebKit has always used
+            { @"Very fast",   64 },
+            { nil, 0 }
+        };
+        int current = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"CPWheelPixelsPerLine"];
+        unsigned index;
+
+        if (current <= 0)
+            current = 40;
+        scrollSpeedPopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(126.0f, top - 4.0f, 150.0f, 26.0f)];
+        for (index = 0; speeds[index].title != nil; index++) {
+            [scrollSpeedPopUp addItemWithTitle:speeds[index].title];
+            [[scrollSpeedPopUp lastItem] setTag:speeds[index].pixels];
+            if (speeds[index].pixels == current)
+                [scrollSpeedPopUp selectItemAtIndex:index];
+        }
+        [scrollSpeedPopUp setTarget:self];
+        [scrollSpeedPopUp setAction:@selector(scrollSpeedChanged:)];
+        [view addSubview:scrollSpeedPopUp];
+        [scrollSpeedPopUp release];
+    }
+    CPLabel(view, NSMakeRect(286.0f, top + 1.0f, 190.0f, 26.0f),
+            @"How far the wheel or trackpad moves a page. Takes effect on the next open.",
+            YES, NO);
+
     // The questions the first run asks - bookmarks, default browser, a media
     // player - are all worth a second look later, and they are easier to
     // find here than under a menu item nobody opens twice.
@@ -660,6 +696,19 @@ static struct {
 - (IBAction)showSetupAssistant:(id)sender
 {
     [CPWelcome show];
+}
+
+- (IBAction)scrollSpeedChanged:(id)sender
+{
+    // Read by WebFrameView when a frame's scroll view is made, and by
+    // PlatformEventFactoryMac for what WebCore scrolls itself.
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+
+    [defaults setInteger:[[sender selectedItem] tag] forKey:@"CPWheelPixelsPerLine"];
+    // Written through now rather than at the next quit: the engine reads this
+    // when a window is made, so the next launch is exactly when it matters,
+    // and a browser that crashed in between would forget the choice.
+    [defaults synchronize];
 }
 
 - (IBAction)playerChanged:(id)sender
