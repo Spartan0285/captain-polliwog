@@ -190,7 +190,7 @@ static struct {
         unsigned index;
 
         if (current <= 0)
-            current = 40;
+            current = 12;       // Slow: the default, as the engine has it
         scrollSpeedPopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(126.0f, top - 4.0f, 150.0f, 26.0f)];
         for (index = 0; speeds[index].title != nil; index++) {
             [scrollSpeedPopUp addItemWithTitle:speeds[index].title];

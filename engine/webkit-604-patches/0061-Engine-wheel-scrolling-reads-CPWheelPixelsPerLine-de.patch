@@ -1,0 +1,2073 @@
+From 28fa628134ea6982bdbf6f88c68a049bfcdab27e Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Mon, 21 Sep 2026 09:58:14 -0400
+Subject: [PATCH] Engine: wheel scrolling reads CPWheelPixelsPerLine, default
+ 12
+
+The main frame is scrolled by AppKit - WebHTMLView offers each wheel event
+to WebCore and falls through to [super scrollWheel:] when it declines,
+which for the main frame it always does - so WebFrameView's
+setLineScroll: is what decides how far a wheel event moves a page.
+PlatformEventFactoryMac reads the same setting for what WebCore scrolls
+itself, so a page does not move at two speeds.
+
+12 rather than WebKit's 40, chosen on a PowerBook G4 by trying all four
+options: Leopard's trackpad driver reports accelerated line counts with no
+precise deltas and no momentum, measured at 30 events a second and up to
+5 lines an event.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ .../JavaScriptCore/runtime/MachineContext.h   | 10 +++---
+ Source/WTF/wtf/OSAllocatorPosix.cpp           |  8 ++---
+ Source/WTF/wtf/PlatformRegisters.h            | 11 ++++++-
+ Source/WTF/wtf/ThreadingPthreads.cpp          |  6 ++--
+ Source/WTF/wtf/text/ASCIIFastPath.h           | 23 +++++++++----
+ Source/WebCore/PlatformMac.cmake              | 11 ++++---
+ .../WebCore/accessibility/AccessibilityList.h |  2 +-
+ .../accessibility/AccessibilityTable.h        |  2 +-
+ Source/WebCore/dom/Document.cpp               |  2 +-
+ .../WebCore/editing/mac/DictionaryLookup.mm   |  2 +-
+ .../page/cocoa/ResourceUsageOverlayCocoa.mm   |  4 +--
+ .../WebCore/page/mac/TextIndicatorWindow.mm   |  8 ++---
+ Source/WebCore/platform/Logging.cpp           |  2 +-
+ .../WebCore/platform/audio/SincResampler.cpp  | 10 ++++--
+ .../audio/mac/AudioHardwareListenerMac.cpp    |  4 +--
+ .../audio/mac/AudioHardwareListenerMac.h      |  2 +-
+ .../audio/mac/CAAudioStreamDescription.cpp    |  2 +-
+ .../platform/cocoa/SleepDisablerCocoa.cpp     |  2 +-
+ .../platform/cocoa/SleepDisablerCocoa.h       |  4 +--
+ .../platform/graphics/FontDescription.cpp     | 12 +++----
+ .../platform/graphics/FontPlatformData.h      | 10 +++---
+ Source/WebCore/platform/graphics/Gradient.h   |  6 ++--
+ .../WebCore/platform/graphics/MediaPlayer.cpp |  2 +-
+ .../platform/graphics/ca/GraphicsLayerCA.cpp  |  4 +--
+ .../graphics/ca/cocoa/PlatformCALayerCocoa.mm | 18 +++++-----
+ .../platform/graphics/cg/GradientCG.cpp       |  6 ++--
+ .../graphics/cocoa/FontCacheCoreText.cpp      |  8 ++---
+ .../platform/graphics/cocoa/FontCocoa.mm      |  8 ++---
+ .../graphics/cocoa/FontPlatformDataCocoa.mm   | 14 ++++----
+ .../graphics/cocoa/GraphicsContextCocoa.mm    |  2 +-
+ .../graphics/cv/PixelBufferConformerCV.cpp    |  2 +-
+ .../graphics/cv/VideoTextureCopierCV.cpp      | 10 +++---
+ .../mac/ComplexTextControllerCoreText.mm      |  4 +--
+ .../graphics/mac/FontCustomPlatformData.cpp   | 10 +++---
+ .../graphics/mac/FontCustomPlatformData.h     |  8 ++---
+ .../WebCore/platform/graphics/mac/WebLayer.mm |  4 +--
+ Source/WebCore/platform/mac/PasteboardMac.mm  |  4 +--
+ .../platform/mac/PlatformEventFactoryMac.mm   | 33 +++++++++++++++++--
+ .../WebCore/platform/mac/PowerObserverMac.cpp |  2 +-
+ .../WebCore/platform/mac/PowerObserverMac.h   |  2 +-
+ .../platform/mac/SystemSleepListenerMac.mm    |  2 +-
+ .../mac/WebCoreFullScreenPlaceholderView.mm   |  2 +-
+ .../platform/mac/WebCoreFullScreenWindow.mm   |  2 +-
+ .../WebCore/platform/network/cf/DNSCFNet.cpp  |  2 +-
+ .../platform/network/cf/ProxyServerCFNet.cpp  |  2 +-
+ .../platform/network/cocoa/CredentialCocoa.mm |  2 +-
+ .../network/cocoa/ProtectionSpaceCocoa.mm     |  4 +--
+ .../mac/WebCoreResourceHandleAsDelegate.h     |  4 +--
+ .../mac/WebCoreResourceHandleAsDelegate.mm    |  8 ++---
+ .../network/mac/WebCoreURLResponse.mm         |  2 +-
+ Source/WebCore/platform/spi/cf/CFNetworkSPI.h |  2 +-
+ .../WebCore/platform/spi/cg/CoreGraphicsSPI.h |  4 +--
+ .../WebCore/platform/spi/cocoa/CoreTextSPI.h  |  2 +-
+ .../WebCore/platform/spi/cocoa/IOPMLibSPI.h   |  4 +--
+ .../platform/spi/cocoa/QuartzCoreSPI.h        |  2 +-
+ Source/WebKitLegacy/PlatformMac.cmake         |  8 ++++-
+ Source/WebKitLegacy/mac/Misc/WebKitErrors.m   |  2 +-
+ .../mac/WebCoreSupport/WebEditorClient.mm     |  2 +-
+ .../mac/WebView/WebDynamicScrollBarsView.mm   |  2 +-
+ .../WebKitLegacy/mac/WebView/WebFrameView.mm  | 29 ++++++++++++++--
+ .../WebKitLegacy/mac/WebView/WebHTMLView.mm   | 26 +++++++--------
+ .../mac/WebView/WebHTMLViewInternal.h         |  2 +-
+ .../mac/WebView/WebPDFDocumentExtras.mm       |  2 +-
+ .../mac/WebView/WebResourceInternal.h         |  2 +-
+ .../mac/WebView/WebScriptDebugDelegate.h      |  2 +-
+ Source/WebKitLegacy/mac/WebView/WebView.mm    | 24 +++++++-------
+ .../WebKitLegacy/mac/WebView/WebViewPrivate.h |  2 +-
+ Source/bmalloc/bmalloc/AvailableMemory.cpp    |  2 +-
+ Source/bmalloc/bmalloc/Heap.cpp               | 10 +++---
+ Source/bmalloc/bmalloc/VMAllocate.h           |  6 ++--
+ Source/bmalloc/bmalloc/VMHeap.cpp             |  2 +-
+ 71 files changed, 271 insertions(+), 180 deletions(-)
+
+diff --git a/Source/JavaScriptCore/runtime/MachineContext.h b/Source/JavaScriptCore/runtime/MachineContext.h
+index dbeb8b11..7cfb1197 100644
+--- a/Source/JavaScriptCore/runtime/MachineContext.h
++++ b/Source/JavaScriptCore/runtime/MachineContext.h
+@@ -132,7 +132,7 @@ inline void* stackPointer(const PlatformRegisters& regs)
+ inline void*& stackPointer(mcontext_t& machineContext)
+ {
+ #if OS(DARWIN)
+-    return stackPointer(machineContext->__ss);
++    return stackPointer(WTF_MCONTEXT_THREAD_STATE(machineContext));
+ #elif OS(FREEBSD)
+ 
+ #if CPU(X86)
+@@ -241,7 +241,7 @@ inline void* framePointer(const PlatformRegisters& regs)
+ inline void*& framePointer(mcontext_t& machineContext)
+ {
+ #if OS(DARWIN)
+-    return framePointer(machineContext->__ss);
++    return framePointer(WTF_MCONTEXT_THREAD_STATE(machineContext));
+ #elif OS(FREEBSD)
+ 
+ #if CPU(X86)
+@@ -348,7 +348,7 @@ inline void* instructionPointer(const PlatformRegisters& regs)
+ inline void*& instructionPointer(mcontext_t& machineContext)
+ {
+ #if OS(DARWIN)
+-    return instructionPointer(machineContext->__ss);
++    return instructionPointer(WTF_MCONTEXT_THREAD_STATE(machineContext));
+ #elif OS(FREEBSD)
+ 
+ #if CPU(X86)
+@@ -464,7 +464,7 @@ template<>
+ inline void*& argumentPointer<1>(mcontext_t& machineContext)
+ {
+ #if OS(DARWIN)
+-    return argumentPointer<1>(machineContext->__ss);
++    return argumentPointer<1>(WTF_MCONTEXT_THREAD_STATE(machineContext));
+ #elif OS(FREEBSD)
+ 
+ #if CPU(X86)
+@@ -587,7 +587,7 @@ inline void*& llintInstructionPointer(mcontext_t& machineContext)
+ {
+     // LLInt uses regT4 as PC.
+ #if OS(DARWIN)
+-    return llintInstructionPointer(machineContext->__ss);
++    return llintInstructionPointer(WTF_MCONTEXT_THREAD_STATE(machineContext));
+ #elif OS(FREEBSD)
+ 
+ #if CPU(X86)
+diff --git a/Source/WTF/wtf/OSAllocatorPosix.cpp b/Source/WTF/wtf/OSAllocatorPosix.cpp
+index 4bd79ead..0d357996 100644
+--- a/Source/WTF/wtf/OSAllocatorPosix.cpp
++++ b/Source/WTF/wtf/OSAllocatorPosix.cpp
+@@ -114,7 +114,7 @@ void* OSAllocator::reserveAndCommit(size_t bytes, Usage usage, bool writable, bo
+         }
+     }
+     if (result && includesGuardPages) {
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+         while (mprotect(result, pageSize(), PROT_NONE) == -1 && errno == EAGAIN) { };
+         while (mprotect(static_cast<char*>(result) + bytes - pageSize(), pageSize(), PROT_NONE) == -1 && errno == EAGAIN) { };
+ #else
+@@ -164,13 +164,13 @@ void OSAllocator::decommit(void* address, size_t bytes)
+ #elif HAVE(MADV_FREE)
+     while (madvise(address, bytes, MADV_FREE) == -1 && errno == EAGAIN) { }
+ // this does work but is too slow to be usable
+-#elif PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050 && 0
++#elif PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050 && 0
+     // mmap()'ing the same range again will throw away the old mapping, deallocating its pages
+     // internally mmap() calls vm_map() passing VM_FLAGS_OVERWRITE, but that flag isn't available for user access
+     // FIXME: we lose the VM tag here
+     RELEASE_ASSERT(mmap(address, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0) == address);
+ // on 10.5 calling madvise is just a waste of time; additionally despite of being defined in the system headers the kernel doesn't know MADV_FREE and returns an error when being called with this value
+-#elif HAVE(MADV_DONTNEED) && !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#elif HAVE(MADV_DONTNEED) && !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     while (madvise(address, bytes, MADV_DONTNEED) == -1 && errno == EAGAIN) { }
+ #else
+     UNUSED_PARAM(address);
+@@ -181,7 +181,7 @@ void OSAllocator::decommit(void* address, size_t bytes)
+ void OSAllocator::hintMemoryNotNeededSoon(void* address, size_t bytes)
+ {
+ // on 10.5 calling madvise is just a waste of time
+-#if HAVE(MADV_DONTNEED) && !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if HAVE(MADV_DONTNEED) && !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     while (madvise(address, bytes, MADV_DONTNEED) == -1 && errno == EAGAIN) { }
+ #else
+     UNUSED_PARAM(address);
+diff --git a/Source/WTF/wtf/PlatformRegisters.h b/Source/WTF/wtf/PlatformRegisters.h
+index 92cd789b..3420a720 100644
+--- a/Source/WTF/wtf/PlatformRegisters.h
++++ b/Source/WTF/wtf/PlatformRegisters.h
+@@ -57,9 +57,18 @@ typedef arm_thread_state64_t PlatformRegisters;
+ #error Unknown Architecture
+ #endif
+ 
++// The underscored field names arrived with the UNIX03 conformance work in
++// the 10.5 headers, and the 10.5 SDK still spells them the old way when the
++// deployment target is 10.4 - which it is for the G3.
++#if defined(__DARWIN_UNIX03) && __DARWIN_UNIX03
++#define WTF_MCONTEXT_THREAD_STATE(machineContext) ((machineContext)->__ss)
++#else
++#define WTF_MCONTEXT_THREAD_STATE(machineContext) ((machineContext)->ss)
++#endif
++
+ inline PlatformRegisters& registersFromUContext(ucontext_t* ucontext)
+ {
+-    return ucontext->uc_mcontext->__ss;
++    return WTF_MCONTEXT_THREAD_STATE(ucontext->uc_mcontext);
+ }
+ 
+ #elif OS(WINDOWS)
+diff --git a/Source/WTF/wtf/ThreadingPthreads.cpp b/Source/WTF/wtf/ThreadingPthreads.cpp
+index ab61ef9c..4472d1b8 100644
+--- a/Source/WTF/wtf/ThreadingPthreads.cpp
++++ b/Source/WTF/wtf/ThreadingPthreads.cpp
+@@ -74,7 +74,9 @@
+ 
+ #if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
+ #include <objc/objc-auto.h>
+-#elif OS(MAC_OS_X) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
++// Objective-C garbage collection is Leopard only: libauto does not exist on
++// Tiger, so this is one of the few places that really does mean 10.5 exactly.
++#elif OS(MAC_OS_X) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
+ #include <malloc/malloc.h>
+ #include <objc/objc-auto.h>
+ typedef malloc_zone_t auto_zone_t;
+@@ -252,7 +254,7 @@ RefPtr<Thread> Thread::createInternal(ThreadFunction entryPoint, void* data, con
+     // All threads that potentially use APIs above the BSD layer must be registered with the Objective-C
+     // garbage collector in case API implementations use garbage-collected memory.
+     objc_registerThreadWithCollector();
+-#elif PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
++#elif PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
+     if (objc_collectingEnabled()) auto_zone_register_thread(auto_zone());
+ #endif
+ 
+diff --git a/Source/WTF/wtf/text/ASCIIFastPath.h b/Source/WTF/wtf/text/ASCIIFastPath.h
+index 0d463a7e..7a7abffb 100644
+--- a/Source/WTF/wtf/text/ASCIIFastPath.h
++++ b/Source/WTF/wtf/text/ASCIIFastPath.h
+@@ -30,7 +30,18 @@
+ #if CPU(X86_SSE2)
+ #include <emmintrin.h>
+ #endif
+-#if CPU(PPC) || CPU(PPC64)
++
++// Leopard WebKit's AltiVec fast paths through this file were written for the
++// G4 and G5 and gated on the architecture. The G3 is PowerPC with no vector
++// unit at all, so the gate has to be the vector unit: GCC defines
++// __ALTIVEC__ only when -maltivec is on.
++#if (CPU(PPC) || CPU(PPC64)) && defined(__ALTIVEC__)
++#define WTF_ALTIVEC_ASCII 1
++#else
++#define WTF_ALTIVEC_ASCII 0
++#endif
++
++#if WTF_ALTIVEC_ASCII
+ #ifndef __VECLIBTYPES__
+ #define __VECLIBTYPES__ // Hack to avoid problems with vecLibTypes.h from Accelerate framework
+ #endif
+@@ -80,7 +91,7 @@ template<> struct NonASCIIMask<8, UChar> {
+ template<> struct NonASCIIMask<8, LChar> {
+     static inline uint64_t value() { return 0x8080808080808080ULL; }
+ };
+-#if CPU(PPC) || CPU(PPC64)
++#if WTF_ALTIVEC_ASCII
+ template<> struct NonASCIIMask<16, UChar> {
+     static inline __vector UChar value() { return (__vector UChar)vec_sll(vec_splat_u16(8), vec_splat_u16(4)); }
+ };
+@@ -112,7 +123,7 @@ inline bool charactersAreAllASCII(const CharacterType* characters, size_t length
+     const CharacterType* end = characters + length;
+ 
+     // Prologue: align the input.
+-#if CPU(PPC) || CPU(PPC64)
++#if WTF_ALTIVEC_ASCII
+     register __vector unsigned int allCharBitsVec = (__vector unsigned int)vec_splat_u8(0);
+ 
+     const size_t loopIncrementVec = 2 * (sizeof(__vector unsigned int) / sizeof(CharacterType));
+@@ -135,7 +146,7 @@ inline bool charactersAreAllASCII(const CharacterType* characters, size_t length
+         ++characters;
+     }
+ 
+-#if CPU(PPC) || CPU(PPC64)
++#if WTF_ALTIVEC_ASCII
+     // Compare the values of SIMD vector size (128 bit).
+     if (useVecs) {
+         const CharacterType* vecEnd = (const CharacterType*)((uintptr_t)end & ~memoryAccessMask);
+@@ -165,7 +176,7 @@ inline bool charactersAreAllASCII(const CharacterType* characters, size_t length
+ 
+     MachineWord nonASCIIBitMask = NonASCIIMask<sizeof(MachineWord), CharacterType>::value();
+ 
+-#if CPU(PPC) || CPU(PPC64)
++#if WTF_ALTIVEC_ASCII
+     return !((allCharBits & nonASCIIBitMask) || (useVecs && anyNonASCIIVecElems<CharacterType>(allCharBitsVec)));
+ #else
+     return !(allCharBits & nonASCIIBitMask);
+@@ -249,7 +260,7 @@ inline void copyLCharsFromUCharSource(LChar* destination, const UChar* source, s
+ 
+     while (destination != end)
+         *destination++ = static_cast<LChar>(*source++);
+-#elif CPU(PPC) || CPU(PPC64)
++#elif WTF_ALTIVEC_ASCII
+     const uintptr_t memoryAccessSize = 16; // Memory accesses on 16 byte (128 bit) alignment
+     const uintptr_t memoryAccessMask = memoryAccessSize - 1;
+ 
+diff --git a/Source/WebCore/PlatformMac.cmake b/Source/WebCore/PlatformMac.cmake
+index b8061204..f78409c8 100644
+--- a/Source/WebCore/PlatformMac.cmake
++++ b/Source/WebCore/PlatformMac.cmake
+@@ -86,10 +86,13 @@ add_definitions(-iframework ${CARBON_LIBRARY}/Versions/Current/Frameworks)
+ add_definitions(-iframework ${CORESERVICES_LIBRARY}/Versions/Current/Frameworks)
+ add_definitions(-iframework ${QUARTZ_LIBRARY}/Frameworks)
+ 
+-find_library(DATADETECTORSCORE_FRAMEWORK DataDetectorsCore HINTS /System/Library/PrivateFrameworks)
+-if (NOT DATADETECTORSCORE_FRAMEWORK-NOTFOUND)
+-    list(APPEND WebCore_LIBRARIES ${DATADETECTORSCORE_FRAMEWORK})
+-endif ()
++# DataDetectorsCore was linked here unconditionally - the guard read
++# `NOT DATADETECTORSCORE_FRAMEWORK-NOTFOUND`, which tests an undefined
++# variable and is therefore always true. WebCore references no symbol from
++# it either way (the only user is ServicesOverlayController, behind
++# ENABLE(SERVICE_CONTROLS)), so the dependency bought nothing and cost
++# everything on Tiger, where the private framework does not exist and the
++# browser dies in dyld before main.
+ 
+ find_library(LOOKUP_FRAMEWORK Lookup HINTS /System/Library/PrivateFrameworks)
+ if (LOOKUP_FRAMEWORK)
+diff --git a/Source/WebCore/accessibility/AccessibilityList.h b/Source/WebCore/accessibility/AccessibilityList.h
+index 86022d21..c8814960 100644
+--- a/Source/WebCore/accessibility/AccessibilityList.h
++++ b/Source/WebCore/accessibility/AccessibilityList.h
+@@ -28,7 +28,7 @@
+ 
+ #pragma once
+ 
+-#if PLATFORM(MAC) && !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #define ACCESSIBILITY_LISTS 0
+ #else
+ #define ACCESSIBILITY_LISTS 1
+diff --git a/Source/WebCore/accessibility/AccessibilityTable.h b/Source/WebCore/accessibility/AccessibilityTable.h
+index 4de660aa..1595814d 100644
+--- a/Source/WebCore/accessibility/AccessibilityTable.h
++++ b/Source/WebCore/accessibility/AccessibilityTable.h
+@@ -31,7 +31,7 @@
+ #include "AccessibilityRenderObject.h"
+ #include <wtf/Forward.h>
+ 
+-#if PLATFORM(MAC) && !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #define ACCESSIBILITY_TABLES 0
+ #else
+ #define ACCESSIBILITY_TABLES 1
+diff --git a/Source/WebCore/dom/Document.cpp b/Source/WebCore/dom/Document.cpp
+index ec9d0c9c..a1e5a5e5 100644
+--- a/Source/WebCore/dom/Document.cpp
++++ b/Source/WebCore/dom/Document.cpp
+@@ -394,7 +394,7 @@ static bool acceptsEditingFocus(Node* node)
+ static bool disableRangeMutation(Page* page)
+ {
+     // This check is made on super-hot code paths, so we only want this on Leopard.
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     // Disable Range mutation on document modifications in Leopard Mail.
+     // See <rdar://problem/5865171>
+     return page && page->settings().needsLeopardMailQuirks();
+diff --git a/Source/WebCore/editing/mac/DictionaryLookup.mm b/Source/WebCore/editing/mac/DictionaryLookup.mm
+index ac610efa..86a69f43 100644
+--- a/Source/WebCore/editing/mac/DictionaryLookup.mm
++++ b/Source/WebCore/editing/mac/DictionaryLookup.mm
+@@ -220,7 +220,7 @@ NSString *DictionaryLookup::stringForPDFSelection(PDFSelection *selection, NSDic
+     return nil;
+ }
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ static CGPoint coreGraphicsScreenPointForAppKitScreenPoint(NSPoint point)
+ {
+     NSArray *screens = [NSScreen screens];
+diff --git a/Source/WebCore/page/cocoa/ResourceUsageOverlayCocoa.mm b/Source/WebCore/page/cocoa/ResourceUsageOverlayCocoa.mm
+index 6a564f47..8e645e36 100644
+--- a/Source/WebCore/page/cocoa/ResourceUsageOverlayCocoa.mm
++++ b/Source/WebCore/page/cocoa/ResourceUsageOverlayCocoa.mm
+@@ -448,12 +448,12 @@ void ResourceUsageOverlay::platformDraw(CGContextRef context)
+ {
+     auto& data = historicUsageData();
+ 
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     if (![m_layer.get() contentsAreFlipped]) {
+ #endif
+         CGContextScaleCTM(context, 1, -1);
+         CGContextTranslateCTM(context, 0, -normalHeight);
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     }
+ #endif
+ 
+diff --git a/Source/WebCore/page/mac/TextIndicatorWindow.mm b/Source/WebCore/page/mac/TextIndicatorWindow.mm
+index fd8da048..8bd937ae 100644
+--- a/Source/WebCore/page/mac/TextIndicatorWindow.mm
++++ b/Source/WebCore/page/mac/TextIndicatorWindow.mm
+@@ -54,7 +54,7 @@ NSString *textLayerKey = @"TextLayer";
+ NSString *dropShadowLayerKey = @"DropShadowLayer";
+ NSString *rimShadowLayerKey = @"RimShadowLayer";
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #define kAnimationCompletionBlock @"animationCompletionBlock"
+ #endif
+ 
+@@ -165,7 +165,7 @@ static bool indicatorWantsManualAnimation(const TextIndicator& indicator)
+     return false;
+ }
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ - (void)animationDidStop:(CAAnimation *)theAnimation finished:(BOOL)flag
+ {
+     UNUSED_PARAM(flag);
+@@ -419,7 +419,7 @@ static RetainPtr<CABasicAnimation> createFadeInAnimation(CFTimeInterval duration
+     [fadeAnimation.get() setFillMode:kCAFillModeForwards];
+     [fadeAnimation.get() setRemovedOnCompletion:NO];
+     [fadeAnimation.get() setDuration:fadeOutAnimationDuration];
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     [fadeAnimation.get() setDelegate:self];
+     [fadeAnimation.get() setValue:[NSValue valueWithPointer:completionHandler] forKey:kAnimationCompletionBlock];
+ #endif
+@@ -572,7 +572,7 @@ void TextIndicatorWindow::startFadeOut()
+         [[indicatorWindow.get() parentWindow] removeChildWindow:indicatorWindow.get()];
+         [indicatorWindow.get() close];
+       }
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+      )
+ #endif
+     ];
+diff --git a/Source/WebCore/platform/Logging.cpp b/Source/WebCore/platform/Logging.cpp
+index b8a0d5b1..65cf2b79 100644
+--- a/Source/WebCore/platform/Logging.cpp
++++ b/Source/WebCore/platform/Logging.cpp
+@@ -82,7 +82,7 @@ void initializeLogChannelsIfNecessary()
+ #ifndef NDEBUG
+ void registerNotifyCallback(const String& notifyID, WTF::Function<void()>&& callback)
+ {
+-#if PLATFORM(COCOA) && !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if PLATFORM(COCOA) && !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     int token;
+     notify_register_dispatch(notifyID.utf8().data(), &token, dispatch_get_main_queue(), BlockPtr<void (int)>::fromCallable([callback = WTFMove(callback)] (int) {
+         callback();
+diff --git a/Source/WebCore/platform/audio/SincResampler.cpp b/Source/WebCore/platform/audio/SincResampler.cpp
+index 81e7a09b..983d64e3 100644
+--- a/Source/WebCore/platform/audio/SincResampler.cpp
++++ b/Source/WebCore/platform/audio/SincResampler.cpp
+@@ -39,7 +39,13 @@
+ #include <emmintrin.h>
+ #endif
+ 
+-#if CPU(PPC) || CPU(PPC64)
++// AltiVec, not PowerPC: the G3 has none. See wtf/text/ASCIIFastPath.h.
++#if (CPU(PPC) || CPU(PPC64)) && defined(__ALTIVEC__)
++#define WEBCORE_ALTIVEC_RESAMPLER 1
++#else
++#define WEBCORE_ALTIVEC_RESAMPLER 0
++#endif
++#if WEBCORE_ALTIVEC_RESAMPLER
+ #include <altivec.h>
+ #undef vector
+ #undef pixel
+@@ -334,7 +340,7 @@ void SincResampler::process(AudioSourceProvider* sourceProvider, float* destinat
+                     CONVOLVE_ONE_SAMPLE
+                     n--;
+                 }
+-#elif CPU(PPC) || CPU(PPC64)
++#elif WEBCORE_ALTIVEC_RESAMPLER
+                 // If the sourceP address is not 16-byte aligned, the first several frames (at most three) should be processed seperately.
+                 while ((reinterpret_cast<uintptr_t>(inputP) & 0x0F) && n) {
+                     CONVOLVE_ONE_SAMPLE
+diff --git a/Source/WebCore/platform/audio/mac/AudioHardwareListenerMac.cpp b/Source/WebCore/platform/audio/mac/AudioHardwareListenerMac.cpp
+index 0ef32040..84b11613 100644
+--- a/Source/WebCore/platform/audio/mac/AudioHardwareListenerMac.cpp
++++ b/Source/WebCore/platform/audio/mac/AudioHardwareListenerMac.cpp
+@@ -30,7 +30,7 @@
+ 
+ #include <algorithm>
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ enum
+ {
+     kAudioDeviceTransportTypeUnknown        = 0,
+@@ -117,7 +117,7 @@ static const AudioObjectPropertyAddress& outputDevicePropertyDescriptor()
+     return outputDeviceProperty;
+ }
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ OSStatus AudioHardwareListenerMac::WebAudioObjectPropertyListener( AudioObjectID                       inObjectID,
+                                                                    UInt32                              inNumberAddresses,
+                                                                    const AudioObjectPropertyAddress    inAddresses[],
+diff --git a/Source/WebCore/platform/audio/mac/AudioHardwareListenerMac.h b/Source/WebCore/platform/audio/mac/AudioHardwareListenerMac.h
+index e69e8efe..1049827a 100644
+--- a/Source/WebCore/platform/audio/mac/AudioHardwareListenerMac.h
++++ b/Source/WebCore/platform/audio/mac/AudioHardwareListenerMac.h
+@@ -48,7 +48,7 @@ private:
+ 
+     void propertyChanged(UInt32, const AudioObjectPropertyAddress[]);
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     typedef std::function<void (UInt32, const AudioObjectPropertyAddress[])> AudioObjectPropertyListenerBlock;
+     static OSStatus WebAudioObjectPropertyListener(AudioObjectID, UInt32, const AudioObjectPropertyAddress[], void*);
+ #endif
+diff --git a/Source/WebCore/platform/audio/mac/CAAudioStreamDescription.cpp b/Source/WebCore/platform/audio/mac/CAAudioStreamDescription.cpp
+index 3d63a03c..1dc91058 100644
+--- a/Source/WebCore/platform/audio/mac/CAAudioStreamDescription.cpp
++++ b/Source/WebCore/platform/audio/mac/CAAudioStreamDescription.cpp
+@@ -26,7 +26,7 @@
+ #include "config.h"
+ #include "CAAudioStreamDescription.h"
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ enum {
+     kLinearPCMFormatFlagsSampleFractionShift    = 7,
+     kLinearPCMFormatFlagsSampleFractionMask     = (0x3F << kLinearPCMFormatFlagsSampleFractionShift),
+diff --git a/Source/WebCore/platform/cocoa/SleepDisablerCocoa.cpp b/Source/WebCore/platform/cocoa/SleepDisablerCocoa.cpp
+index 60b326d9..1e0a6158 100644
+--- a/Source/WebCore/platform/cocoa/SleepDisablerCocoa.cpp
++++ b/Source/WebCore/platform/cocoa/SleepDisablerCocoa.cpp
+@@ -41,7 +41,7 @@ std::unique_ptr<SleepDisabler> SleepDisabler::create(const char* reason, Type ty
+ SleepDisablerCocoa::SleepDisablerCocoa(const char* reason, Type type)
+     : SleepDisabler(reason, type)
+     , m_sleepAssertion(0)
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     , m_systemActivityTimer([] { UpdateSystemActivity(IdleActivity); })
+ #endif
+ {
+diff --git a/Source/WebCore/platform/cocoa/SleepDisablerCocoa.h b/Source/WebCore/platform/cocoa/SleepDisablerCocoa.h
+index 861c96a3..3e544527 100644
+--- a/Source/WebCore/platform/cocoa/SleepDisablerCocoa.h
++++ b/Source/WebCore/platform/cocoa/SleepDisablerCocoa.h
+@@ -29,7 +29,7 @@
+ 
+ #include "SleepDisabler.h"
+ 
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #include "Timer.h"
+ #endif
+ 
+@@ -42,7 +42,7 @@ public:
+ 
+ private:
+     uint32_t m_sleepAssertion;
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     Timer m_systemActivityTimer;
+ #endif
+ };
+diff --git a/Source/WebCore/platform/graphics/FontDescription.cpp b/Source/WebCore/platform/graphics/FontDescription.cpp
+index 18fa1102..ddc98075 100644
+--- a/Source/WebCore/platform/graphics/FontDescription.cpp
++++ b/Source/WebCore/platform/graphics/FontDescription.cpp
+@@ -158,7 +158,7 @@ bool FontCascadeDescription::familiesEqualForTextAutoSizing(const FontCascadeDes
+ 
+ bool FontCascadeDescription::familyNamesAreEqual(const AtomicString& family1, const AtomicString& family2)
+ {
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     // FIXME: <rdar://problem/33594253> CoreText matches dot-prefixed font names case sensitively. We should
+     // always take the case insensitive patch once this radar is fixed.
+     if (family1.startsWith('.'))
+@@ -171,14 +171,14 @@ bool FontCascadeDescription::familyNamesAreEqual(const AtomicString& family1, co
+     else
+ #endif
+         return StringHash::equal(family1.string(), family2.string());
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     return ASCIICaseInsensitiveHash::equal(family1, family2);
+ #endif
+ }
+ 
+ unsigned FontCascadeDescription::familyNameHash(const AtomicString& family)
+ {
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     // FIXME: <rdar://problem/33594253> CoreText matches dot-prefixed font names case sensitively. We should
+     // always take the case insensitive patch once this radar is fixed.
+     if (family.startsWith('.'))
+@@ -188,20 +188,20 @@ unsigned FontCascadeDescription::familyNameHash(const AtomicString& family)
+     else
+ #endif
+         return StringHash::hash(family.string());
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     return ASCIICaseInsensitiveHash::hash(family);
+ #endif
+ }
+ 
+ String FontCascadeDescription::foldedFamilyName(const AtomicString& family)
+ {
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     // FIXME: <rdar://problem/33594253> CoreText matches dot-prefixed font names case sensitively. We should
+     // always take the case insensitive patch once this radar is fixed.
+     if (family.startsWith('.'))
+ #endif
+         return family.string();
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     return family.string().foldCase();
+ #endif
+ }
+diff --git a/Source/WebCore/platform/graphics/FontPlatformData.h b/Source/WebCore/platform/graphics/FontPlatformData.h
+index 33c4fcd9..88be6a89 100644
+--- a/Source/WebCore/platform/graphics/FontPlatformData.h
++++ b/Source/WebCore/platform/graphics/FontPlatformData.h
+@@ -26,7 +26,7 @@
+ 
+ #include "TextFlags.h"
+ #include <wtf/Forward.h>
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #include <wtf/RefCounted.h>
+ #endif
+ #include <wtf/RetainPtr.h>
+@@ -66,13 +66,13 @@ interface IDWriteFont;
+ interface IDWriteFontFace;
+ #endif
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ typedef UInt32 ATSFontContainerRef;
+ #endif
+ 
+ namespace WebCore {
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ class ATSFontContainerRefWrapper : public RefCounted<ATSFontContainerRefWrapper> {
+ public:
+     static Ref<ATSFontContainerRefWrapper> create(ATSFontContainerRef atsContainer);
+@@ -101,7 +101,7 @@ public:
+ 
+ #if PLATFORM(COCOA)
+     WEBCORE_EXPORT FontPlatformData(CTFontRef, float size, bool syntheticBold = false, bool syntheticOblique = false, FontOrientation = Horizontal, FontWidthVariant = RegularWidth, TextRenderingMode = AutoTextRendering);
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     WEBCORE_EXPORT FontPlatformData(CTFontRef, RefPtr<ATSFontContainerRefWrapper>, float size, bool syntheticBold = false, bool syntheticOblique = false, FontOrientation = Horizontal, FontWidthVariant = RegularWidth, TextRenderingMode = AutoTextRendering);
+ #endif
+ #endif
+@@ -248,7 +248,7 @@ private:
+     RetainPtr<CTFontRef> m_font;
+     mutable RetainPtr<CTFontRef> m_ctFont;
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     RefPtr<ATSFontContainerRefWrapper> m_atsContainer;
+ #endif
+ #elif PLATFORM(WIN)
+diff --git a/Source/WebCore/platform/graphics/Gradient.h b/Source/WebCore/platform/graphics/Gradient.h
+index b45e6890..029afd58 100644
+--- a/Source/WebCore/platform/graphics/Gradient.h
++++ b/Source/WebCore/platform/graphics/Gradient.h
+@@ -37,7 +37,7 @@
+ 
+ #if USE(CG)
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #include <CoreGraphics/CGFunction.h>
+ #endif
+ 
+@@ -179,7 +179,7 @@ namespace WebCore {
+         WEBCORE_EXPORT Gradient(const FloatPoint& p0, const FloatPoint& p1);
+         Gradient(const FloatPoint& p0, float r0, const FloatPoint& p1, float r1, float aspectRatio);
+ 
+-#if USE(CG) && !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if USE(CG) && !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+         void platformInit() { m_gradient = nullptr; m_gradientFunction = nullptr; }
+ #else
+         void platformInit() { m_gradient = nullptr; }
+@@ -212,7 +212,7 @@ namespace WebCore {
+         float m_platformGradientAlpha;
+ #endif
+ 
+-#if USE(CG) && !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if USE(CG) && !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+         CGFunctionRef m_gradientFunction;
+ #endif
+ 
+diff --git a/Source/WebCore/platform/graphics/MediaPlayer.cpp b/Source/WebCore/platform/graphics/MediaPlayer.cpp
+index a02ea1bc..1a43745c 100644
+--- a/Source/WebCore/platform/graphics/MediaPlayer.cpp
++++ b/Source/WebCore/platform/graphics/MediaPlayer.cpp
+@@ -905,7 +905,7 @@ MediaPlayer::SupportsType MediaPlayer::supportsType(const MediaEngineSupportPara
+             && (containerType.startsWith("video/webm", false) || containerType.startsWith("video/x-flv", false)))
+             return IsNotSupported;
+     }
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     // HTTP Live Streaming is not supported on 10.5, so don't report "audio/mpegurl" as supported for <video> elements,
+     // but do report it for <audio> elements, as m3u playlists for audio files are supported
+     if (containerType.startsWith("audio/mpegurl", false) && client->mediaPlayerIsVideo())
+diff --git a/Source/WebCore/platform/graphics/ca/GraphicsLayerCA.cpp b/Source/WebCore/platform/graphics/ca/GraphicsLayerCA.cpp
+index 6ee6bf0f..1f9798a7 100644
+--- a/Source/WebCore/platform/graphics/ca/GraphicsLayerCA.cpp
++++ b/Source/WebCore/platform/graphics/ca/GraphicsLayerCA.cpp
+@@ -76,7 +76,7 @@
+ #pragma warning(disable: 4701)
+ #endif
+ 
+-#define HAVE_MODERN_QUARTZCORE !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#define HAVE_MODERN_QUARTZCORE !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+ 
+ namespace WebCore {
+ 
+@@ -1116,7 +1116,7 @@ void GraphicsLayerCA::setContentsToImage(Image* image)
+         m_uncorrectedContentsImage = WTFMove(newImage);
+         m_pendingContentsImage = m_uncorrectedContentsImage;
+ 
+-#if PLATFORM(MAC) && (__MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if PLATFORM(MAC) && (__MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+         // Downscale the image if necessary; on 10.5 both width and height must not be greater than 2046
+         size_t width = CGImageGetWidth(m_uncorrectedContentsImage.get());
+         size_t height = CGImageGetHeight(m_uncorrectedContentsImage.get());
+diff --git a/Source/WebCore/platform/graphics/ca/cocoa/PlatformCALayerCocoa.mm b/Source/WebCore/platform/graphics/ca/cocoa/PlatformCALayerCocoa.mm
+index c9c30c79..d5471956 100644
+--- a/Source/WebCore/platform/graphics/ca/cocoa/PlatformCALayerCocoa.mm
++++ b/Source/WebCore/platform/graphics/ca/cocoa/PlatformCALayerCocoa.mm
+@@ -135,7 +135,7 @@ static double mediaTimeToCurrentTime(CFTimeInterval t)
+     CALayer *layer = m_owner->platformLayer();
+ 
+     String animationKey;
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     NSEnumerator *enumerator = [[layer animationKeys] objectEnumerator];
+ #else
+     // On Leopard we have to keep track of the added and removed animationKeys ourselves
+@@ -167,7 +167,7 @@ static double mediaTimeToCurrentTime(CFTimeInterval t)
+     CALayer *layer = m_owner->platformLayer();
+ 
+     String animationKey;
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     NSEnumerator *enumerator = [[layer animationKeys] objectEnumerator];
+ #else
+     // On Leopard we have to keep track of the added and removed animationKeys ourselves
+@@ -323,7 +323,7 @@ void PlatformCALayerCocoa::commonInit()
+     // Save a pointer to 'this' in the CALayer
+     [m_layer.get() setValue:[NSValue valueWithPointer:this] forKey:platformCALayerPointer];
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     [m_layer.get() setValue:[NSMutableArray arrayWithCapacity:0] forKey:@"animationKeys"];
+ #endif
+     
+@@ -415,7 +415,7 @@ PlatformCALayerCocoa::~PlatformCALayerCocoa()
+ {
+     [m_layer.get() setValue:nil forKey:platformCALayerPointer];
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     // On Leopard we have to keep track of the added and removed animationKeys ourselves
+     [m_layer.get() setValue:nil forKey:@"animationKeys"];
+ #endif
+@@ -460,7 +460,7 @@ void PlatformCALayerCocoa::copyContentsFromLayer(PlatformCALayer* layer)
+     if ([m_layer.get() contents] != [caLayer contents])
+         [m_layer.get() setContents:[caLayer contents]];
+     else
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+         [m_layer.get() setContentsChanged];
+ #else
+         [m_layer reloadValueForKeyPath:@"contents"];
+@@ -567,7 +567,7 @@ void PlatformCALayerCocoa::addAnimationForKey(const String& key, PlatformCAAnima
+ 
+     BEGIN_BLOCK_OBJC_EXCEPTIONS
+     [m_layer.get() addAnimation:propertyAnimation forKey:key];
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     // On Leopard we have to keep track of the added and removed animationKeys ourselves
+     NSMutableArray *animationKeys = [m_layer.get() valueForKey:@"animationKeys"];
+     [animationKeys addObject:key];
+@@ -579,7 +579,7 @@ void PlatformCALayerCocoa::removeAnimationForKey(const String& key)
+ {
+     BEGIN_BLOCK_OBJC_EXCEPTIONS
+     [m_layer.get() removeAnimationForKey:key];
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     // On Leopard we have to keep track of the added and removed animationKeys ourselves
+     NSMutableArray *animationKeys = [m_layer.get() valueForKey:@"animationKeys"];
+     [animationKeys removeObject:key];
+@@ -1296,7 +1296,7 @@ void PlatformCALayer::drawLayerContents(CGContextRef context, WebCore::PlatformC
+     
+     CGContextSaveGState(context);
+     
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     if (layerContents->platformCALayerContentsOrientation() == WebCore::GraphicsLayer::CompositingCoordinatesBottomUp) {
+         FloatRect layerBounds = platformCALayer->bounds();
+         CGContextScaleCTM(context, 1, -1);
+@@ -1343,7 +1343,7 @@ void PlatformCALayer::drawLayerContents(CGContextRef context, WebCore::PlatformC
+         
+         for (const auto& dirtyRect : dirtyRects) {
+             FloatRect rect;
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+             if (layerContents->platformCALayerContentsOrientation() == WebCore::GraphicsLayer::CompositingCoordinatesBottomUp)
+                 rect = transform.mapRect(dirtyRect);
+             else
+diff --git a/Source/WebCore/platform/graphics/cg/GradientCG.cpp b/Source/WebCore/platform/graphics/cg/GradientCG.cpp
+index 1b7ae6d4..ff0ab642 100644
+--- a/Source/WebCore/platform/graphics/cg/GradientCG.cpp
++++ b/Source/WebCore/platform/graphics/cg/GradientCG.cpp
+@@ -33,7 +33,7 @@
+ #include <CoreGraphics/CoreGraphics.h>
+ #include <wtf/RetainPtr.h>
+ 
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ CG_EXTERN CGFunctionRef CGGradientGetFunction(CGGradientRef);
+ #endif
+ 
+@@ -43,7 +43,7 @@ void Gradient::platformDestroy()
+ {
+     CGGradientRelease(m_gradient);
+     m_gradient = 0;
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     if (m_gradientFunction) {
+       CGFunctionRelease(m_gradientFunction);
+       m_gradientFunction = 0;
+@@ -98,7 +98,7 @@ CGGradientRef Gradient::platformGradient()
+         m_gradient = CGGradientCreateWithColors(extendedSRGBColorSpaceRef(), colorsArray.get(), locations.data());
+     else
+         m_gradient = CGGradientCreateWithColorComponents(sRGBColorSpaceRef(), colorComponents.data(), locations.data(), numStops);
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     if (m_gradient) {
+         m_gradientFunction = CGGradientGetFunction(m_gradient);
+     }
+diff --git a/Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp b/Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp
+index 65ed88b3..546eb534 100644
+--- a/Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp
++++ b/Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp
+@@ -762,7 +762,7 @@ RetainPtr<CTFontRef> preparePlatformFont(CTFontRef originalFont, const FontDescr
+ #endif
+     if (!CFDictionaryGetCount(attributes.get()))
+         return originalFont;
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     RetainPtr<CTFontDescriptorRef> newDescriptor;
+     CTFontDescriptorRef descriptor = NULL;
+     auto platformFont = CTFontGetPlatformFont(originalFont, &descriptor);
+@@ -837,7 +837,7 @@ static void fontCacheRegisteredFontsChangedNotificationCallback(CFNotificationCe
+     invalidateFontCache();
+ }
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ static ATSGeneration atsGeneration = 0;
+ 
+ static void fontCacheATSNotificationCallback(ATSFontNotificationInfoRef, void* iRefCon)
+@@ -1031,7 +1031,7 @@ public:
+ 
+     const InstalledFontFamily& collectionForFamily(const String& familyName)
+     {
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+         auto folded = familyName.foldCase();
+ #else
+         auto folded = familyName;
+@@ -1066,7 +1066,7 @@ public:
+ #else
+             CFStringRef nameAttribute = kCTFontNameAttribute;
+ #endif
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+             CFTypeRef keys[] = { kCTFontEnabledAttribute, nameAttribute };
+             CFTypeRef values[] = { kCFBooleanTrue, postScriptNameString.get() };
+ #else
+diff --git a/Source/WebCore/platform/graphics/cocoa/FontCocoa.mm b/Source/WebCore/platform/graphics/cocoa/FontCocoa.mm
+index 29210481..e4e6996b 100644
+--- a/Source/WebCore/platform/graphics/cocoa/FontCocoa.mm
++++ b/Source/WebCore/platform/graphics/cocoa/FontCocoa.mm
+@@ -57,7 +57,7 @@
+ @end
+ #endif
+ 
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ enum {
+   kLowerCaseType                = 37,
+   kUpperCaseType                = 38
+@@ -176,7 +176,7 @@ void Font::platformInit()
+     // and add it to the ascent.
+     if (origin() == Origin::Local && needsAscentAdjustment(familyName.get()))
+         ascent += std::round((ascent + descent) * 0.15f);
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     else if (caseInsensitiveCompare(familyName.get(), CFSTR("Geeza Pro"))) {
+         // Geeza Pro has glyphs that draw slightly above the ascent or far below the descent. Adjust
+         // those vertical metrics to better match reality, so that diacritics at the bottom of one line
+@@ -559,7 +559,7 @@ static RetainPtr<CTFontRef> createCTFontWithoutSynthesizableFeatures(CTFontRef f
+     CFTypeRef keys[] = { kCTFontFeatureSettingsAttribute };
+     CFTypeRef values[] = { newFeatures.get() };
+     RetainPtr<CFDictionaryRef> attributes = adoptCF(CFDictionaryCreate(kCFAllocatorDefault, keys, values, WTF_ARRAY_LENGTH(keys), &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     RetainPtr<CTFontDescriptorRef> newDescriptor;
+     CTFontDescriptorRef descriptor = NULL;
+     auto platformFont = CTFontGetPlatformFont(font, &descriptor);
+@@ -589,7 +589,7 @@ RefPtr<Font> Font::platformCreateScaledFont(const FontDescription&, float scaleF
+ {
+     float size = m_platformData.size() * scaleFactor;
+     CTFontSymbolicTraits fontTraits = CTFontGetSymbolicTraits(m_platformData.font());
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     CTFontDescriptorRef descriptor = NULL;
+     auto platformFont = CTFontGetPlatformFont(m_platformData.font(), &descriptor);
+     auto scaledFont = adoptCF(CTFontCreateWithPlatformFont(platformFont, size, nullptr, descriptor));
+diff --git a/Source/WebCore/platform/graphics/cocoa/FontPlatformDataCocoa.mm b/Source/WebCore/platform/graphics/cocoa/FontPlatformDataCocoa.mm
+index 09103094..021963ce 100644
+--- a/Source/WebCore/platform/graphics/cocoa/FontPlatformDataCocoa.mm
++++ b/Source/WebCore/platform/graphics/cocoa/FontPlatformDataCocoa.mm
+@@ -35,7 +35,7 @@
+ #import <CoreText/CoreText.h>
+ #endif
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #include "FontCustomPlatformData.h"
+ #include <ATS/ATSFont.h>
+ #endif
+@@ -45,7 +45,7 @@ namespace WebCore {
+ // These CoreText Text Spacing feature selectors are not defined in CoreText.
+ enum TextSpacingCTFeatureSelector { TextSpacingProportional, TextSpacingFullWidth, TextSpacingHalfWidth, TextSpacingThirdWidth, TextSpacingQuarterWidth };
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ FontPlatformData::FontPlatformData(CTFontRef font, RefPtr<ATSFontContainerRefWrapper> atsContainer, float size, bool syntheticBold, bool syntheticOblique, FontOrientation orientation, FontWidthVariant widthVariant, TextRenderingMode textRenderingMode)
+     : FontPlatformData(font, size, syntheticBold, syntheticOblique, orientation, widthVariant, textRenderingMode)
+ {
+@@ -54,7 +54,7 @@ FontPlatformData::FontPlatformData(CTFontRef font, RefPtr<ATSFontContainerRefWra
+ #endif
+ 
+ FontPlatformData::FontPlatformData(CTFontRef font, float size, bool syntheticBold, bool syntheticOblique, FontOrientation orientation, FontWidthVariant widthVariant, TextRenderingMode textRenderingMode)
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     : FontPlatformData(size, syntheticBold, syntheticOblique, orientation, widthVariant, textRenderingMode)
+ #elif  PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED < 101200
+     : FontPlatformData(adoptCF(CTFontCopyGraphicsFont(font, NULL)).get(), size, syntheticBold, syntheticOblique, orientation, widthVariant, textRenderingMode)
+@@ -78,7 +78,7 @@ FontPlatformData::FontPlatformData(CTFontRef font, float size, bool syntheticBol
+     m_isEmoji = CTFontIsAppleColorEmoji(m_font.get());
+ #endif
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     ATSFontRef atsFont = CTFontGetPlatformFont(font, nullptr);
+     m_cgFont = adoptCF(CGFontCreateWithPlatformFont(&atsFont));
+     RELEASE_ASSERT(m_cgFont.get());
+@@ -247,7 +247,7 @@ CTFontRef FontPlatformData::ctFont() const
+     if (CFEqual(postScriptName.get(), CFSTR("HoeflerText-Italic")) || CFEqual(postScriptName.get(), CFSTR("HoeflerText-BlackItalic"))) {
+         descriptor = adoptCF(CTFontDescriptorCreateCopyWithAttributes(sourceDescriptor.get(), disableSwashesFontAttributes()));
+     }
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     m_ctFont = adoptCF(CTFontCreateWithPlatformFont(CTFontGetPlatformFont(m_font.get(), nullptr), m_size, 0, descriptor.get()));
+     RELEASE_ASSERT(CTFontGetPlatformFont(m_font.get(), nullptr) == CTFontGetPlatformFont(m_ctFont.get(), nullptr));
+ #else
+@@ -260,7 +260,7 @@ CTFontRef FontPlatformData::ctFont() const
+         RetainPtr<CFNumberRef> featureType = adoptCF(CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &featureTypeValue));
+         RetainPtr<CFNumberRef> featureSelector = adoptCF(CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &featureSelectorValue));
+         RetainPtr<CTFontDescriptorRef> newDescriptor = adoptCF(CTFontDescriptorCreateCopyWithFeature(descriptor.get(), featureType.get(), featureSelector.get()));
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+         RetainPtr<CTFontRef> newFont = adoptCF(CTFontCreateWithPlatformFont(CTFontGetPlatformFont(m_font.get(), nullptr), m_size, 0, newDescriptor.get()));
+ #else
+         RetainPtr<CTFontRef> newFont = adoptCF(CTFontCreateWithFontDescriptor(newDescriptor.get(), m_size, 0));
+@@ -286,7 +286,7 @@ RetainPtr<CFTypeRef> FontPlatformData::objectForEqualityCheck(CTFontRef ctFont)
+     return url;
+ #elif PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1060
+     return adoptCF(CTFontCopyGraphicsFont(ctFont, NULL));
+-#elif PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#elif PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     ATSFontRef atsFont = CTFontGetPlatformFont(ctFont, NULL);
+     RELEASE_ASSERT(atsFont != kATSFontRefUnspecified);
+     return adoptCF(CFDataCreate(kCFAllocatorDefault, (UInt8 *)&atsFont, sizeof(atsFont)));
+diff --git a/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm b/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm
+index 78b578e7..dfb34ecb 100644
+--- a/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm
++++ b/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm
+@@ -289,7 +289,7 @@ void GraphicsContext::drawLineForDocumentMarker(const FloatPoint& point, float w
+         // FIXME: Rather than getting the NSImage and then picking the CGImage from it, we should do what iOS does and
+         // just load the CGImage in the first place.
+         NSRect dotRect = NSMakeRect(offsetPoint.x(), offsetPoint.y(), patternWidth, patternHeight);
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+         CGImageRef cgImage = [(NSBitmapImageRep *)[image bestRepresentationForDevice:nil] CGImage];
+ #else
+         CGImageRef cgImage = [image CGImageForProposedRect:&dotRect context:[NSGraphicsContext graphicsContextWithGraphicsPort:context flipped:YES] hints:nullptr];
+diff --git a/Source/WebCore/platform/graphics/cv/PixelBufferConformerCV.cpp b/Source/WebCore/platform/graphics/cv/PixelBufferConformerCV.cpp
+index e254a936..b7ee70d3 100644
+--- a/Source/WebCore/platform/graphics/cv/PixelBufferConformerCV.cpp
++++ b/Source/WebCore/platform/graphics/cv/PixelBufferConformerCV.cpp
+@@ -31,7 +31,7 @@
+ 
+ #include "CoreVideoSoftLink.h"
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ enum CVPixelBufferLockFlags {
+         kCVPixelBufferLock_ReadOnly = 0x00000001, 
+ };
+diff --git a/Source/WebCore/platform/graphics/cv/VideoTextureCopierCV.cpp b/Source/WebCore/platform/graphics/cv/VideoTextureCopierCV.cpp
+index 451f5fbd..4cfa3d22 100644
+--- a/Source/WebCore/platform/graphics/cv/VideoTextureCopierCV.cpp
++++ b/Source/WebCore/platform/graphics/cv/VideoTextureCopierCV.cpp
+@@ -193,7 +193,7 @@ static StringMap& enumToStringMap()
+         map.get().emplace(STRINGIFY_PAIR(GL_LUMINANCE_ALPHA));
+         map.get().emplace(STRINGIFY_PAIR(GL_LUMINANCE));
+         map.get().emplace(STRINGIFY_PAIR(GL_ALPHA));
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+         map.get().emplace(STRINGIFY_PAIR(GL_R8));
+         map.get().emplace(STRINGIFY_PAIR(GL_R16F));
+         map.get().emplace(STRINGIFY_PAIR(GL_R32F));
+@@ -221,7 +221,7 @@ static StringMap& enumToStringMap()
+         map.get().emplace(STRINGIFY_PAIR(GL_RGB10_A2));
+         map.get().emplace(STRINGIFY_PAIR(GL_DEPTH_COMPONENT16));
+         map.get().emplace(STRINGIFY_PAIR(GL_DEPTH_COMPONENT24));
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+         map.get().emplace(STRINGIFY_PAIR(GL_DEPTH_COMPONENT32F));
+         map.get().emplace(STRINGIFY_PAIR(GL_DEPTH24_STENCIL8));
+         map.get().emplace(STRINGIFY_PAIR(GL_DEPTH32F_STENCIL8));
+@@ -232,7 +232,7 @@ static StringMap& enumToStringMap()
+         map.get().emplace(STRINGIFY_PAIR(GL_LUMINANCE));
+         map.get().emplace(STRINGIFY_PAIR(GL_ALPHA));
+         map.get().emplace(STRINGIFY_PAIR(GL_RED));
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+         map.get().emplace(STRINGIFY_PAIR(GL_RG_INTEGER));
+         map.get().emplace(STRINGIFY_PAIR(GL_DEPTH_STENCIL));
+ #endif
+@@ -241,7 +241,7 @@ static StringMap& enumToStringMap()
+         map.get().emplace(STRINGIFY_PAIR(GL_UNSIGNED_SHORT_4_4_4_4));
+         map.get().emplace(STRINGIFY_PAIR(GL_UNSIGNED_SHORT_5_5_5_1));
+         map.get().emplace(STRINGIFY_PAIR(GL_BYTE));
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+         map.get().emplace(STRINGIFY_PAIR(GL_HALF_FLOAT));
+ #endif
+         map.get().emplace(STRINGIFY_PAIR(GL_FLOAT));
+@@ -250,7 +250,7 @@ static StringMap& enumToStringMap()
+         map.get().emplace(STRINGIFY_PAIR(GL_UNSIGNED_INT));
+         map.get().emplace(STRINGIFY_PAIR(GL_INT));
+         map.get().emplace(STRINGIFY_PAIR(GL_UNSIGNED_INT_2_10_10_10_REV));
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+         map.get().emplace(STRINGIFY_PAIR(GL_UNSIGNED_INT_24_8));
+         map.get().emplace(STRINGIFY_PAIR(GL_FLOAT_32_UNSIGNED_INT_24_8_REV));
+ #endif
+diff --git a/Source/WebCore/platform/graphics/mac/ComplexTextControllerCoreText.mm b/Source/WebCore/platform/graphics/mac/ComplexTextControllerCoreText.mm
+index 73b19f4e..d1f29ff4 100644
+--- a/Source/WebCore/platform/graphics/mac/ComplexTextControllerCoreText.mm
++++ b/Source/WebCore/platform/graphics/mac/ComplexTextControllerCoreText.mm
+@@ -162,7 +162,7 @@ ComplexTextController::ComplexTextRun::ComplexTextRun(CTRunRef ctRun, const Font
+             m_baseAdvances.uncheckedAppend(baseAdvances[i]);
+     }
+ 
+-//#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++//#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ //    CGPoint initialPosition;
+ //    CTRunGetPositions(ctRun, CFRangeMake(0, 1), &initialPosition);
+ //    m_initialAdvance = CGSizeMake(m_advances[0].width + initialPosition.x, m_advances[0].height + initialPosition.y);
+@@ -218,7 +218,7 @@ void ComplexTextController::collectComplexTextRunsForCharacters(const UChar* cp,
+         static const void* attributeKeys[] = { kCTFontCascadeListAttribute };
+         const void* values[] = { cascadeList.get() };
+         RetainPtr<CFDictionaryRef> attributes = adoptCF(CFDictionaryCreate(kCFAllocatorDefault, attributeKeys, values, sizeof(attributeKeys) / sizeof(*attributeKeys), &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+         RetainPtr<CTFontDescriptorRef> newDescriptor;
+         CTFontDescriptorRef descriptor = NULL;
+         auto platformFont = CTFontGetPlatformFont(font->platformData().ctFont(), &descriptor);
+diff --git a/Source/WebCore/platform/graphics/mac/FontCustomPlatformData.cpp b/Source/WebCore/platform/graphics/mac/FontCustomPlatformData.cpp
+index b0e58fd9..c413e5d8 100644
+--- a/Source/WebCore/platform/graphics/mac/FontCustomPlatformData.cpp
++++ b/Source/WebCore/platform/graphics/mac/FontCustomPlatformData.cpp
+@@ -25,7 +25,7 @@
+ #include "FontDescription.h"
+ #include "FontPlatformData.h"
+ #include "SharedBuffer.h"
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #include "CoreGraphicsSPI.h"
+ #include <wtf/HashMap.h>
+ #include <wtf/NeverDestroyed.h>
+@@ -35,13 +35,13 @@
+ #include <CoreGraphics/CoreGraphics.h>
+ #include <CoreText/CoreText.h>
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ extern "C" { UInt16 ATSFontGetGlyphCount(ATSFontRef inFontRef); }
+ #endif
+ 
+ namespace WebCore {
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ 
+ Ref<ATSFontContainerRefWrapper> ATSFontContainerRefWrapper::create(ATSFontContainerRef atsContainer)
+ {
+@@ -71,7 +71,7 @@ FontPlatformData FontCustomPlatformData::fontPlatformData(const FontDescription&
+     FontWidthVariant widthVariant = fontDescription.widthVariant();
+ #if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1060
+     RetainPtr<CTFontRef> newFont = adoptCF(CTFontCreateWithGraphicsFont(m_cgFont.get(), size, nullptr, nullptr));
+-#elif PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#elif PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     RetainPtr<CTFontRef> newFont = adoptCF(CTFontCreateWithPlatformFont(CTFontGetPlatformFont(m_ctFont.get(), nullptr), size, nullptr, nullptr));
+     if (CTFontGetPlatformFont(m_ctFont.get(), nullptr) != CTFontGetPlatformFont(newFont.get(), nullptr)) {
+         CFShow(CFSTR("CTFont size adaption failed for font:"));
+@@ -84,7 +84,7 @@ FontPlatformData FontCustomPlatformData::fontPlatformData(const FontDescription&
+ #endif
+     RetainPtr<CTFontRef> font = preparePlatformFont(newFont.get(), fontDescription, &fontFaceFeatures, &fontFaceVariantSettings, fontFaceCapabilities, fontDescription.computedSize());
+     ASSERT(font);
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     RELEASE_ASSERT(CTFontGetPlatformFont(newFont.get(), nullptr) == CTFontGetPlatformFont(font.get(), nullptr));
+ 
+     return FontPlatformData(font.get(), &m_atsContainer.get(), size, bold, italic, orientation, widthVariant, fontDescription.textRenderingMode());
+diff --git a/Source/WebCore/platform/graphics/mac/FontCustomPlatformData.h b/Source/WebCore/platform/graphics/mac/FontCustomPlatformData.h
+index fbba5f94..58d7c003 100644
+--- a/Source/WebCore/platform/graphics/mac/FontCustomPlatformData.h
++++ b/Source/WebCore/platform/graphics/mac/FontCustomPlatformData.h
+@@ -27,14 +27,14 @@
+ #include <wtf/Forward.h>
+ #include <wtf/Noncopyable.h>
+ #include <wtf/RetainPtr.h>
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #include <wtf/RefCounted.h>
+ #endif
+ 
+ typedef const struct __CTFontDescriptor* CTFontDescriptorRef;
+ #if __MAC_OS_X_VERSION_MIN_REQUIRED == 1060
+ typedef struct CGFont* CGFontRef;
+-#elif __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#elif __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ typedef const struct __CTFont* CTFontRef;
+ #endif
+ 
+@@ -56,7 +56,7 @@ public:
+ #elif __MAC_OS_X_VERSION_MIN_REQUIRED == 1060
+     explicit FontCustomPlatformData(CGFontRef cgFont)
+         : m_cgFont(cgFont)
+-#elif __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#elif __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     explicit FontCustomPlatformData(ATSFontContainerRefWrapper& container, CTFontRef ctFont)
+         : m_ctFont(ctFont)
+         , m_atsContainer(container)
+@@ -72,7 +72,7 @@ public:
+ 
+ #if __MAC_OS_X_VERSION_MIN_REQUIRED == 1060
+     RetainPtr<CGFontRef> m_cgFont;
+-#elif __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#elif __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     RetainPtr<CTFontRef> m_ctFont;
+     Ref<ATSFontContainerRefWrapper> m_atsContainer;
+ #else
+diff --git a/Source/WebCore/platform/graphics/mac/WebLayer.mm b/Source/WebCore/platform/graphics/mac/WebLayer.mm
+index a3d37ae0..d4eb527b 100644
+--- a/Source/WebCore/platform/graphics/mac/WebLayer.mm
++++ b/Source/WebCore/platform/graphics/mac/WebLayer.mm
+@@ -101,7 +101,7 @@ using namespace WebCore;
+ 
+     if (PlatformCALayerClient* layerOwner = platformLayer->owner()) {
+         if (layerOwner->platformCALayerDrawsContent()) {
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+             dirtyRect = CGRectApplyAffineTransform(dirtyRect, [self contentsTransform]);
+ #endif
+             [super setNeedsDisplayInRect:dirtyRect];
+@@ -109,7 +109,7 @@ using namespace WebCore;
+             if (layerOwner->platformCALayerShowRepaintCounter(platformLayer)) {
+                 CGRect bounds = [self bounds];
+                 CGRect indicatorRect = CGRectMake(bounds.origin.x, bounds.origin.y, 52, 27);
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+                 indicatorRect = CGRectApplyAffineTransform(indicatorRect, [self contentsTransform]);
+ #endif
+                 [super setNeedsDisplayInRect:indicatorRect];
+diff --git a/Source/WebCore/platform/mac/PasteboardMac.mm b/Source/WebCore/platform/mac/PasteboardMac.mm
+index 75f1c3ee..1af86caf 100644
+--- a/Source/WebCore/platform/mac/PasteboardMac.mm
++++ b/Source/WebCore/platform/mac/PasteboardMac.mm
+@@ -313,7 +313,7 @@ void Pasteboard::read(PasteboardPlainText& text)
+     Vector<String> types;
+     strategy.getTypes(types, m_pasteboardName);
+ 
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     if (types.contains(String(NSPasteboardTypeString))) {
+         text.text = strategy.stringForType(NSPasteboardTypeString, m_pasteboardName);
+         text.isURL = false;
+@@ -581,7 +581,7 @@ static void addHTMLClipboardTypesForCocoaType(ListHashSet<String>& resultTypes,
+ {
+     // UTI may not do these right, so make sure we get the right, predictable result
+     if (cocoaType == String(NSStringPboardType)
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+         || cocoaType == String(NSPasteboardTypeString)
+ #endif
+      ) {
+diff --git a/Source/WebCore/platform/mac/PlatformEventFactoryMac.mm b/Source/WebCore/platform/mac/PlatformEventFactoryMac.mm
+index a2c9a634..e859a93c 100644
+--- a/Source/WebCore/platform/mac/PlatformEventFactoryMac.mm
++++ b/Source/WebCore/platform/mac/PlatformEventFactoryMac.mm
+@@ -828,6 +828,34 @@ PlatformMouseEvent PlatformEventFactory::createPlatformMouseEvent(NSEvent *event
+ }
+ 
+ 
++// How far one line of wheel movement scrolls.
++//
++// Captain Polliwog: the same setting WebFrameView reads, for the frames and
++// overflow areas WebCore scrolls itself rather than handing to AppKit - so
++// that one choice in Preferences governs both and a page does not scroll at
++// two different speeds depending on what is under the pointer.
++//
++// It defaults to 12 - "Slow" in Preferences, chosen on a PowerBook G4 by
++// trying all four - where WebKit has always used Scrollbar::pixelsPerLineStep(),
++// 40. The point of the setting is that these machines have no
++// precise scrolling deltas and no momentum, so the only control anyone has
++// over how far a flick goes is this number.
++//
++// Read from the defaults, so changing it needs no rebuild:
++//   defaults write org.captainpolliwog.browser CPWheelPixelsPerLine 12
++static float wheelPixelsPerLine()
++{
++    static float step = 0;
++    if (!step) {
++        NSNumber *configured = [[NSUserDefaults standardUserDefaults]
++                                   objectForKey:@"CPWheelPixelsPerLine"];
++        step = configured ? [configured floatValue] : 12.0f;
++        if (step < 1.0f || step > 200.0f)
++            step = 12.0f;
++    }
++    return step;
++}
++
+ class PlatformWheelEventBuilder : public PlatformWheelEvent {
+ public:
+     PlatformWheelEventBuilder(NSEvent *event, NSView *windowView)
+@@ -843,6 +871,7 @@ public:
+         m_granularity = ScrollByPixelWheelEvent;
+ 
+         BOOL continuous;
++        float step = wheelPixelsPerLine();
+         wkGetWheelEventDeltas(event, &m_deltaX, &m_deltaY, &continuous);
+         if (continuous) {
+             m_wheelTicksX = m_deltaX / static_cast<float>(Scrollbar::pixelsPerLineStep());
+@@ -850,8 +879,8 @@ public:
+         } else {
+             m_wheelTicksX = m_deltaX;
+             m_wheelTicksY = m_deltaY;
+-            m_deltaX *= static_cast<float>(Scrollbar::pixelsPerLineStep());
+-            m_deltaY *= static_cast<float>(Scrollbar::pixelsPerLineStep());
++            m_deltaX *= step;
++            m_deltaY *= step;
+         }
+ 
+         m_phase = phaseForEvent(event);
+diff --git a/Source/WebCore/platform/mac/PowerObserverMac.cpp b/Source/WebCore/platform/mac/PowerObserverMac.cpp
+index a1d0d62a..7aa9d1a4 100644
+--- a/Source/WebCore/platform/mac/PowerObserverMac.cpp
++++ b/Source/WebCore/platform/mac/PowerObserverMac.cpp
+@@ -29,7 +29,7 @@
+ #include "PowerObserverMac.h"
+ 
+ // On Snow Leopard and newer we'll ask IOKit to deliver notifications on a queue.
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #define IOKIT_WITHOUT_LIBDISPATCH 1
+ #endif
+ 
+diff --git a/Source/WebCore/platform/mac/PowerObserverMac.h b/Source/WebCore/platform/mac/PowerObserverMac.h
+index a7d1369b..eb711299 100644
+--- a/Source/WebCore/platform/mac/PowerObserverMac.h
++++ b/Source/WebCore/platform/mac/PowerObserverMac.h
+@@ -47,7 +47,7 @@ private:
+     io_connect_t m_powerConnection;
+     IONotificationPortRef m_notificationPort;
+     io_object_t m_notifierReference;
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     CFRunLoopSourceRef m_runLoopSource;
+     static void runLoopCallBack(CFRunLoopObserverRef observer, CFRunLoopActivity /*activity*/, void* info);
+ #else
+diff --git a/Source/WebCore/platform/mac/SystemSleepListenerMac.mm b/Source/WebCore/platform/mac/SystemSleepListenerMac.mm
+index e6e56c3c..da260ddb 100644
+--- a/Source/WebCore/platform/mac/SystemSleepListenerMac.mm
++++ b/Source/WebCore/platform/mac/SystemSleepListenerMac.mm
+@@ -30,7 +30,7 @@
+ 
+ #import <wtf/MainThread.h>
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ @interface WebSystemSleepObserver : NSObject {
+ @private
+     WTF::WeakPtr<WebCore::SystemSleepListenerMac> _weakThis;
+diff --git a/Source/WebCore/platform/mac/WebCoreFullScreenPlaceholderView.mm b/Source/WebCore/platform/mac/WebCoreFullScreenPlaceholderView.mm
+index 241d7813..97606807 100644
+--- a/Source/WebCore/platform/mac/WebCoreFullScreenPlaceholderView.mm
++++ b/Source/WebCore/platform/mac/WebCoreFullScreenPlaceholderView.mm
+@@ -32,7 +32,7 @@
+ #include "WebCoreFullScreenWarningView.h"
+ #include <wtf/text/WTFString.h>
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #include <QuartzCore/CALayer.h>
+ #endif
+ 
+diff --git a/Source/WebCore/platform/mac/WebCoreFullScreenWindow.mm b/Source/WebCore/platform/mac/WebCoreFullScreenWindow.mm
+index 17e84810..70635953 100644
+--- a/Source/WebCore/platform/mac/WebCoreFullScreenWindow.mm
++++ b/Source/WebCore/platform/mac/WebCoreFullScreenWindow.mm
+@@ -36,7 +36,7 @@
+ - (void)performClose:(id)sender;
+ @end
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ @interface NSWindow (Private)
+ - (void)setStyleMask:(NSUInteger)styleMask;
+ @end
+diff --git a/Source/WebCore/platform/network/cf/DNSCFNet.cpp b/Source/WebCore/platform/network/cf/DNSCFNet.cpp
+index 19e0b958..155b7d99 100644
+--- a/Source/WebCore/platform/network/cf/DNSCFNet.cpp
++++ b/Source/WebCore/platform/network/cf/DNSCFNet.cpp
+@@ -46,7 +46,7 @@
+ #include <CFNetwork/CFNetwork.h>
+ #endif
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #include <wtf/SoftLinking.h>
+ 
+ SOFT_LINK_FRAMEWORK_IN_UMBRELLA(CoreServices, CFNetwork)
+diff --git a/Source/WebCore/platform/network/cf/ProxyServerCFNet.cpp b/Source/WebCore/platform/network/cf/ProxyServerCFNet.cpp
+index 4803d735..906f6421 100644
+--- a/Source/WebCore/platform/network/cf/ProxyServerCFNet.cpp
++++ b/Source/WebCore/platform/network/cf/ProxyServerCFNet.cpp
+@@ -35,7 +35,7 @@
+ #include <CFNetwork/CFNetwork.h>
+ #endif
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #include <wtf/SoftLinking.h>
+ 
+ SOFT_LINK_FRAMEWORK_IN_UMBRELLA(CoreServices, CFNetwork)
+diff --git a/Source/WebCore/platform/network/cocoa/CredentialCocoa.mm b/Source/WebCore/platform/network/cocoa/CredentialCocoa.mm
+index 890602a4..0d59077f 100644
+--- a/Source/WebCore/platform/network/cocoa/CredentialCocoa.mm
++++ b/Source/WebCore/platform/network/cocoa/CredentialCocoa.mm
+@@ -26,7 +26,7 @@
+ #import "config.h"
+ #import "CredentialCocoa.h"
+ 
+-#if USE(CFURLCONNECTION) || (PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if USE(CFURLCONNECTION) || (PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+ #import "CFNetworkSPI.h"
+ #import <wtf/SoftLinking.h>
+ 
+diff --git a/Source/WebCore/platform/network/cocoa/ProtectionSpaceCocoa.mm b/Source/WebCore/platform/network/cocoa/ProtectionSpaceCocoa.mm
+index ddee09e8..26ef45d3 100644
+--- a/Source/WebCore/platform/network/cocoa/ProtectionSpaceCocoa.mm
++++ b/Source/WebCore/platform/network/cocoa/ProtectionSpaceCocoa.mm
+@@ -26,7 +26,7 @@
+ #import "config.h"
+ #import "ProtectionSpaceCocoa.h"
+ 
+-#if USE(CFURLCONNECTION) || (!PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if USE(CFURLCONNECTION) || (!PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+ #import "CFNetworkSPI.h"
+ #import <wtf/SoftLinking.h>
+ 
+@@ -40,7 +40,7 @@ SOFT_LINK(CFNetwork, CFURLProtectionSpaceGetDistinguishedNames, CFArrayRef, (CFU
+ SOFT_LINK(CFNetwork, CFURLProtectionSpaceGetServerTrust, SecTrustRef, (CFURLProtectionSpaceRef protectionSapce), (protectionSapce))
+ #endif
+ 
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ // There is no constant in headers, but NTLM and Negotiate are supported.
+ NSString * const NSURLAuthenticationMethodNTLM = @"NSURLAuthenticationMethodNTLM";
+ NSString * const NSURLAuthenticationMethodNegotiate = @"NSURLAuthenticationMethodNegotiate";
+diff --git a/Source/WebCore/platform/network/mac/WebCoreResourceHandleAsDelegate.h b/Source/WebCore/platform/network/mac/WebCoreResourceHandleAsDelegate.h
+index f203918c..2e77ea03 100644
+--- a/Source/WebCore/platform/network/mac/WebCoreResourceHandleAsDelegate.h
++++ b/Source/WebCore/platform/network/mac/WebCoreResourceHandleAsDelegate.h
+@@ -34,7 +34,7 @@ namespace WebCore {
+ class ResourceHandle;
+ }
+ 
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ @interface NSGZipDecoder : NSObject
+ -(id)init;
+ -(NSData*)decodeData:(NSData*)data;
+@@ -48,7 +48,7 @@ class ResourceHandle;
+ 
+ @interface WebCoreResourceHandleAsDelegate : NSObject <NSURLConnectionDelegate, WebCoreResourceLoaderDelegate> {
+     WebCore::ResourceHandle* m_handle;
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     RetainPtr<NSGZipDecoder> m_nsGZipDecoder;
+ #endif
+ }
+diff --git a/Source/WebCore/platform/network/mac/WebCoreResourceHandleAsDelegate.mm b/Source/WebCore/platform/network/mac/WebCoreResourceHandleAsDelegate.mm
+index 0980c89c..0c0582ef 100644
+--- a/Source/WebCore/platform/network/mac/WebCoreResourceHandleAsDelegate.mm
++++ b/Source/WebCore/platform/network/mac/WebCoreResourceHandleAsDelegate.mm
+@@ -154,7 +154,7 @@ using namespace WebCore;
+     UNUSED_PARAM(connection);
+ #endif
+ 
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     // Workaround for <rdar://problem/5418646>
+     CFStringRef mimeType = (CFStringRef)[response MIMEType];
+     if (mimeType
+@@ -204,7 +204,7 @@ using namespace WebCore;
+     // However, with today's computers and networking speeds, this won't happen in practice.
+     // Could be an issue with a giant local file.
+ 
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     if (m_nsGZipDecoder)
+         data = [m_nsGZipDecoder.get() decodeData:data];
+ #endif
+@@ -227,7 +227,7 @@ using namespace WebCore;
+     // However, with today's computers and networking speeds, this won't happen in practice.
+     // Could be an issue with a giant local file.
+ 
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     if (m_nsGZipDecoder) {
+         m_nsGZipDecoder = adoptNS([[NSGZipDecoder alloc] init]);
+         data = [m_nsGZipDecoder.get() decodeData:data];
+@@ -270,7 +270,7 @@ using namespace WebCore;
+     if (!m_handle || !m_handle->client())
+         return;
+ 
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     m_nsGZipDecoder = nullptr;
+ #endif
+ 
+diff --git a/Source/WebCore/platform/network/mac/WebCoreURLResponse.mm b/Source/WebCore/platform/network/mac/WebCoreURLResponse.mm
+index caf8287c..1ec9d63a 100644
+--- a/Source/WebCore/platform/network/mac/WebCoreURLResponse.mm
++++ b/Source/WebCore/platform/network/mac/WebCoreURLResponse.mm
+@@ -330,7 +330,7 @@ void adjustMIMETypeIfNecessary(CFURLResponseRef cfResponse, bool isMainResourceL
+         result = defaultMIMETypeString;
+     }
+ 
+-#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if !PLATFORM(IOS) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     // Workaround for <rdar://problem/5539824>
+     if (CFStringCompare(result.get(), CFSTR("text/xml"), 0) == kCFCompareEqualTo)
+         result = CFSTR("application/xml");
+diff --git a/Source/WebCore/platform/spi/cf/CFNetworkSPI.h b/Source/WebCore/platform/spi/cf/CFNetworkSPI.h
+index 52c94501..0ce4908f 100644
+--- a/Source/WebCore/platform/spi/cf/CFNetworkSPI.h
++++ b/Source/WebCore/platform/spi/cf/CFNetworkSPI.h
+@@ -140,7 +140,7 @@ typedef void (^CFCachedURLResponseCallBackBlock)(CFCachedURLResponseRef);
+ 
+ @interface NSHTTPCookie ()
+ - (CFHTTPCookieRef)_CFHTTPCookie;
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ @property(readonly, getter=isHTTPOnly) BOOL HTTPOnly;
+ @property(readonly, getter=isSecure) BOOL secure;
+ @property(readonly, getter=isSessionOnly) BOOL sessionOnly;
+diff --git a/Source/WebCore/platform/spi/cg/CoreGraphicsSPI.h b/Source/WebCore/platform/spi/cg/CoreGraphicsSPI.h
+index 054ec0a1..28dcd842 100644
+--- a/Source/WebCore/platform/spi/cg/CoreGraphicsSPI.h
++++ b/Source/WebCore/platform/spi/cg/CoreGraphicsSPI.h
+@@ -42,7 +42,7 @@
+ #include <ColorSync/ColorSync.h>
+ #endif
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #include <ATS/ATSFont.h>
+ #endif
+ 
+@@ -183,7 +183,7 @@ void CGContextSetCompositeOperation(CGContextRef, CGCompositeOperation);
+ void CGContextSetShouldAntialiasFonts(CGContextRef, bool shouldAntialiasFonts);
+ void CGContextResetClip(CGContextRef);
+ CGContextType CGContextGetType(CGContextRef);
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ void CGContextSetShouldSubpixelQuantizeFonts(CGContextRef, bool shouldSubpixelQuantizeFonts);
+ void CGContextSetShouldSubpixelPositionFonts(CGContextRef, bool shouldSubpixelPositionFonts);
+ void CGContextSetAllowsFontSubpixelQuantization(CGContextRef, bool allowsFontSubpixelQuantization);
+diff --git a/Source/WebCore/platform/spi/cocoa/CoreTextSPI.h b/Source/WebCore/platform/spi/cocoa/CoreTextSPI.h
+index ed6b797d..e9fc658e 100644
+--- a/Source/WebCore/platform/spi/cocoa/CoreTextSPI.h
++++ b/Source/WebCore/platform/spi/cocoa/CoreTextSPI.h
+@@ -191,7 +191,7 @@ __attribute__((availability(macosx,obsoleted=10.13))) __attribute__((availabilit
+ bool CTFontIsAppleColorEmoji(CTFontRef);
+ CTFontRef CTFontCreateForCharacters(CTFontRef currentFont, const UTF16Char *characters, CFIndex length, CFIndex *coveredLength);
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ CGSize CTFramesetterSuggestFrameSizeWithConstraints(CTFramesetterRef framesetter, CFRange stringRange, CFDictionaryRef frameAttributes, CGSize constraints, CFRange *fitRange);
+ 
+ void CTRunGetAdvances(CTRunRef run, CFRange range, CGSize buffer[]);
+diff --git a/Source/WebCore/platform/spi/cocoa/IOPMLibSPI.h b/Source/WebCore/platform/spi/cocoa/IOPMLibSPI.h
+index 6cc0e5d4..92400624 100644
+--- a/Source/WebCore/platform/spi/cocoa/IOPMLibSPI.h
++++ b/Source/WebCore/platform/spi/cocoa/IOPMLibSPI.h
+@@ -38,7 +38,7 @@
+ 
+ typedef uint32_t IOPMAssertionID;
+ 
+-#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+ WTF_EXTERN_C_BEGIN
+ 
+ const CFStringRef kIOPMAssertionTypePreventUserIdleDisplaySleep = CFSTR("PreventUserIdleDisplaySleep");
+@@ -51,7 +51,7 @@ WTF_EXTERN_C_END
+ 
+ WTF_EXTERN_C_BEGIN
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ IOReturn IOPMAssertionCreateWithName(CFStringRef assertionType, IOPMAssertionLevel assertionLevel, CFStringRef name, IOPMAssertionID *assertionID);
+ #else
+ IOReturn IOPMAssertionCreateWithDescription(CFStringRef assertionType, CFStringRef name, CFStringRef details, CFStringRef humanReadableReason,
+diff --git a/Source/WebCore/platform/spi/cocoa/QuartzCoreSPI.h b/Source/WebCore/platform/spi/cocoa/QuartzCoreSPI.h
+index c67b03d7..eba787c8 100644
+--- a/Source/WebCore/platform/spi/cocoa/QuartzCoreSPI.h
++++ b/Source/WebCore/platform/spi/cocoa/QuartzCoreSPI.h
+@@ -207,7 +207,7 @@ extern NSString * const kCAFilterColorMatrix;
+ extern NSString * const kCAFilterColorMonochrome;
+ extern NSString * const kCAFilterColorHueRotate;
+ extern NSString * const kCAFilterColorSaturate;
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ extern NSString * const kCAFilterTrilinear;
+ #endif
+ extern NSString * const kCAFilterGaussianBlur;
+diff --git a/Source/WebKitLegacy/PlatformMac.cmake b/Source/WebKitLegacy/PlatformMac.cmake
+index 8949a346..3becb741 100644
+--- a/Source/WebKitLegacy/PlatformMac.cmake
++++ b/Source/WebKitLegacy/PlatformMac.cmake
+@@ -498,9 +498,13 @@ if (NOT WTF_CPU_PPC)
+ endif ()
+ 
+ WEBKIT_CREATE_FORWARDING_HEADERS(WebKitLegacy DIRECTORIES ${WebKitLegacy_FORWARDING_HEADERS_DIRECTORIES} FILES ${WebKitLegacy_FORWARDING_HEADERS_FILES})
+-WEBKIT_CREATE_FORWARDING_HEADERS(WebKit DIRECTORIES ${FORWARDING_HEADERS_DIR}/WebKitLegacy)
+ 
+ # FIXME: Forwarding headers should be copies of actual headers.
++# These have to be written before WebKit's forwarding headers are made from
++# this directory, or WebKit gets every header but these twelve - and every
++# Objective-C DOM header starts with <WebKit/WebKitAvailability.h>. A build
++# that has run once already hides it, because the copy step is stamped and
++# does not run again; a fresh tree stops with 164 identical errors.
+ file(GLOB ObjCHeaders ${WEBCORE_DIR}/plugins/*.h)
+ list(APPEND ObjCHeaders
+     WebKitAvailability.h
+@@ -513,6 +517,8 @@ foreach (_file ${ObjCHeaders})
+     endif ()
+ endforeach ()
+ 
++WEBKIT_CREATE_FORWARDING_HEADERS(WebKit DIRECTORIES ${FORWARDING_HEADERS_DIR}/WebKitLegacy)
++
+ set(WebKit_OUTPUT_NAME WebKitLegacy)
+ 
+ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -compatibility_version 1 -current_version ${WEBKIT_MAC_VERSION}")
+diff --git a/Source/WebKitLegacy/mac/Misc/WebKitErrors.m b/Source/WebKitLegacy/mac/Misc/WebKitErrors.m
+index e2c6b425..62a4ada6 100644
+--- a/Source/WebKitLegacy/mac/Misc/WebKitErrors.m
++++ b/Source/WebKitLegacy/mac/Misc/WebKitErrors.m
+@@ -117,7 +117,7 @@ - (id)_initWithPluginErrorCode:(int)code
+         [userInfo setObject:localizedDescription forKey:NSLocalizedDescriptionKey];
+     if (contentURL) {
+         [userInfo setObject:contentURL forKey:@"NSErrorFailingURLKey"];
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+         [userInfo setObject:[contentURL _web_userVisibleString] forKey:NSErrorFailingURLStringKey];
+ #else
+         [userInfo setObject:[contentURL _web_userVisibleString] forKey:NSURLErrorFailingURLStringErrorKey];
+diff --git a/Source/WebKitLegacy/mac/WebCoreSupport/WebEditorClient.mm b/Source/WebKitLegacy/mac/WebCoreSupport/WebEditorClient.mm
+index 1d40086a..d6b3ba9c 100644
+--- a/Source/WebKitLegacy/mac/WebCoreSupport/WebEditorClient.mm
++++ b/Source/WebKitLegacy/mac/WebCoreSupport/WebEditorClient.mm
+@@ -103,7 +103,7 @@ using namespace HTMLNames;
+ - (DOMDocumentFragment *)_documentFromRange:(NSRange)range document:(DOMDocument *)document documentAttributes:(NSDictionary *)attributes subresources:(NSArray **)subresources;
+ @end
+ 
+-#if !PLATFORM(IOS) &&  (__MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !PLATFORM(IOS) &&  (__MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+ #define NSTextInputContext NSInputContext
+ @interface NSTextInputContext : NSObject
+ + (NSTextInputContext *)currentInputContext;
+diff --git a/Source/WebKitLegacy/mac/WebView/WebDynamicScrollBarsView.mm b/Source/WebKitLegacy/mac/WebView/WebDynamicScrollBarsView.mm
+index b985fbf4..30129239 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebDynamicScrollBarsView.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebDynamicScrollBarsView.mm
+@@ -443,7 +443,7 @@ static const unsigned cMaxUpdateScrollbarsPass = 2;
+     // This call updates the initial position correctly.
+     [self adjustForScrollOriginChange];
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     NSView *documentView = [self documentView];
+     if ([documentView isKindOfClass:[WebHTMLView class]]) {
+         WebHTMLView *htmlView = (WebHTMLView *)documentView;
+diff --git a/Source/WebKitLegacy/mac/WebView/WebFrameView.mm b/Source/WebKitLegacy/mac/WebView/WebFrameView.mm
+index 40d2078a..8593316b 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebFrameView.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebFrameView.mm
+@@ -385,7 +385,7 @@ static inline void addTypesFromClass(NSMutableDictionary *allTypes, Class objCCl
+ #if !PLATFORM(IOS)
+ // FIXME: Remove the NSAppKitVersionNumberWithDeferredWindowDisplaySupport check once
+ // once AppKit's Deferred Window Display support is available.
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050 || !defined(NSAppKitVersionNumberWithDeferredWindowDisplaySupport)
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050 || !defined(NSAppKitVersionNumberWithDeferredWindowDisplaySupport)
+         // CoreGraphics deferred updates are disabled if WebKitEnableCoalescedUpdatesPreferenceKey is NO
+         // or has no value. For compatibility with Mac OS X 10.5 and lower, deferred updates are off by default.
+         if (![[NSUserDefaults standardUserDefaults] boolForKey:WebKitEnableDeferredUpdatesPreferenceKey])
+@@ -422,7 +422,32 @@ static inline void addTypesFromClass(NSMutableDictionary *allTypes, Class objCCl
+     [scrollView setHasVerticalScroller:NO];
+     [scrollView setHasHorizontalScroller:NO];
+     [scrollView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+-    [scrollView setLineScroll:Scrollbar::pixelsPerLineStep()];
++    // Captain Polliwog: not pixelsPerLineStep(), which is 40.
++    //
++    // The main frame is scrolled by AppKit, not by WebCore: -[WebHTMLView
++    // scrollWheel:] offers the event to the event handler and falls through
++    // to [super scrollWheel:] when it declines, which for the main frame it
++    // does. So this line, and not anything in PlatformEventFactoryMac, is
++    // what decides how far a wheel event moves a page.
++    //
++    // 12 is the default, chosen on a PowerBook G4 by trying all four. 40 is
++    // what WebKit has always used, and it is worth knowing why that is too
++    // much here:
++    // Leopard's trackpad driver predates precise scrolling deltas, so it
++    // reports line counts with its own acceleration already applied, about 30
++    // events a second - measured on a PowerBook G4 at a mean of 1.5 lines an
++    // event and peaks of 5. At 40 pixels a line that is over 1,300 pixels a
++    // second, more than a screen and a half. Preferences offers faster.
++    //
++    //   defaults write org.captainpolliwog.browser CPWheelPixelsPerLine 12
++    {
++        NSNumber *configured = [[NSUserDefaults standardUserDefaults]
++                                   objectForKey:@"CPWheelPixelsPerLine"];
++        float step = configured ? [configured floatValue] : 12.0f;
++        if (step < 1.0f || step > 200.0f)
++            step = 12.0f;
++        [scrollView setLineScroll:step];
++    }
+     [self addSubview:scrollView];
+ 
+     // Don't call our overridden version of setNextKeyView here; we need to make the standard NSView
+diff --git a/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm b/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm
+index 284e1df6..5abedf58 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm
+@@ -702,7 +702,7 @@ extern NSString *NSTextInputReplacementRangeAttributeName;
+ #if PLATFORM(IOS)
+ - (void)centerSelectionInVisibleArea:(id)sender;
+ #endif
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ - (void)_updateLayerGeometryFromView;
+ #endif
+ @end
+@@ -873,7 +873,7 @@ static NSString * const WebMarkedTextUpdatedNotification = @"WebMarkedTextUpdate
+ - (void)_setPrinting:(BOOL)printing minimumPageLogicalWidth:(float)minPageWidth logicalHeight:(float)minPageHeight originalPageWidth:(float)pageLogicalWidth originalPageHeight:(float)pageLogicalHeight maximumShrinkRatio:(float)maximumShrinkRatio adjustViewSize:(BOOL)adjustViewSize paginateScreenContent:(BOOL)paginateScreenContent;
+ #if !PLATFORM(IOS)
+ - (void)_updateSecureInputState;
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ - (void)_updateLayerHostingViewPosition;
+ #endif
+ #endif
+@@ -1017,7 +1017,7 @@ struct WebHTMLViewInterpretKeyEventsParameters {
+     RetainPtr<WebSharingServicePickerController> currentSharingServicePickerController;
+ #endif
+ 
+-#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     NSRect layerViewFrame;
+     NSRect layerViewFrameForComparison;
+ #endif
+@@ -1298,7 +1298,7 @@ static NSURL* uniqueURLWithRelativePart(NSString *relativePart)
+                                              subresources:0]))
+         return fragment;
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     if ([types containsObject:NSPICTPboardType] &&
+         (fragment = [self _documentFragmentFromPasteboard:pasteboard 
+                                                   forType:NSPICTPboardType
+@@ -1778,7 +1778,7 @@ CLANG_PRAGMA(diagnostic pop)
+         [webView _didScrollDocumentInFrameView:[self _frameView]];
+     }
+     _private->lastScrollPosition = origin;
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     [self _updateLayerHostingViewPosition];
+     [_private->layerHostingView _updateLayerGeometryFromView];  // Workaround for <rdar://problem/7071636>
+ #endif
+@@ -2264,7 +2264,7 @@ static bool mouseEventIsPartOfClickOrDrag(NSEvent *event)
+     static NSArray *types = nil;
+     if (!types) {
+         types = [[NSArray alloc] initWithObjects:WebArchivePboardType, NSHTMLPboardType, NSFilenamesPboardType, NSTIFFPboardType, NSPDFPboardType,
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+             NSPICTPboardType,
+ #endif
+             NSURLPboardType, NSRTFDPboardType, NSRTFPboardType, NSStringPboardType, NSColorPboardType, kUTTypePNG, nil];
+@@ -2702,7 +2702,7 @@ CLANG_PRAGMA(diagnostic pop)
+         [resource release];
+         return fragment;
+     }
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     if (pboardType == NSPICTPboardType) {
+         WebResource *resource = [[WebResource alloc] initWithData:[pasteboard dataForType:NSPICTPboardType]
+                                                               URL:uniqueURLWithRelativePart(@"image.pict")
+@@ -5455,7 +5455,7 @@ static RefPtr<KeyboardEvent> currentKeyboardEvent(Frame* coreFrame)
+     // the current event prevents that from causing a problem inside WebKit or AppKit code.
+     [[event retain] autorelease];
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     if (_private->flagsChangedEventMonitor) {
+         [self _postFakeMouseMovedEventForFlagsChangedEvent:event];
+     }
+@@ -6220,7 +6220,7 @@ static BOOL writingDirectionKeyBindingsEnabled()
+ }
+ #endif // !PLATFORM(IOS)
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ - (void)changeBaseWritingDirectionToLTR:(id)sender
+ {
+     [self makeBaseWritingDirectionLeftToRight:sender];
+@@ -6828,7 +6828,7 @@ CLANG_PRAGMA(diagnostic pop)
+     // Make a container layer, which will get sized/positioned by AppKit and CA.
+     CALayer* viewLayer = [WebRootLayer layer];
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     // Turn off default animations.
+     NSNull *nullValue = [NSNull null];
+     NSDictionary *actions = [NSDictionary dictionaryWithObjectsAndKeys:
+@@ -6866,7 +6866,7 @@ CLANG_PRAGMA(diagnostic pop)
+         [[NSNotificationCenter defaultCenter] postNotificationName:_WebViewDidStartAcceleratedCompositingNotification object:[self _webView] userInfo:nil];
+ 
+     // Do geometry flipping here, which flips all the compositing layers so they are top-down.
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     _private->layerViewFrameForComparison = NSMakeRect(0, 0, 0, 0);
+     [self _updateLayerHostingViewPosition];
+ #elif __MAC_OS_X_VERSION_MIN_REQUIRED <= 1070
+@@ -6890,7 +6890,7 @@ CLANG_PRAGMA(diagnostic pop)
+ #endif
+ }
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ // This method is necessary on Leopard to work around <rdar://problem/7067892>.
+ - (void)_updateLayerHostingViewPosition
+ {
+@@ -6960,7 +6960,7 @@ CLANG_PRAGMA(diagnostic pop)
+         [_private->layerHostingView setFrame:layerViewFrame];
+     }
+ }
+-#endif // __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#endif // __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ 
+ #if PLATFORM(MAC)
+ - (void)drawLayer:(CALayer *)layer inContext:(CGContextRef)ctx
+diff --git a/Source/WebKitLegacy/mac/WebView/WebHTMLViewInternal.h b/Source/WebKitLegacy/mac/WebView/WebHTMLViewInternal.h
+index 6536f601..4f888cee 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebHTMLViewInternal.h
++++ b/Source/WebKitLegacy/mac/WebView/WebHTMLViewInternal.h
+@@ -78,7 +78,7 @@ namespace WebCore {
+ - (void)_layoutIfNeeded;
+ #endif
+ #if PLATFORM(MAC)
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ - (void)_updateLayerHostingViewPosition;
+ #endif
+ 
+diff --git a/Source/WebKitLegacy/mac/WebView/WebPDFDocumentExtras.mm b/Source/WebKitLegacy/mac/WebView/WebPDFDocumentExtras.mm
+index 6bc43be5..ffb4648a 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebPDFDocumentExtras.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebPDFDocumentExtras.mm
+@@ -33,7 +33,7 @@
+ #import <PDFKit/PDFDocument.h>
+ #endif
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ @interface PDFDocument (Internal)
+ - (CGPDFDocumentRef)documentRef;
+ @end
+diff --git a/Source/WebKitLegacy/mac/WebView/WebResourceInternal.h b/Source/WebKitLegacy/mac/WebView/WebResourceInternal.h
+index ca9ba19d..2d23702d 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebResourceInternal.h
++++ b/Source/WebKitLegacy/mac/WebView/WebResourceInternal.h
+@@ -29,7 +29,7 @@
+ #import "WebResourcePrivate.h"
+ #import <wtf/Ref.h>
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ #define MAIL_THREAD_WORKAROUND 1
+ #endif
+ 
+diff --git a/Source/WebKitLegacy/mac/WebView/WebScriptDebugDelegate.h b/Source/WebKitLegacy/mac/WebView/WebScriptDebugDelegate.h
+index 8790c276..dae45a71 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebScriptDebugDelegate.h
++++ b/Source/WebKitLegacy/mac/WebView/WebScriptDebugDelegate.h
+@@ -28,7 +28,7 @@
+ 
+ #import <Foundation/Foundation.h>
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ typedef int WebSourceId;
+ #else
+ typedef intptr_t WebSourceId;
+diff --git a/Source/WebKitLegacy/mac/WebView/WebView.mm b/Source/WebKitLegacy/mac/WebView/WebView.mm
+index 65e2de72..2333b724 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebView.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebView.mm
+@@ -1178,7 +1178,7 @@ static String webKitBundleVersionString()
+ 
+ static bool runningLeopardMail()
+ {
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     return MacApplication::isAppleMail();
+ #endif
+     return NO;
+@@ -1186,7 +1186,7 @@ static bool runningLeopardMail()
+ 
+ static bool coreVideoHas7228836Fix()
+ {
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     NSBundle* coreVideoFrameworkBundle = [NSBundle bundleWithPath:@"/System/Library/Frameworks/CoreVideo.framework"];
+     double version = [[coreVideoFrameworkBundle objectForInfoDictionaryKey:(NSString *)kCFBundleVersionKey] doubleValue];
+     return (version >= 48);
+@@ -5803,7 +5803,7 @@ static bool clientNeedsWebViewInitThreadWorkaround()
+     if ([bundleIdentifier _webkit_hasCaseInsensitivePrefix:@"com.apple.Automator."])
+         return true;
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     // Mail.
+     if ([bundleIdentifier _webkit_isCaseInsensitiveEqualToString:@"com.apple.Mail"])
+         return true;
+@@ -8446,7 +8446,7 @@ static NSAppleEventDescriptor* aeDescFromJSValue(ExecState* exec, JSC::JSValue j
+ 
+ - (BOOL)isAutomaticQuoteSubstitutionEnabled
+ {
+-#if PLATFORM(IOS) || __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(IOS) || __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     return NO;
+ #else
+     return automaticQuoteSubstitutionEnabled;
+@@ -8455,7 +8455,7 @@ static NSAppleEventDescriptor* aeDescFromJSValue(ExecState* exec, JSC::JSValue j
+ 
+ - (BOOL)isAutomaticLinkDetectionEnabled
+ {
+-#if PLATFORM(IOS) || __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(IOS) || __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     return NO;
+ #else
+     return automaticLinkDetectionEnabled;
+@@ -8464,7 +8464,7 @@ static NSAppleEventDescriptor* aeDescFromJSValue(ExecState* exec, JSC::JSValue j
+ 
+ - (BOOL)isAutomaticDashSubstitutionEnabled
+ {
+-#if PLATFORM(IOS) || __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(IOS) || __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     return NO;
+ #else
+     return automaticDashSubstitutionEnabled;
+@@ -8473,7 +8473,7 @@ static NSAppleEventDescriptor* aeDescFromJSValue(ExecState* exec, JSC::JSValue j
+ 
+ - (BOOL)isAutomaticTextReplacementEnabled
+ {
+-#if PLATFORM(IOS) || __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(IOS) || __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     return NO;
+ #else
+     return automaticTextReplacementEnabled;
+@@ -8482,7 +8482,7 @@ static NSAppleEventDescriptor* aeDescFromJSValue(ExecState* exec, JSC::JSValue j
+ 
+ - (BOOL)isAutomaticSpellingCorrectionEnabled
+ {
+-#if PLATFORM(IOS) || __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if PLATFORM(IOS) || __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     return NO;
+ #else
+     return automaticSpellingCorrectionEnabled;
+@@ -10350,7 +10350,7 @@ void WebInstallMemoryPressureHandler(void)
+     }
+ }
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ 
+ static IMP originalRecursivelyRemoveMailAttributesImp;
+ 
+@@ -10376,7 +10376,7 @@ static void recursivelyRemoveMailAttributes(DOMNode *self, SEL selector, BOOL a,
+ 
+ static void patchMailRemoveAttributesMethod()
+ {
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     if (!WKAppVersionCheckLessThan(@"com.apple.mail", -1, 4.0))
+         return;
+     Method methodToPatch = class_getInstanceMethod(objc_getRequiredClass("DOMNode"), @selector(recursivelyRemoveMailAttributes:convertObjectsToImages:convertEditableElements:));
+@@ -10386,7 +10386,7 @@ static void patchMailRemoveAttributesMethod()
+ #endif
+ }
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ 
+ @interface NSCTFont : NSFont
+ @end
+@@ -10404,7 +10404,7 @@ static BOOL _isHiraginoFont(NSCTFont *self, SEL)
+ 
+ static void patch_NSCTFont_isHiraginoFont()
+ {
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     Method methodToPatch = class_getInstanceMethod(objc_getRequiredClass("NSCTFont"), @selector(_isHiraginoFont));
+     method_setImplementation(methodToPatch, reinterpret_cast<IMP>(_isHiraginoFont));
+ #endif
+diff --git a/Source/WebKitLegacy/mac/WebView/WebViewPrivate.h b/Source/WebKitLegacy/mac/WebView/WebViewPrivate.h
+index 87dd8935..1b597294 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebViewPrivate.h
++++ b/Source/WebKitLegacy/mac/WebView/WebViewPrivate.h
+@@ -199,7 +199,7 @@ typedef enum {
+ @property (nonatomic, retain) UIColor *estimatedBackgroundColor;
+ @end
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+ @interface NSTextCheckingResult : NSObject
+ @end
+ #endif
+diff --git a/Source/bmalloc/bmalloc/AvailableMemory.cpp b/Source/bmalloc/bmalloc/AvailableMemory.cpp
+index a4f45ad7..11cb66f5 100644
+--- a/Source/bmalloc/bmalloc/AvailableMemory.cpp
++++ b/Source/bmalloc/bmalloc/AvailableMemory.cpp
+@@ -31,7 +31,7 @@
+ #if BPLATFORM(IOS)
+ #import <algorithm>
+ #endif
+-#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+ #import <dispatch/dispatch.h>
+ #endif
+ #include <mach/host_info.h>
+diff --git a/Source/bmalloc/bmalloc/Heap.cpp b/Source/bmalloc/bmalloc/Heap.cpp
+index 906a7e1e..e9eb8d89 100644
+--- a/Source/bmalloc/bmalloc/Heap.cpp
++++ b/Source/bmalloc/bmalloc/Heap.cpp
+@@ -137,7 +137,7 @@ void Heap::concurrentScavenge()
+ 
+ void Heap::scavenge(std::lock_guard<StaticMutex>&)
+ {
+-#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     for (auto& list : m_freePages) {
+         for (auto* chunk : list) {
+             for (auto* page : chunk->freePages()) {
+@@ -157,7 +157,7 @@ void Heap::scavenge(std::lock_guard<StaticMutex>&)
+             deallocateSmallChunk(list.pop(), &list - &m_chunkCache[0]);
+     }
+ 
+-#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     for (auto& range : m_largeFree) {
+         vmDeallocatePhysicalPagesSloppy(range.begin(), range.size());
+ 
+@@ -270,7 +270,7 @@ void Heap::deallocateSmallChunk(Chunk* chunk, size_t pageClass)
+     size_t size = m_largeAllocated.remove(chunk);
+ 
+     bool hasPhysicalPages = true;
+-#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     forEachPage(chunk, pageSize(pageClass), [&](SmallPage* page) {
+         if (!page->hasPhysicalPages())
+             hasPhysicalPages = false;
+@@ -307,7 +307,7 @@ SmallPage* Heap::allocateSmallPage(std::lock_guard<StaticMutex>& lock, size_t si
+         if (chunk->freePages().isEmpty())
+             m_freePages[pageClass].remove(chunk);
+ 
+-#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+         if (!page->hasPhysicalPages()) {
+             scheduleScavengerIfUnderMemoryPressure(pageSize(pageClass));
+ 
+@@ -497,7 +497,7 @@ LargeRange Heap::splitAndAllocate(LargeRange& range, size_t alignment, size_t si
+         next = pair.second;
+     }
+     
+-#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     if (range.physicalSize() < range.size()) {
+         scheduleScavengerIfUnderMemoryPressure(range.size());
+         
+diff --git a/Source/bmalloc/bmalloc/VMAllocate.h b/Source/bmalloc/bmalloc/VMAllocate.h
+index 68307ca9..91cdc331 100644
+--- a/Source/bmalloc/bmalloc/VMAllocate.h
++++ b/Source/bmalloc/bmalloc/VMAllocate.h
+@@ -212,14 +212,14 @@ inline void* vmAllocate(size_t vmAlignment, size_t vmSize)
+     return result;
+ }
+ 
+-#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+ inline void vmDeallocatePhysicalPages(void* p, size_t vmSize)
+ {
+     vmValidatePhysical(p, vmSize);
+ #if BOS(DARWIN) && defined(MADV_FREE_REUSABLE)
+     SYSCALL(madvise(p, vmSize, MADV_FREE_REUSABLE));
+ // this does work but is too slow to be usable
+-#elif BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050
++#elif BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     // mmap()'ing the same range again will throw away the old mapping, deallocating its pages
+     // internally mmap() calls vm_map() passing VM_FLAGS_OVERWRITE, but that flag isn't available for user access
+     RELEASE_BASSERT(mmap(p, vmSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, BMALLOC_VM_TAG, 0) == p);
+@@ -235,7 +235,7 @@ inline void vmAllocatePhysicalPages(void* p, size_t vmSize)
+ #if BOS(DARWIN) && defined(MADV_FREE_REUSE)
+     SYSCALL(madvise(p, vmSize, MADV_FREE_REUSE));
+ // on 10.5 calling madvise is just a waste of time
+-#elif !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#elif !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     SYSCALL(madvise(p, vmSize, MADV_NORMAL));
+ #else
+     UNUSED(p);
+diff --git a/Source/bmalloc/bmalloc/VMHeap.cpp b/Source/bmalloc/bmalloc/VMHeap.cpp
+index cd8acd41..aa4c8cd8 100644
+--- a/Source/bmalloc/bmalloc/VMHeap.cpp
++++ b/Source/bmalloc/bmalloc/VMHeap.cpp
+@@ -53,7 +53,7 @@ LargeRange VMHeap::tryAllocateLargeChunk(size_t alignment, size_t size)
+     m_zone.addRange(Range(chunk->bytes(), size));
+ #endif
+ 
+-#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED == 1050)
++#if !(BPLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050)
+     return LargeRange(chunk->bytes(), size, 0);
+ #else
+     return LargeRange(chunk->bytes(), size, size);
+-- 
+2.54.0 (Apple Git-157)
+

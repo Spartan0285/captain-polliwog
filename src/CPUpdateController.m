@@ -3,6 +3,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #import "CPUpdateController.h"
+#import "CPWelcome.h"   /* CPApplicationIcon */
+#include <math.h>
 #import "CPUpdater.h"
 
 #define CPWindowWidth   460.0f
@@ -43,6 +45,9 @@ static NSButton *CPUpdateButton(NSView *parent, NSRect frame, NSString *title, i
 - (void)updaterChanged:(NSNotification *)note;
 - (void)install:(id)sender;
 - (void)later:(id)sender;
+- (NSString *)versionLine;
+- (void)fitToState:(CPUpdateState)state;
+- (void)announce:(NSNumber *)which;
 @end
 
 @implementation CPUpdateController
@@ -89,13 +94,31 @@ static NSButton *CPUpdateButton(NSView *parent, NSRect frame, NSString *title, i
     [window setReleasedWhenClosed:NO];
     content = [window contentView];
 
-    headline = CPUpdateLabel(content, NSMakeRect(20, CPWindowHeight - 44, CPWindowWidth - 40, 20),
+    // The icon, as an alert carries it: the same thing The Garden's update
+    // window shows, and the quickest way to say which app is talking.
+    {
+        NSImageView *icon = [[NSImageView alloc] initWithFrame:
+            NSMakeRect(20, CPWindowHeight - 70, 52, 52)];
+        [icon setImage:CPApplicationIcon()];
+        [icon setImageScaling:NSScaleProportionally];
+        [icon setEditable:NO];
+        [icon setAutoresizingMask:NSViewMinYMargin];
+        [content addSubview:icon];
+        [icon release];
+    }
+    headline = CPUpdateLabel(content, NSMakeRect(86, CPWindowHeight - 40, CPWindowWidth - 106, 20),
                              @"Checking for updates...", NO);
-    detail = CPUpdateLabel(content, NSMakeRect(20, CPWindowHeight - 64, CPWindowWidth - 40, 16),
+    detail = CPUpdateLabel(content, NSMakeRect(86, CPWindowHeight - 60, CPWindowWidth - 106, 16),
                            @"", YES);
+    // The window changes height with what it has to say: a line and a bar
+    // while checking, the release notes when there is something to install.
+    // So the text is pinned to the top, the notes stretch, and the bar and
+    // the buttons stay on the bottom edge.
+    [headline setAutoresizingMask:NSViewMinYMargin | NSViewWidthSizable];
+    [detail setAutoresizingMask:NSViewMinYMargin | NSViewWidthSizable];
 
     notesScroll = [[NSScrollView alloc] initWithFrame:
-        NSMakeRect(20, 60, CPWindowWidth - 40, CPWindowHeight - 136)];
+        NSMakeRect(20, 60, CPWindowWidth - 40, CPWindowHeight - 146)];
     [notesScroll setHasVerticalScroller:YES];
     [notesScroll setBorderType:NSBezelBorder];
     [notesScroll setAutohidesScrollers:YES];
@@ -105,13 +128,17 @@ static NSButton *CPUpdateButton(NSView *parent, NSRect frame, NSString *title, i
     [notes setFont:[NSFont systemFontOfSize:[NSFont smallSystemFontSize]]];
     [notes setTextContainerInset:NSMakeSize(4, 4)];
     [notesScroll setDocumentView:notes];
+    [notesScroll setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
     [content addSubview:notesScroll];
     [notes release];
     [notesScroll release];
 
+    // Left of the buttons, not under them: it used to run to width - 200
+    // while the first button began at width - 245.
     progress = [[NSProgressIndicator alloc] initWithFrame:
-        NSMakeRect(20, 26, CPWindowWidth - 220, 16)];
+        NSMakeRect(20, 24, CPWindowWidth - 275, 16)];
     [progress setStyle:NSProgressIndicatorBarStyle];
+    [progress setAutoresizingMask:NSViewMaxYMargin | NSViewWidthSizable];
     [progress setIndeterminate:YES];
     [progress setDisplayedWhenStopped:NO];
     [content addSubview:progress];
@@ -122,6 +149,8 @@ static NSButton *CPUpdateButton(NSView *parent, NSRect frame, NSString *title, i
     [installButton setKeyEquivalent:@"\r"];
     laterButton = CPUpdateButton(content, NSMakeRect(CPWindowWidth - 245, 16, 100, 32),
                                  @"Not Now", self, @selector(later:));
+    [installButton setAutoresizingMask:NSViewMaxYMargin | NSViewMinXMargin];
+    [laterButton setAutoresizingMask:NSViewMaxYMargin | NSViewMinXMargin];
     [window center];
 }
 
@@ -153,16 +182,30 @@ static NSButton *CPUpdateButton(NSView *parent, NSRect frame, NSString *title, i
         return;
     }
 
+    // The answer to a question somebody asked is a sentence, not a window:
+    // an up-to-date copy or a check that failed goes the way The Garden's
+    // does, as an alert with the icon, and the window is put away. Only an
+    // update that exists needs the room for its release notes.
+    if ((state == CPUpdateUpToDate || state == CPUpdateFailed) && [window isVisible]) {
+        [window orderOut:nil];
+        [self performSelector:@selector(announce:) withObject:[NSNumber numberWithInt:state]
+                   afterDelay:0.0];
+        return;
+    }
+
     [progress setIndeterminate:YES];
     [progress stopAnimation:nil];
-    [notesScroll setHidden:state == CPUpdateChecking];
+    [notesScroll setHidden:state == CPUpdateChecking || state == CPUpdateIdle];
+    [installButton setHidden:state == CPUpdateChecking];
+    [laterButton setHidden:state == CPUpdateChecking];
     [installButton setEnabled:NO];
     [laterButton setTitle:@"Not Now"];
+    [self fitToState:state];
 
     switch (state) {
     case CPUpdateChecking:
         [headline setStringValue:@"Checking for updates..."];
-        [detail setStringValue:[NSString stringWithFormat:@"This copy is version %@.", current]];
+        [detail setStringValue:[NSString stringWithFormat:@"This is version %@.", [self versionLine]]];
         [progress startAnimation:nil];
         break;
 
@@ -170,8 +213,8 @@ static NSButton *CPUpdateButton(NSView *parent, NSRect frame, NSString *title, i
         [headline setStringValue:[NSString stringWithFormat:
             @"Captain Polliwog %@ is available.", [updater availableVersion]]];
         [detail setStringValue:[NSString stringWithFormat:
-            @"This copy is version %@. The download is %.1f MB.",
-            current, [updater downloadLength] / 1048576.0]];
+            @"This is version %@. The download is %.1f MB.",
+            [self versionLine], [updater downloadLength] / 1048576.0]];
         [notes setString:[updater releaseNotes] != nil
             ? [updater releaseNotes] : @"No release notes were published."];
         [installButton setEnabled:YES];
@@ -202,17 +245,9 @@ static NSButton *CPUpdateButton(NSView *parent, NSRect frame, NSString *title, i
         break;
 
     case CPUpdateUpToDate:
-        [headline setStringValue:@"Captain Polliwog is up to date."];
-        [detail setStringValue:[NSString stringWithFormat:@"Version %@ is the latest.", current]];
-        [notes setString:@""];
-        [laterButton setTitle:@"Close"];
-        break;
-
     case CPUpdateFailed:
-        [headline setStringValue:@"The update could not be checked."];
-        [detail setStringValue:@""];
-        [notes setString:[updater failureReason] != nil ? [updater failureReason] : @""];
-        [laterButton setTitle:@"Close"];
+        // Reached only when the window is not showing - a check at launch -
+        // and then there is nothing worth interrupting anyone for.
         break;
 
     case CPUpdateIdle:
@@ -221,6 +256,58 @@ static NSButton *CPUpdateButton(NSView *parent, NSRect frame, NSString *title, i
         [detail setStringValue:[NSString stringWithFormat:@"This copy is version %@.", current]];
         break;
     }
+}
+
+// "0.3 (build 9)": the build is what tells two copies of 0.3 apart, and it
+// is what anyone asking which one they have wants to know.
+- (NSString *)versionLine
+{
+    NSString *build = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"];
+    NSString *version = [CPUpdater currentVersion];
+    return build != nil ? [NSString stringWithFormat:@"%@ (build %@)", version, build] : version;
+}
+
+// Short while checking, tall when there are notes to read.
+- (void)fitToState:(CPUpdateState)state
+{
+    BOOL compact = state == CPUpdateChecking || state == CPUpdateIdle;
+    float height = compact ? 124.0f : CPWindowHeight;
+    NSRect frame = [window frame];
+    NSRect content = [[window contentView] frame];
+    float chrome = NSHeight(frame) - NSHeight(content);
+
+    if (fabsf(NSHeight(content) - height) < 1.0f)
+        return;
+    // Keep the top edge where it was, so the title bar does not jump.
+    frame.origin.y += NSHeight(frame) - (height + chrome);
+    frame.size.height = height + chrome;
+    [window setFrame:frame display:YES animate:[window isVisible]];
+}
+
+- (void)announce:(NSNumber *)which
+{
+    CPUpdater *updater = [CPUpdater sharedUpdater];
+    NSAlert *alert;
+
+    if ([which intValue] == CPUpdateUpToDate) {
+        alert = [NSAlert alertWithMessageText:@"Captain Polliwog is up to date"
+                                defaultButton:@"OK" alternateButton:nil otherButton:nil
+                    informativeTextWithFormat:@"This is version %@, the newest there is.",
+                                              [self versionLine]];
+    } else {
+        NSString *reason = [updater failureReason];
+        alert = [NSAlert alertWithMessageText:@"Updates could not be checked"
+                                defaultButton:@"OK" alternateButton:nil otherButton:nil
+                    informativeTextWithFormat:@"%@",
+                    [reason length] > 0 ? reason
+                        : @"The update server could not be reached. Try again when this Mac is online."];
+    }
+    // Set rather than left to NSAlert, which asks for -applicationIconImage:
+    // that answers with the Dock's cache, and a freshly installed copy may
+    // not be in it - which is exactly when someone checks for updates.
+    [alert setIcon:CPApplicationIcon()];
+    [NSApp activateIgnoringOtherApps:YES];
+    [alert runModal];
 }
 
 - (void)install:(id)sender
