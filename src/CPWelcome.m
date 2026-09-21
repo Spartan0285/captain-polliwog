@@ -22,6 +22,17 @@ static NSString * const CPVLCDownloadURL =
 #define WELCOME_H 460.0
 #define PAGES     4
 
+// AppIcon.png is the artwork the .icns was made from, and the one thing here
+// that is certainly a real image at a real size.
+NSImage *CPApplicationIcon(void)
+{
+    NSString *path = [[NSBundle mainBundle] pathForResource:@"AppIcon" ofType:@"png"];
+    NSImage *image = path != nil
+        ? [[[NSImage alloc] initWithContentsOfFile:path] autorelease] : nil;
+
+    return image != nil ? image : [NSApp applicationIconImage];
+}
+
 static NSTextField *CPWelcomeLabel(NSRect frame, NSFont *font, BOOL centred)
 {
     NSTextField *field = [[[NSTextField alloc] initWithFrame:frame] autorelease];
@@ -115,7 +126,10 @@ static CPWelcome *sharedWelcome = nil;
     // The Captain, centred at the top, on every step.
     icon = [[[NSImageView alloc] initWithFrame:
                 NSMakeRect((WELCOME_W - 96) / 2, WELCOME_H - 124, 96, 96)] autorelease];
-    [icon setImage:[NSApp applicationIconImage]];
+    // The PNG rather than -applicationIconImage: on these systems that
+    // answers with whatever the Dock has cached for the bundle, which for a
+    // freshly installed app can be nothing at all.
+    [icon setImage:CPApplicationIcon()];
     [icon setImageScaling:NSScaleProportionally];
     [icon setEditable:NO];
     [content addSubview:icon];

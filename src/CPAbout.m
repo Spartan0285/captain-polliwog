@@ -4,6 +4,7 @@
 
 #import "CPAbout.h"
 #import "CPAppDelegate.h"
+#import "CPWelcome.h"
 
 #define ABOUT_W 460.0
 #define ABOUT_H 430.0
@@ -32,6 +33,28 @@ static NSBezierPath *CPRoundRect(NSRect r, float radius)
     [path appendBezierPathWithArcFromPoint:NSMakePoint(x, y) toPoint:NSMakePoint(x + w, y) radius:radius];
     [path closePath];
     return path;
+}
+
+// An image, the right way up, in a view that draws top-down.
+//
+// -drawInRect: in a flipped view lands the image upside down: text drawing
+// accounts for flippedness and image drawing does not. Flipping the
+// transform about the destination rectangle puts it back without touching
+// the NSImage, which matters because one of these can be the shared
+// application icon and setting -setFlipped: on that would follow it
+// everywhere else it is drawn.
+static void CPDrawImage(NSImage *image, NSRect r)
+{
+    NSAffineTransform *flip = [NSAffineTransform transform];
+
+    if (image == nil)
+        return;
+    [NSGraphicsContext saveGraphicsState];
+    [flip translateXBy:0.0f yBy:NSMaxY(r) + NSMinY(r)];
+    [flip scaleXBy:1.0f yBy:-1.0f];
+    [flip concat];
+    [image drawInRect:r fromRect:NSZeroRect operation:NSCompositeSourceOver fraction:1.0f];
+    [NSGraphicsContext restoreGraphicsState];
 }
 
 static void CPDrawText(NSString *text, NSRect r, NSFont *font, NSColor *colour)
@@ -102,7 +125,7 @@ static void CPDrawText(NSString *text, NSRect r, NSFont *font, NSColor *colour)
 {
     if ((self = [super initWithFrame:frame]) == nil)
         return nil;
-    appIcon = [[NSApp applicationIconImage] retain];
+    appIcon = [CPApplicationIcon() retain];
     // The mark only. The wordmark in the original artwork is set in a
     // typeface no Mac here has, and rasterising it gives the lemon beside a
     // row of fallback glyphs - so the name is drawn below in a face these
@@ -127,9 +150,7 @@ static void CPDrawText(NSString *text, NSRect r, NSFont *font, NSColor *colour)
     [[NSColor whiteColor] set];
     NSRectFill(dirty);
 
-    if (appIcon != nil)
-        [appIcon drawInRect:NSMakeRect(PAD, y, 56, 56) fromRect:NSZeroRect
-                  operation:NSCompositeSourceOver fraction:1.0f];
+    CPDrawImage(appIcon, NSMakeRect(PAD, y, 56, 56));
     CPDrawText(@"Captain Polliwog", NSMakeRect(PAD + 70, y + 2, w - PAD - 70, 26),
                [NSFont boldSystemFontOfSize:18], [NSColor blackColor]);
     CPDrawText([CPAbout versionLine], NSMakeRect(PAD + 70, y + 30, w - PAD - 70, 16),
@@ -180,9 +201,7 @@ static void CPDrawText(NSString *text, NSRect r, NSFont *font, NSColor *colour)
         float markWidth = 46.0f, gap = 12.0f;
         float x = (w - (markWidth + gap + textWidth)) / 2;
 
-        if (mark != nil)
-            [mark drawInRect:NSMakeRect(x, y, markWidth, 56) fromRect:NSZeroRect
-                   operation:NSCompositeSourceOver fraction:1.0f];
+        CPDrawImage(mark, NSMakeRect(x, y, markWidth, 56));
         [@"CYTRUS" drawAtPoint:NSMakePoint(x + markWidth + gap, y + 8) withAttributes:big];
         [@"SOFTWARE" drawAtPoint:NSMakePoint(x + markWidth + gap, y + 33) withAttributes:small];
     }

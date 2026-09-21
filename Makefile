@@ -62,14 +62,20 @@ ARCH_BINARIES = $(patsubst %,$(BUILD)/%/$(EXEC),$(ARCHS))
 $(BUILD)/$(EXEC): $(ARCH_BINARIES)
 	lipo -create $(ARCH_BINARIES) -output $@
 
-app: $(BUILD)/$(EXEC) Resources/Info.plist Resources/CaptainPolliwog.icns Resources/start.html Resources/cacert.pem Resources/polyfills.js Resources/autofill.js
+# Everything in Resources except Info.plist, which is generated below rather
+# than copied. Named individually, this list went stale the moment a file was
+# added to the folder - and a missing image is invisible until someone opens
+# the window that draws it.
+RESOURCES = $(filter-out Resources/Info.plist,$(wildcard Resources/*))
+
+app: $(BUILD)/$(EXEC) Resources/Info.plist $(RESOURCES)
 	@rm -rf "$(APP)"
 	@mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	@cp $(BUILD)/$(EXEC) "$(APP)/Contents/MacOS/$(EXEC)"
 	@sed -e 's/@VERSION@/$(VERSION)/g' -e 's/@BUILDNUM@/$(BUILDNUM)/g' \
 	     -e 's/@STAGE@/$(STAGE)/g' Resources/Info.plist > "$(APP)/Contents/Info.plist"
 	@printf 'APPLCPwg' > "$(APP)/Contents/PkgInfo"
-	@cp Resources/start.html Resources/cacert.pem Resources/polyfills.js Resources/autofill.js Resources/CaptainPolliwog.icns "$(APP)/Contents/Resources/"
+	@cp $(RESOURCES) "$(APP)/Contents/Resources/"
 	@echo "Built $(APP) ($$(lipo -info $(BUILD)/$(EXEC) | sed 's/.*: //'))"
 
 clean:

@@ -4,6 +4,11 @@
 
 #import <Cocoa/Cocoa.h>
 
+// The app's own icon as a drawable image: AppIcon.png from the bundle, since
+// -applicationIconImage answers with the Dock's cache and a freshly
+// installed app may not be in it yet.
+NSImage *CPApplicationIcon(void);
+
 // The first time this browser opens: four things worth doing before the
 // first page, each of which is otherwise buried in a menu nobody opens.
 //
