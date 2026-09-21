@@ -10,6 +10,7 @@
 #import "CPAccelerator.h"
 #import "CPDefaultBrowser.h"
 #import "CPSafeBrowsing.h"
+#import "CPExternalPlayer.h"
 
 #define CPWindowWidth   520.0f
 #define CPWindowHeight  500.0f
@@ -76,6 +77,7 @@ static struct {
     { @"blocksAdsAndTrackers", @"setBlocksAdsAndTrackers:", @"Block ads and trackers", @"Often the heaviest part of a page." },
     { @"playsVideo", @"setPlaysVideo:", @"Play video and audio", @"Takes effect when Captain Polliwog next opens." },
     { @"autoplaysVideo", @"setAutoplaysVideo:", @"Let video play by itself", @"Off, video waits for a click." },
+    { @"showsVideoPlayButton", @"setShowsVideoPlayButton:", @"Show a play button on videos", @"Hands the video to the player chosen below." },
     { @"usesCompatibilityScripts", @"setUsesCompatibilityScripts:", @"Add newer web features", @"Helps modern sites; takes effect on next open." },
     { @"stopsLongScripts", @"setStopsLongScripts:", @"Stop scripts that run too long", @"Keeps a runaway page from freezing the browser." },
     { @"releasesMemoryUnderPressure", @"setReleasesMemoryUnderPressure:", @"Free memory when this Mac runs low", @"Pages you return to may redraw more slowly." },
@@ -217,6 +219,37 @@ static struct {
         [box release];
         CPLabel(view, NSMakeRect(272.0f, top + 1.0f, 200.0f, 14.0f), CPSwitches[i].note, YES, NO);
         top -= 22.0f;
+    }
+
+    // Which player a video is handed to. Only worth a popup when there is
+    // something to choose between - on a Mac with only QuickTime Player it
+    // would be a list of one, so that case says what to install instead.
+    {
+        NSArray *players = [CPExternalPlayer availablePlayers];
+        top -= 8.0f;
+        CPLabel(view, NSMakeRect(18.0f, top + 3.0f, 100.0f, 17.0f), @"Play video in:", NO, NO);
+        if ([players count] > 1) {
+            unsigned index;
+            NSString *chosen = [CPExternalPlayer preferredPlayer];
+            playerPopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(118.0f, top, 190.0f, 22.0f)];
+            for (index = 0; index < [players count]; index++) {
+                NSString *player = [players objectAtIndex:index];
+                [playerPopUp addItemWithTitle:[CPExternalPlayer displayNameForPlayer:player]];
+                [[playerPopUp lastItem] setRepresentedObject:player];
+                if ([player isEqualToString:chosen])
+                    [playerPopUp selectItemAtIndex:index];
+            }
+            [playerPopUp setTarget:self];
+            [playerPopUp setAction:@selector(playerChanged:)];
+            [view addSubview:playerPopUp];
+            [playerPopUp release];
+        } else {
+            NSString *only = [players count] == 1
+                ? [CPExternalPlayer displayNameForPlayer:[players objectAtIndex:0]] : @"No player found";
+            CPLabel(view, NSMakeRect(120.0f, top + 3.0f, 350.0f, 26.0f),
+                    [NSString stringWithFormat:@"%@. VLC and MPlayer decode video far faster on these "
+                     @"Macs; either one in your Applications folder will be found and used.", only], YES, NO);
+        }
     }
     [tabs addTabViewItem:item];
 
@@ -593,6 +626,11 @@ static struct {
 {
     [CPSiteModes setDefaultMode:(CPSiteMode)[siteModePopUp indexOfSelectedItem]];
     [self refresh];
+}
+
+- (IBAction)playerChanged:(id)sender
+{
+    [CPExternalPlayer setPreferredPlayer:[[sender selectedItem] representedObject]];
 }
 
 - (IBAction)switchChanged:(id)sender

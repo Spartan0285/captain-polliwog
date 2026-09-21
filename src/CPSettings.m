@@ -24,6 +24,7 @@ static NSString * const CPCompatibilityKey     = @"CPCompatibilityScripts";
 static NSString * const CPBlocksAdsKey         = @"CPBlocksAdsAndTrackers";
 static NSString * const CPPlaysVideoKey        = @"CPPlaysVideo";
 static NSString * const CPAutoplayKey          = @"CPAutoplaysVideo";
+static NSString * const CPPlayButtonKey        = @"CPShowsVideoPlayButton";
 static NSString * const CPAnimatedImagesKey    = @"CPAnimatedImages";
 static NSString * const CPWebGLKey             = @"CPWebGL";
 static NSString * const CPStopsLongScriptsKey  = @"CPStopsLongScripts";
@@ -84,6 +85,7 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPBlocksAdsKey];
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPPlaysVideoKey];
     [defaults setObject:[NSNumber numberWithBool:NO] forKey:CPAutoplayKey];
+    [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPPlayButtonKey];
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPAnimatedImagesKey];
     [defaults setObject:[NSNumber numberWithBool:NO] forKey:CPWebGLKey];
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPStopsLongScriptsKey];
@@ -202,6 +204,7 @@ CPBooleanSetting(usesCompatibilityScripts, setUsesCompatibilityScripts, CPCompat
 CPBooleanSetting(blocksAdsAndTrackers, setBlocksAdsAndTrackers, CPBlocksAdsKey)
 CPBooleanSetting(playsVideo, setPlaysVideo, CPPlaysVideoKey)
 CPBooleanSetting(autoplaysVideo, setAutoplaysVideo, CPAutoplayKey)
+CPBooleanSetting(showsVideoPlayButton, setShowsVideoPlayButton, CPPlayButtonKey)
 CPBooleanSetting(showsAnimatedImages, setShowsAnimatedImages, CPAnimatedImagesKey)
 CPBooleanSetting(webGLEnabled, setWebGLEnabled, CPWebGLKey)
 CPBooleanSetting(stopsLongScripts, setStopsLongScripts, CPStopsLongScriptsKey)

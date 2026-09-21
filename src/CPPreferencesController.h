@@ -12,6 +12,7 @@
     NSTextField   *diskSizeNote;
     NSTextField   *locationField;
     NSMutableArray *switchBoxes;       // the Performance tab's switches, by tag
+    NSPopUpButton  *playerPopUp;       // which media player a video is handed to
     NSTextField   *homePageField;
     NSPopUpButton *newTabPopUp;
     NSTextField   *downloadsField;

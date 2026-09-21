@@ -61,6 +61,11 @@ typedef enum {
 - (BOOL)playsVideo;
 - (void)setPlaysVideo:(BOOL)flag;
 - (BOOL)autoplaysVideo;
+
+// Whether the polyfills draw a "Play in <player>" button over a video the
+// pointer is on. The player itself is chosen in CPExternalPlayer.
+- (BOOL)showsVideoPlayButton;
+- (void)setShowsVideoPlayButton:(BOOL)flag;
 - (void)setAutoplaysVideo:(BOOL)flag;
 - (BOOL)showsAnimatedImages;
 - (void)setShowsAnimatedImages:(BOOL)flag;

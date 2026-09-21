@@ -5,6 +5,7 @@
 #import "CPUserScripts.h"
 #import "CPSettings.h"
 #import "CPDebugSnapshot.h"
+#import "CPExternalPlayer.h"
 #import <WebKit/WebKit.h>
 
 // -[WebView _addUserScriptToGroup:...], private WebKit API (Safari 4 and
@@ -43,6 +44,23 @@ typedef void (*CPAddUserScriptFunction)(id, SEL, NSString *, id, NSString *, NSU
 
     // The page's own world, so that what it adds is what the page sees.
     world = [worldClass performSelector:@selector(standardWorld)];
+
+    // Settings the polyfills read, injected before them so they are in place
+    // by the time anything looks. A global rather than a bridge: the page can
+    // see it either way, and there is nothing here worth hiding.
+    {
+        NSString *player = [CPExternalPlayer preferredPlayer];
+        NSString *name = player != nil ? [CPExternalPlayer displayNameForPlayer:player] : @"Media Player";
+        NSString *flags = [NSString stringWithFormat:
+            @"window.__polliwog = { playButton: %@, playerName: \"%@\" };",
+            ([[CPSettings sharedSettings] showsVideoPlayButton] && player != nil) ? @"true" : @"false",
+            [name stringByReplacingOccurrencesOfString:@"\"" withString:@""]];
+        ((CPAddUserScriptFunction)[WebView methodForSelector:addUserScript])(
+            [WebView class], addUserScript, groupName, world, flags,
+            [NSURL URLWithString:@"polliwog-settings:flags"],
+            nil, nil, CPInjectAtDocumentStart, CPInjectInAllFrames);
+    }
+
     ((CPAddUserScriptFunction)[WebView methodForSelector:addUserScript])(
         [WebView class], addUserScript, groupName, world, source, [NSURL fileURLWithPath:path],
         nil, nil, CPInjectAtDocumentStart, CPInjectInAllFrames);

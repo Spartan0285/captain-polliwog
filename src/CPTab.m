@@ -16,6 +16,7 @@
 #import "CPSiteModes.h"
 #import "CPScriptWatchdog.h"
 #import "CPUserScripts.h"
+#import "CPExternalPlayer.h"
 #import <WebKit/WebKit.h>
 
 // How long a loading page may go without progress before the debug log
@@ -685,6 +686,17 @@ decisionListener:(id<WebPolicyDecisionListener>)listener
     int type = [[action objectForKey:WebActionNavigationTypeKey] intValue];
     unsigned int modifiers = [[action objectForKey:WebActionModifierFlagsKey] unsignedIntValue];
 
+    // The button the polyfills draw over a video: the address it carries
+    // goes to the media player rather than to a tab. A scheme rather than a
+    // JavaScript bridge because the page is not to be trusted with one, and
+    // because this arrives at the same place every other navigation does.
+    if ([[[[request URL] scheme] lowercaseString] isEqualToString:@"x-polliwog-play"]) {
+        NSString *media = [[[request URL] absoluteString] substringFromIndex:[@"x-polliwog-play:" length]];
+        [listener ignore];
+        [CPExternalPlayer playMediaURL:[media stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding]];
+        return;
+    }
+
     // "Visit Anyway" on the warning page: the address it carries is loaded,
     // and that site is not warned about again until the browser is reopened.
     if ([[[[request URL] scheme] lowercaseString] isEqualToString:@"x-polliwog-proceed"]) {
@@ -814,13 +826,54 @@ decisionListener:(id<WebPolicyDecisionListener>)listener
 
 // WebKit's own "new window" and "download" items bypass the tabs and the
 // bundled network stack, so they are swapped for ones that use both.
+// The address of the video the click landed in, if it landed in one. The
+// node under the pointer is usually something inside the player's own
+// controls, so this walks up looking for the media element itself.
+static NSString *CPMediaSourceForNode(DOMNode *node)
+{
+    while (node != nil) {
+        if ([[node nodeName] caseInsensitiveCompare:@"VIDEO"] == NSOrderedSame
+            || [[node nodeName] caseInsensitiveCompare:@"AUDIO"] == NSOrderedSame) {
+            DOMElement *element = (DOMElement *)node;
+            NSString *source = [element respondsToSelector:@selector(getAttribute:)]
+                ? [element getAttribute:@"src"] : nil;
+            // src may be empty when the source came from a <source> child or
+            // was set from script; currentSrc is what was really fetched.
+            if ([source length] == 0 && [node respondsToSelector:@selector(valueForKey:)]) {
+                NS_DURING
+                    source = [node valueForKey:@"currentSrc"];
+                NS_HANDLER
+                    source = nil;
+                NS_ENDHANDLER
+            }
+            return [source length] > 0 ? source : nil;
+        }
+        node = [node parentNode];
+    }
+    return nil;
+}
+
 - (NSArray *)webView:(WebView *)sender contextMenuItemsForElement:(NSDictionary *)element
     defaultMenuItems:(NSArray *)defaultMenuItems
 {
     NSMutableArray *items = [NSMutableArray array];
     NSURL *link = [element objectForKey:WebElementLinkURLKey];
     NSURL *image = [element objectForKey:WebElementImageURLKey];
+    NSString *media = CPMediaSourceForNode([element objectForKey:WebElementDOMNodeKey]);
     unsigned index;
+
+    // On a video, before everything else: it is the reason for the click.
+    if (media != nil) {
+        NSString *player = [CPExternalPlayer preferredPlayer];
+        NSMenuItem *play = [[[NSMenuItem alloc] initWithTitle:
+            (player != nil ? [NSString stringWithFormat:@"Play in %@", [CPExternalPlayer displayNameForPlayer:player]]
+                           : @"Play in Media Player")
+            action:@selector(playMediaFromMenu:) keyEquivalent:@""] autorelease];
+        [play setTarget:self];
+        [play setRepresentedObject:media];
+        [items addObject:play];
+        [items addObject:[NSMenuItem separatorItem]];
+    }
 
     for (index = 0; index < [defaultMenuItems count]; index++) {
         NSMenuItem *item = [defaultMenuItems objectAtIndex:index];
@@ -854,6 +907,11 @@ decisionListener:(id<WebPolicyDecisionListener>)listener
         }
     }
     return items;
+}
+
+- (void)playMediaFromMenu:(id)sender
+{
+    [CPExternalPlayer playMediaURL:[sender representedObject]];
 }
 
 - (void)openInNewTab:(id)sender

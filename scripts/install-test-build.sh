@@ -10,13 +10,18 @@ set -e
 cd "$(dirname "$0")/.."
 host=${1:?usage: install-test-build.sh host [variant]}
 variant=${2:-leopard-g4}
+# Which Mac last built the app. It was the iBook while that was the only one
+# set up for it; any PowerPC Mac with gcc-4.0, the 10.4u SDK and
+# ~/polliwog-deps can do it, and building on the machine being tested saves
+# a hop.
+app_host=${APP_HOST:-g4}
 stage=$HOME/polliwog-build/stage/install-$variant
 app="$stage/Captain Polliwog.app"
 frameworks=$HOME/polliwog-build/stage/$variant/Frameworks.zip
 
 rm -rf "$stage" && mkdir -p "$stage"
-ssh -o ConnectTimeout=90 g4 'cd ~/CaptainPolliwog/build && rm -f /tmp/cp-app.zip && ditto -c -k --norsrc --keepParent "Captain Polliwog.app" /tmp/cp-app.zip'
-scp -O -q g4:/tmp/cp-app.zip "$stage/"
+ssh -o ConnectTimeout=90 "$app_host" 'cd ~/CaptainPolliwog/build && rm -f /tmp/cp-app.zip && ditto -c -k --norsrc --keepParent "Captain Polliwog.app" /tmp/cp-app.zip'
+scp -O -q "$app_host":/tmp/cp-app.zip "$stage/"
 ditto -x -k "$stage/cp-app.zip" "$stage"
 ditto -x -k "$frameworks" "$app/Contents/"
 /usr/libexec/PlistBuddy -c "Add :LSEnvironment dict" \

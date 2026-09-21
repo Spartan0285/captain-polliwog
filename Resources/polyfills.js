@@ -1907,4 +1907,108 @@
         }
     })();
 
+    // A "Play in..." button over a video the pointer is on.
+    //
+    // QuickTime's H.264 decoder is the slowest part of watching anything on
+    // these machines, and the browser can hand a video to VLC or MPlayer,
+    // which decode it with AltiVec. That is a menu item, but nobody finds a
+    // menu item, so here it is where the video is.
+    //
+    // One button for the whole page, moved to whichever video is under the
+    // pointer, rather than one per video: pages have more <video> elements
+    // than you would think, most of them decorative, and a button per
+    // element means a node and a listener per element for a feature that is
+    // used once a page at most.
+    (function () {
+        var settings = global.__polliwog;
+        if (!settings || !settings.playButton || !global.document || !document.documentElement)
+            return;
+        if (!document.addEventListener || !document.createElement)
+            return;
+
+        var button = null, target = null, hideTimer = null;
+
+        // A background video behind a hero image is not what anyone means to
+        // hand to a media player, and offering to is just noise.
+        function isWorthOffering(video) {
+            if (!video || video.nodeName !== "VIDEO")
+                return false;
+            if (video.muted && video.loop && video.autoplay)
+                return false;
+            var width = video.clientWidth || video.videoWidth || 0;
+            var height = video.clientHeight || video.videoHeight || 0;
+            if (width < 160 || height < 90)
+                return false;
+            return !!(video.currentSrc || video.src);
+        }
+
+        function make() {
+            button = document.createElement("button");
+            button.setAttribute("type", "button");
+            button.appendChild(document.createTextNode("Play in " + (settings.playerName || "player")));
+            // Inline, and every property spelled out: the page's own styles
+            // are not to be inherited, and this engine has no all:initial.
+            button.style.cssText = "position:absolute;z-index:2147483647;margin:0;padding:3px 9px;"
+                + "font:11px/1.4 'Lucida Grande',sans-serif;color:#fff;background:rgba(0,0,0,0.72);"
+                + "border:1px solid rgba(255,255,255,0.45);border-radius:4px;cursor:pointer;"
+                + "display:none;text-shadow:none;box-shadow:none;letter-spacing:0;text-transform:none;";
+            button.onclick = function (event) {
+                if (event && event.preventDefault) { event.preventDefault(); event.stopPropagation(); }
+                var source = target && (target.currentSrc || target.src);
+                if (source)
+                    // Caught in CPTab's navigation policy, which sends it to
+                    // the player and never loads anything.
+                    global.location.href = "x-polliwog-play:" + encodeURIComponent(source);
+                return false;
+            };
+            button.onmouseover = function () { if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; } };
+            button.onmouseout = hideSoon;
+            document.body.appendChild(button);
+        }
+
+        function hideSoon() {
+            if (hideTimer)
+                clearTimeout(hideTimer);
+            // Long enough to let the pointer cross the gap between the video
+            // and the button without the button vanishing under it.
+            hideTimer = setTimeout(function () {
+                if (button) button.style.display = "none";
+                target = null;
+                hideTimer = null;
+            }, 400);
+        }
+
+        function show(video) {
+            if (!document.body)
+                return;
+            if (!button)
+                make();
+            target = video;
+            var box = video.getBoundingClientRect();
+            var scrollX = global.pageXOffset || document.documentElement.scrollLeft || 0;
+            var scrollY = global.pageYOffset || document.documentElement.scrollTop || 0;
+            button.style.display = "block";
+            // Top right, inside the video, clear of the play controls most
+            // players put along the bottom.
+            button.style.left = (box.left + scrollX + box.width - button.offsetWidth - 8) + "px";
+            button.style.top = (box.top + scrollY + 8) + "px";
+            if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+        }
+
+        document.addEventListener("mouseover", function (event) {
+            var node = event.target;
+            // The pointer is usually on the page's own controls, inside the
+            // element rather than on it.
+            while (node && node.nodeName !== "VIDEO" && node !== document.body)
+                node = node.parentNode;
+            if (node && isWorthOffering(node))
+                show(node);
+        }, false);
+
+        document.addEventListener("mouseout", function (event) {
+            if (target && event.relatedTarget !== button)
+                hideSoon();
+        }, false);
+    })();
+
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);
