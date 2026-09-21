@@ -21,6 +21,8 @@
 #import "CPUpdater.h"
 #import "CPDefaultBrowser.h"
 #import "CPSafeBrowsing.h"
+#import "CPAbout.h"
+#import "CPFeedback.h"
 #import "CPUpdateController.h"
 #import <WebKit/WebKit.h>
 
@@ -101,8 +103,11 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     [mainMenu release];
 
     menu = CPAddSubmenu(mainMenu, @"Captain Polliwog");
-    CPAddItem(menu, @"About Captain Polliwog", @selector(orderFrontStandardAboutPanel:), nil);
+    CPAddItem(menu, @"About Captain Polliwog", @selector(showAbout:), nil);
     CPAddItem(menu, @"Check for Updates...", @selector(checkForUpdates:), nil);
+    // Next to About, where someone annoyed enough to write is already
+    // looking for a name to complain to.
+    CPAddItem(menu, @"Send Feedback...", @selector(sendFeedback:), nil);
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Private Browsing", @selector(togglePrivateBrowsing:), nil);
     [menu addItem:[NSMenuItem separatorItem]];
@@ -247,6 +252,23 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
 - (IBAction)showPreferences:(id)sender
 {
     [[CPPreferencesController sharedController] showWindow:sender];
+}
+
+- (IBAction)showAbout:(id)sender
+{
+    [CPAbout show];
+}
+
+- (IBAction)sendFeedback:(id)sender
+{
+    // The window it will offer a picture of, and the address that names
+    // where they were: for a browser that is the page, which is also the
+    // single most useful thing in the report.
+    CPBrowserWindowController *controller = [browserWindows lastObject];
+    NSURL *url = controller != nil ? [[controller selectedTab] URL] : nil;
+
+    [CPFeedback openForWindow:(controller != nil ? [controller window] : nil)
+                         page:(url != nil ? [url absoluteString] : @"")];
 }
 
 - (IBAction)checkForUpdates:(id)sender
@@ -474,6 +496,8 @@ static size_t CPStatisticCount(Class statistics, NSString *name)
     [CPMediaRelay start];
     [CPAccelerator start];
     [CPSafeBrowsing start];
+    // Anything written when the network was not there.
+    [CPFeedback sendQueuedReports];
     // Not during launch: the first page matters more than the update feed.
     [[CPUpdater sharedUpdater] performSelector:@selector(checkInBackground)
                                     withObject:nil

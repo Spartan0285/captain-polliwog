@@ -5,6 +5,60 @@
 	<key>feed</key>
 	<string>captain-polliwog</string>
 	<key>versions</key>
-	<array/>
+	<array>
+		<dict>
+			<key>length</key>
+			<integer>37195045</integer>
+			<key>minimumSystemVersion</key>
+			<string>10.4</string>
+			<key>notes</key>
+			<string>Captain Polliwog 0.3 (alpha)
+
+The JavaScript engine is on.
+  This build turns on the PowerPC baseline JIT, which had been built but
+  not shipped. JavaScript is about twice as fast as before, and up to five
+  times on the kind of code a charting library writes.
+
+Faster everywhere else too.
+  A fix to our copy of GCC removed a dead register save and restore from
+  15,928 of WebCore's functions. WebCore now exports 6,917 symbols instead
+  of 73,627, which removed 5,484 stubs that stood in front of calls it
+  makes to itself. Speedometer 3.1 on a PowerBook G4: 0.520, from 0.271
+  two days ago.
+
+Video can be handed to a real player.
+  QuickTime's H.264 decoder is the slowest part of watching anything on
+  these machines. Right-click a video, use the green button on it, the
+  View menu or the Share menu, and it opens in VLC or MPlayer instead,
+  which decode with AltiVec. The stream goes through the browser's own
+  networking, so seeking works and sites that refuse Tiger's TLS are
+  reachable.
+
+Full screen works.
+  It was off twice over: WebKit's own preference for it, and the missing
+  unprefixed requestFullscreen() that modern players look for.
+
+Nothing plays by itself.
+  A video that starts on its own is the whole processor on a G4. Pages
+  that call play() from script are now stopped until you ask. Preferences
+  has a switch for it.
+
+Say when something is wrong.
+  There is a Send Feedback window now, and an About window that says what
+  this is and which build you are on.
+
+Known: Charts-chartjs is still slower than PowerFox. There is no Media
+Source Extensions, so YouTube will only offer 360p. Tiger and G3 support
+is not in this build.</string>
+			<key>sha256</key>
+			<string>85ded3c3a9ea2f62db5b4ebc8f0789b872a91580e46d00744928eb3841dedbee</string>
+			<key>signature</key>
+			<string>ya+5mKczDotaOvnOhM+pPvtaJoE/EdjA564M3rYX/sTFrDxuxE3ZnEkX6Nxwv+OLROetX/0PaXxbjrQoEjlnCQ==</string>
+			<key>url</key>
+			<string>https://github.com/Spartan0285/captain-polliwog/releases/download/v0.3/CaptainPolliwog-0.3.zip</string>
+			<key>version</key>
+			<string>0.3</string>
+		</dict>
+	</array>
 </dict>
 </plist>

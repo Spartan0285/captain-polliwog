@@ -18,6 +18,12 @@
 
 - (void)buildMainMenu;
 - (CPBrowserWindowController *)openBrowserWindow;
+
+// Opens an address in the frontmost window, making one if there is none.
+// The About window's links come through here: every other app in this family
+// has to ask where a link should open, because the browser the Mac came with
+// cannot reach these sites, and this one is the answer to that question.
+- (void)openAddress:(NSString *)address;
 - (void)browserWindowWillClose:(CPBrowserWindowController *)controller;
 
 - (void)enforceLiveTabLimit;
@@ -30,5 +36,7 @@
 - (IBAction)showAutoFill:(id)sender;
 - (IBAction)showPreferences:(id)sender;
 - (IBAction)checkForUpdates:(id)sender;
+- (IBAction)showAbout:(id)sender;
+- (IBAction)sendFeedback:(id)sender;
 
 @end
