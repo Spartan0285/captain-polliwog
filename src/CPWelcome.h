@@ -27,6 +27,7 @@ NSImage *CPApplicationIcon(void);
     NSButton    *action;
     NSButton    *nextButton;
     NSButton    *skipButton;
+    NSButton    *againBox;
     int          page;
 }
 

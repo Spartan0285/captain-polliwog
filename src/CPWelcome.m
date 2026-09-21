@@ -154,9 +154,18 @@ static CPWelcome *sharedWelcome = nil;
     [result setTextColor:[NSColor colorWithCalibratedWhite:0.35f alpha:1]];
     [content addSubview:result];
 
-    step = CPWelcomeLabel(NSMakeRect(24, 26, 120, 18), [NSFont systemFontOfSize:11], NO);
+    step = CPWelcomeLabel(NSMakeRect(24, 46, 140, 16), [NSFont systemFontOfSize:11], NO);
     [step setTextColor:[NSColor colorWithCalibratedWhite:0.45f alpha:1]];
     [content addSubview:step];
+
+    // Ticked, because closing this window has always meant "done". Clearing
+    // it is how someone says they would rather finish later, and then it
+    // comes back at the next launch.
+    againBox = [[[NSButton alloc] initWithFrame:NSMakeRect(22, 22, 250, 18)] autorelease];
+    [againBox setButtonType:NSSwitchButton];
+    [againBox setTitle:@"Don't show this again"];
+    [againBox setState:NSOnState];
+    [content addSubview:againBox];
 
     skipButton = [[[NSButton alloc] initWithFrame:NSMakeRect(WELCOME_W - 250, 20, 110, 30)] autorelease];
     [skipButton setBezelStyle:NSRoundedBezelStyle];
@@ -330,7 +339,9 @@ static CPWelcome *sharedWelcome = nil;
 - (void)markDone
 {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    [defaults setBool:YES forKey:CPWelcomeDoneKey];
+    BOOL done = againBox == nil || [againBox state] == NSOnState;
+
+    [defaults setBool:done forKey:CPWelcomeDoneKey];
     [defaults synchronize];
 }
 

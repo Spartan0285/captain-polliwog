@@ -170,6 +170,16 @@ static struct {
     defaultBrowserStatus = CPLabel(view, NSMakeRect(138.0f, top + 1.0f, 200.0f, 14.0f), @"", YES, NO);
     defaultBrowserButton = CPButton(view, NSMakeRect(340.0f, top - 5.0f, 130.0f, 24.0f),
                                     @"Set as Default", self, @selector(makeDefaultBrowser:));
+
+    // The questions the first run asks - bookmarks, default browser, a media
+    // player - are all worth a second look later, and they are easier to
+    // find here than under a menu item nobody opens twice.
+    top -= 40.0f;
+    CPLabel(view, NSMakeRect(10.0f, top, 120.0f, 17.0f), @"Setup:", NO, YES);
+    CPLabel(view, NSMakeRect(138.0f, top + 1.0f, 200.0f, 14.0f),
+            @"Bookmarks, default browser, video.", YES, NO);
+    CPButton(view, NSMakeRect(340.0f, top - 5.0f, 130.0f, 24.0f),
+             @"Run Setup Again", self, @selector(showSetupAssistant:));
     [tabs addTabViewItem:item];
 
     // Performance
@@ -645,6 +655,11 @@ static struct {
 - (IBAction)downloadVLC:(id)sender
 {
     [CPWelcome downloadVLC];
+}
+
+- (IBAction)showSetupAssistant:(id)sender
+{
+    [CPWelcome show];
 }
 
 - (IBAction)playerChanged:(id)sender
