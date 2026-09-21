@@ -3,12 +3,12 @@
 
 APP_NAME = Captain Polliwog
 EXEC     = CaptainPolliwog
-VERSION  = 0.3
+VERSION  = 0.3.1
 # What an updater compares, and what a feedback report carries: it goes up on
 # every build anyone else might have, where VERSION goes up when the release
 # does. Never put the stage in VERSION - the version string ends up in file
 # names, tags and signed statements, and a space in it finds every one.
-BUILDNUM = 9
+BUILDNUM = 10
 STAGE    = Alpha
 
 SDK       ?= /Developer/SDKs/MacOSX10.4u.sdk

@@ -59,6 +59,51 @@ is not in this build.</string>
 			<key>version</key>
 			<string>0.3</string>
 		</dict>
+		<dict>
+			<key>length</key>
+			<integer>38897457</integer>
+			<key>minimumSystemVersion</key>
+			<string>10.4</string>
+			<key>notes</key>
+			<string>Captain Polliwog 0.3.1 (alpha)
+
+Welcome aboard.
+  The first time it opens, the Captain introduces himself and offers to
+  bring your Safari bookmarks across, to become your default browser, and
+  to recommend a media player. The video page only recommends VLC on a
+  Mac that can run it - its PowerPC build needs AltiVec, which a G3 does
+  not have - and says so honestly on one that cannot. You can finish it
+  later: untick "Don't show this again". Preferences &gt; General has Run
+  Setup Again.
+
+Scrolling speed.
+  Preferences &gt; General &gt; Scrolling: Slow, Medium, Fast or Very fast.
+  Slow is the new default. The trackpad on these PowerBooks reports its
+  own accelerated movement, and the old setting was moving pages more
+  than a screen and a half a second.
+
+Check for Updates says what it means.
+  "Up to date" is now a plain answer with the version and build, instead
+  of a window with an empty box in it and a progress bar running under
+  its buttons.
+
+The About window.
+  The Cytrus Software logo is the real one now, and the icons are the
+  right way up.
+
+Known: Charts-chartjs is still slower than PowerFox. There is no Media
+Source Extensions, so YouTube only offers 360p - use the green Play in
+VLC button for a smoother picture. Tiger and G3 support is not in this
+build.</string>
+			<key>sha256</key>
+			<string>bf2b992a1a3c5cdc47d9481d126b7e030f72d2b0280d4fc4e81eeac3f8431998</string>
+			<key>signature</key>
+			<string>ycgSo+xMdjaerKhdHGdZkKA4nOQc/8H2YSH2VTXbLaUY9ySdLLETAjuyfnXcG+qm87+dACkQfk36cyeWH73lBg==</string>
+			<key>url</key>
+			<string>https://github.com/Spartan0285/captain-polliwog/releases/download/v0.3.1/CaptainPolliwog-0.3.1.zip</string>
+			<key>version</key>
+			<string>0.3.1</string>
+		</dict>
 	</array>
 </dict>
 </plist>
