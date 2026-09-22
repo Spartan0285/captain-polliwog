@@ -196,9 +196,8 @@ static CPWelcome *sharedWelcome = nil;
 
 - (void)showPage:(int)which
 {
-    BOOL hasVLC = NO;
-    NSEnumerator *players;
-    NSString *player;
+    NSArray *players;
+    NSString *player = nil;    // the fast one found, if any
 
     page = which;
     [result setStringValue:@""];
@@ -236,21 +235,23 @@ static CPWelcome *sharedWelcome = nil;
         break;
 
     case 2:
-        players = [[CPExternalPlayer availablePlayers] objectEnumerator];
-        while ((player = [players nextObject]) != nil)
-            if ([player rangeOfString:@"VLC"].location != NSNotFound)
-                hasVLC = YES;
+        // QuickTime Player does not count: it is on every Mac, and its
+        // decoder is the one the browser is already using.
+        players = [CPExternalPlayer fasterPlayers];
+        if ([players count] > 0)
+            player = [CPExternalPlayer displayNameForPlayer:[players objectAtIndex:0]];
 
         [heading setStringValue:@"I'm going to be honest with you."];
-        if (hasVLC) {
-            [body setStringValue:
+        if (player != nil) {
+            [body setStringValue:[NSString stringWithFormat:
                 @"We need someone else in the crew to make it through this \xE2\x80\x94 and I "
                  "see you already have them.\n\n"
-                 "VLC is aboard. When you find a video, use the green button on it, or "
-                 "right-click, and I'll hand it over to VLC, which decodes video far faster "
-                 "than this Mac can manage inside a web page."];
+                 "%@ is aboard. When you find a video, use the green button on it, or "
+                 "right-click, and I'll hand it over to %@, which decodes video far faster "
+                 "than this Mac can manage inside a web page.", player, player]];
             [action setHidden:YES];
-            [result setStringValue:@"VLC found in your Applications folder."];
+            [result setStringValue:[NSString stringWithFormat:
+                @"%@ found in your Applications folder.", player]];
         } else if (![CPWelcome hasAltiVec]) {
             // Telling someone to install software that cannot run is worse
             // than saying nothing. VLC's PowerPC build carries AltiVec

@@ -37,6 +37,13 @@ static NSString * const CPKnownPlayers[] = {
     return found;
 }
 
++ (NSArray *)fasterPlayers
+{
+    NSMutableArray *faster = [NSMutableArray arrayWithArray:[self availablePlayers]];
+    [faster removeObject:@"/Applications/QuickTime Player.app"];
+    return faster;
+}
+
 + (NSString *)displayNameForPlayer:(NSString *)bundlePath
 {
     return [[NSFileManager defaultManager] displayNameAtPath:bundlePath];

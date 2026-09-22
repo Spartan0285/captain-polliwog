@@ -23,6 +23,12 @@
 + (NSArray *)availablePlayers;
 + (NSString *)displayNameForPlayer:(NSString *)bundlePath;
 
+// The same list without QuickTime Player, which is on every Mac and is the
+// decoder the browser already uses: having it is not having a player. What
+// the setup wizard asks, when it decides whether to recommend installing
+// one.
++ (NSArray *)fasterPlayers;
+
 // The one to use: the preference if it is still installed, else the best
 // available.
 + (NSString *)preferredPlayer;
