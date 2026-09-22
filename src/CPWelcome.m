@@ -96,6 +96,13 @@ static CPWelcome *sharedWelcome = nil;
     [sharedWelcome build];
 }
 
++ (void)showAtStep:(int)step
+{
+    [self show];
+    if (step >= 1 && step <= PAGES)
+        [sharedWelcome showPage:step - 1];
+}
+
 - (void)dealloc
 {
     [window release];

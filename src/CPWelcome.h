@@ -38,6 +38,10 @@ NSImage *CPApplicationIcon(void);
 // From the Help menu, whenever anyone wants it again.
 + (void)show;
 
+// Testing aid: open at a given step, 1 to 4, so each page can be
+// photographed on each system (CPDebugPanel "welcome1" to "welcome4").
++ (void)showAtStep:(int)step;
+
 // Whether this Mac has a vector unit - the G3 has none, and the PowerPC
 // build of VLC that would otherwise be recommended dies on its first frame
 // without one.
