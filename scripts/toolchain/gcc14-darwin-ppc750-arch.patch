@@ -1,0 +1,24 @@
+libgcc_s is linked with "-arch <what lipo says>". Built for the G3
+(--with-cpu=750), lipo says ppc750, which GCC 14's driver does not accept
+as an -arch; to the driver ppc is the same thing.
+
+--- a/libgcc/config/t-slibgcc-darwin	2026-09-22 13:25:55
++++ b/libgcc/config/t-slibgcc-darwin	2026-09-22 13:25:55
+@@ -125,7 +125,7 @@
+ 	    ./libgcc_s.$(SHLIB_SOVERSION)$(SHLIB_EXT)_T_$${mlib} || exit 1 ; \
+ 	  cp ../$${mlib}/libgcc/$${mlib}/libgcc_ehs$(SHLIB_EXT)  \
+ 	    ./libgcc_ehs.$(SHLIB_SOVERSION)$(SHLIB_EXT)_T_$${mlib} || exit 1 ; \
+-	  arch=`$(LIPO) -info libgcc_s.$(SHLIB_SOVERSION)$(SHLIB_EXT)_T_$${mlib} | sed -e 's/.*:\ //'` ; \
++	  arch=`$(LIPO) -info libgcc_s.$(SHLIB_SOVERSION)$(SHLIB_EXT)_T_$${mlib} | sed -e 's/.*:\ //' -e 's/ppc750/ppc/'` ; \
+ 	  $(CC) -arch $${arch} -nodefaultlibs -dynamiclib -nodefaultrpaths \
+ 	    -o libgcc_s.1$(SHLIB_EXT)_T_$${mlib} \
+ 	    -Wl,-reexport_library,libgcc_s.$(SHLIB_SOVERSION)$(SHLIB_EXT)_T_$${mlib} \
+@@ -144,7 +144,7 @@
+ 	for mlib in $$MLIBS ; do \
+ 	  cp ../$${mlib}/libgcc/$${mlib}/libgcc_s$(SHLIB_EXT)  \
+ 	    ./libgcc_s.$(SHLIB_SOVERSION)$(SHLIB_EXT)_T_$${mlib} || exit 1 ; \
+-	  arch=`$(LIPO) -info libgcc_s.$(SHLIB_SOVERSION)$(SHLIB_EXT)_T_$${mlib} | sed -e 's/.*:\ //'` ; \
++	  arch=`$(LIPO) -info libgcc_s.$(SHLIB_SOVERSION)$(SHLIB_EXT)_T_$${mlib} | sed -e 's/.*:\ //' -e 's/ppc750/ppc/'` ; \
+ 	  $(CC) -arch $${arch} -nodefaultlibs -dynamiclib -nodefaultrpaths \
+ 	    -o libgcc_s.1$(SHLIB_EXT)_T_$${mlib} \
+ 	    -Wl,-reexport_library,libgcc_s.$(SHLIB_SOVERSION)$(SHLIB_EXT)_T_$${mlib} \

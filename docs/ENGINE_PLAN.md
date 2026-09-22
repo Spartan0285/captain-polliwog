@@ -771,3 +771,83 @@ and `JS_EXPORT_PRIVATE` expand to `visibility("default")` on Cocoa, and they
 annotate exactly what crosses a framework boundary; the GTK port builds this
 way. All that is missing is `-fvisibility=hidden`, which
 `scripts/toolchain/webkit.sh` now takes through `EXTRA_FLAGS`.
+
+## 22 September: YouTube's 50MB function, and the syntax gap is nearly closed
+
+**A crash, not slow loading.** YouTube showed grey placeholders on the iBook
+and the app quietly quit. The crash reports (four of them, from ordinary
+use) all end in the same place: `JIT::compileWithoutLinking`, linking a
+branch. YouTube's main script contains one function of **2.5 million
+bytecode words**, whose baseline code came to about 50MB. A PowerPC branch
+reaches 32MB; the range check is a `RELEASE_ASSERT`, so the browser stopped.
+The baseline JIT now gives up on a function once its main pass passes 12MB,
+leaving room for the slow paths, and reports failure the way a failed
+allocation does, so the interpreter keeps running that one function and
+everything else stays compiled (patch 0062). YouTube then loads on the
+iBook with its thumbnails, 157 resources, no crash.
+
+**The JavaScript syntax gap is nearly closed.** A survey of 20 sites with
+the bundled engine and debug logging found **two** parse failures in all:
+Amazon (`Can't create duplicate variable: 'UIStrings'`) and x.com
+(`Unexpected identifier 'r'` after a declaration, which is what an
+unsupported `using` declaration looks like). Everything else - YouTube,
+Reddit, GitHub, Wikipedia, the New York Times, the BBC, CNN, The Verge,
+Apple, Stack Overflow, eBay, Instagram, Twitch, ESPN, DuckDuckGo - parses.
+The earlier "SyntaxError" logs that suggested otherwise came from a process
+running *Tiger's* 2009 WebKit, before the engine-loading fix.
+
+**Status feed.** View > Show Page Activity (off by default) puts what the
+page is doing in the status bar: what is being contacted, how many of its
+pieces have arrived, which site it is still fetching from after the page
+looks finished, and how long the page's own scripts held the browser up.
+The last is measured by a timer that ticks four times a second on the main
+thread: when a tick arrives late, that is how long the page ran without
+letting go.
+
+## 22 September: preparing for a current WebKit
+
+Decision: the modern-engine target is **WebKitGTK 2.52.6**, not the 2024
+branch. Checked in its own source rather than taken on trust:
+`PlatformCPU.h` still defines `CPU(PPC)` for 32-bit big-endian, and
+`OptionsGTK.cmake` switches Skia on **only** for little-endian machines and
+keeps Cairo for the rest - upstream still builds for machines like ours.
+
+What is in place on the MacBook Pro's VM, beside the GCC 6.5 toolchain the
+604 engine keeps using (`/opt/ppc`, untouched):
+
+- **GCC 14.2** cross compiler for `powerpc-apple-darwin9` in
+  `/opt/ppc-modern` (`scripts/toolchain/build-modern-toolchain.sh`), sharing
+  the old toolchain's cctools and ld64, defaulting to the G3 with a 10.4
+  deployment target as before. It compiles and links C++20 (concepts,
+  `std::span`) for a G3 on Tiger. Two things it needed:
+  - libgcc links itself with `-arch` whatever `lipo` reports, which for a
+    G3 build is `ppc750`, a name GCC 14's driver rejects
+    (`gcc14-darwin-ppc750-arch.patch`).
+  - **libatomic is required.** 32-bit PowerPC has no 64-bit atomic
+    instruction and WebKit uses 64-bit atomics throughout; its configure
+    stops with "Failed to detect support for atomic variables" without it.
+    It is built shared, like the rest of the runtime: one lock table for
+    every image, or two images could lock the same address apart.
+- **CMake 3.31** (2.52 needs 3.20; Ubuntu 20.04 has 3.16) and **ICU 74.2**
+  for PowerPC (2.52 needs 70.1), with the same hand-written data object the
+  604 toolchain needs, since ICU's `genccode` writes words in the build
+  machine's byte order (`scripts/toolchain/build-modern-deps.sh`).
+- `scripts/toolchain/webkit-modern.sh`, which configures and builds 2.52
+  from the released tarball, and `ppc-darwin-modern.cmake`.
+
+**Milestone 1 is the JSCOnly port**: JavaScriptCore alone, which needs
+nothing but ICU, in the C interpreter. It answers whether 2.52 compiles with
+GCC 14 for Darwin, whether 32-bit big-endian still works, and how slow the
+interpreter is on a G4 - before anything larger is attempted.
+
+**The shape of the full port is still open.** Both the GTK and WPE ports of
+2.44 and later require EGL, which Leopard has no implementation of, and GTK
+itself. The alternative is the HaikuWebKit model already recommended above:
+carry WebKitLegacy out of tree with our own networking (which Captain
+Polliwog already owns) and a native graphics context. That decision comes
+after milestone 1.
+
+**Disk is the practical constraint.** The MacBook Pro has about 17GB free,
+and the VM's disk image only grows; a full WebKit build tree is 20-30GB.
+Milestone 1 fits. The full engine will need space freed, an external disk,
+or the Mac Studio.
