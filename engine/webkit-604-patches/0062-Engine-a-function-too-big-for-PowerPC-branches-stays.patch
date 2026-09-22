@@ -1,0 +1,95 @@
+From 27d4bccce3080e8b1cde6e0dd9053ffb6908956f Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Tue, 22 Sep 2026 13:17:45 -0400
+Subject: [PATCH] Engine: a function too big for PowerPC branches stays in the
+ interpreter
+
+A PowerPC branch reaches 32MB either way. YouTube's main script has one
+function of 2.5 million bytecode words, whose baseline code overflowed
+that, and linking its jumps stopped the browser on the range check
+(EXC_BREAKPOINT in JIT::compileWithoutLinking). The main pass now stops
+at 12MB, leaving room for the slow paths, and the compile fails the way
+a failed allocation does, so the LLInt keeps running the function.
+---
+ Source/JavaScriptCore/jit/JIT.cpp | 29 +++++++++++++++++++++++++++++
+ Source/JavaScriptCore/jit/JIT.h   |  3 +++
+ 2 files changed, 32 insertions(+)
+
+diff --git a/Source/JavaScriptCore/jit/JIT.cpp b/Source/JavaScriptCore/jit/JIT.cpp
+index a0e052ed..162cdcf1 100644
+--- a/Source/JavaScriptCore/jit/JIT.cpp
++++ b/Source/JavaScriptCore/jit/JIT.cpp
+@@ -58,6 +58,11 @@ using namespace std;
+ 
+ namespace JSC {
+ 
++#if CPU(PPC)
++// Leaves the other half of the 32MB a branch reaches to the slow paths.
++static const size_t maximumMainPassSizeForBranches = 12 * 1024 * 1024;
++#endif
++
+ double totalBaselineCompileTime;
+ double totalDFGCompileTime;
+ double totalFTLCompileTime;
+@@ -217,6 +222,12 @@ void JIT::privateCompileMainPass()
+     }
+ 
+     for (m_bytecodeOffset = 0; m_bytecodeOffset < instructionCount; ) {
++#if CPU(PPC)
++        if (UNLIKELY(m_assembler.codeSize() > maximumMainPassSizeForBranches)) {
++            m_tooLargeForBranches = true;
++            return;
++        }
++#endif
+         if (m_bytecodeOffset == startBytecodeOffset && startBytecodeOffset > 0) {
+             // We've proven all bytecode instructions up until here are unreachable.
+             // Let's ensure that by crashing if it's ever hit.
+@@ -677,6 +688,21 @@ void JIT::compileWithoutLinking(JITCompilationEffort effort)
+     RELEASE_ASSERT(!JITCode::isJIT(m_codeBlock->jitType()));
+ 
+     privateCompileMainPass();
++#if CPU(PPC)
++    // A PowerPC branch reaches 32MB either way and no further, and every
++    // jump inside a function's code is one. Pages now and then ship a
++    // single function big enough to overflow that - YouTube's main script
++    // is one, at around 50MB of baseline code - and linking its jumps would
++    // stop the browser on the range check. Such a function runs in the
++    // interpreter instead. The slow paths still to come are about the size
++    // of the main pass, so it is the main pass that has to leave room; it
++    // stops as soon as it has used its share (privateCompileMainPass).
++    if (m_tooLargeForBranches) {
++        dataLogF("JSC: baseline JIT left a function of %u bytecode words to the interpreter: over %lu bytes of code by bytecode %u, more than PowerPC branches reach\n",
++            m_codeBlock->instructionCount(), static_cast<unsigned long>(maximumMainPassSizeForBranches), m_bytecodeOffset);
++        return;
++    }
++#endif
+     privateCompileLinkPass();
+     privateCompileSlowCases();
+     
+@@ -743,6 +769,9 @@ void JIT::compileWithoutLinking(JITCompilationEffort effort)
+ 
+ CompilationResult JIT::link()
+ {
++    if (m_tooLargeForBranches)
++        return CompilationFailed;
++
+     LinkBuffer& patchBuffer = *m_linkBuffer;
+     
+     if (patchBuffer.didFailToAllocate())
+diff --git a/Source/JavaScriptCore/jit/JIT.h b/Source/JavaScriptCore/jit/JIT.h
+index cc4412fd..fba2236b 100644
+--- a/Source/JavaScriptCore/jit/JIT.h
++++ b/Source/JavaScriptCore/jit/JIT.h
+@@ -959,6 +959,9 @@ namespace JSC {
+         
+         Label m_arityCheck;
+         std::unique_ptr<LinkBuffer> m_linkBuffer;
++        // PowerPC: the function's code would be too big for its own branches
++        // to reach across, so it stays in the interpreter (see compileWithoutLinking).
++        bool m_tooLargeForBranches { false };
+ 
+         std::unique_ptr<JITDisassembler> m_disassembler;
+         RefPtr<Profiler::Compilation> m_compilation;
+-- 
+2.54.0 (Apple Git-157)
+
