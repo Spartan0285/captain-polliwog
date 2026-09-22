@@ -55,6 +55,7 @@ static NSTextField *CPWelcomeLabel(NSRect frame, NSFont *font, BOOL centred)
 - (void)doAction:(id)sender;
 - (void)finish;
 - (void)markDone;
+- (void)layoutPage;
 @end
 
 static CPWelcome *sharedWelcome = nil;
@@ -109,7 +110,6 @@ static CPWelcome *sharedWelcome = nil;
 {
     NSRect frame = NSMakeRect(0, 0, WELCOME_W, WELCOME_H);
     NSView *content;
-    NSImageView *icon;
 
     if (window != nil) {
         [window makeKeyAndOrderFront:nil];
@@ -280,6 +280,61 @@ static CPWelcome *sharedWelcome = nil;
         [action setHidden:YES];
         break;
     }
+    [self layoutPage];
+    [self layoutPage];
+}
+
+// How tall a wrapped label needs to be at a given width, as this system
+// measures it. Tiger sets Lucida Grande a little taller than Leopard does, so
+// boxes sized by eye on one clip the other; measuring is the only way to be
+// right on both.
+static float CPTextHeight(NSTextField *field, float width)
+{
+    NSSize size = [[field cell] cellSizeForBounds:NSMakeRect(0, 0, width, 10000.0f)];
+    return ceilf(size.height);
+}
+
+// Top-down from the icon, each piece as tall as its words need, then the
+// bottom bar - and the window grown to fit if a page asks for more room than
+// it has. It only ever grows: shrinking between steps would make the Next
+// button jump out from under the pointer.
+- (void)layoutPage
+{
+    NSView *content = [window contentView];
+    float width = WELCOME_W - 100.0f;
+    float headingHeight = CPTextHeight(heading, WELCOME_W - 80.0f);
+    float bodyHeight = CPTextHeight(body, width);
+    BOOL showsAction = ![action isHidden];
+    float bottomBar = 70.0f;            // checkbox, step count, the two buttons
+    float below = bottomBar + 24.0f + (showsAction ? 32.0f + 12.0f : 0.0f);
+    float needed = 24.0f + 96.0f + 16.0f + headingHeight + 12.0f + bodyHeight + 18.0f + below;
+    float height = NSHeight([content frame]);
+    float y;
+
+    if (needed > height) {
+        NSRect frame = [window frame];
+        float grow = needed - height;
+        frame.origin.y -= grow;         // keep the title bar where it was
+        frame.size.height += grow;
+        [window setFrame:frame display:YES animate:NO];
+        height = needed;
+    }
+
+    y = height - 24.0f - 96.0f;
+    [icon setFrame:NSMakeRect((WELCOME_W - 96) / 2, y, 96, 96)];
+    y -= 16.0f + headingHeight;
+    [heading setFrame:NSMakeRect(40, y, WELCOME_W - 80, headingHeight)];
+    y -= 12.0f + bodyHeight;
+    [body setFrame:NSMakeRect(50, y, width, bodyHeight)];
+    y -= 18.0f;
+    if (showsAction) {
+        y -= 32.0f;
+        [action setFrame:NSMakeRect((WELCOME_W - 260) / 2, y, 260, 32)];
+        y -= 12.0f;
+    }
+    y -= 20.0f;
+    [result setFrame:NSMakeRect(50, y, width, 20)];
+    [content setNeedsDisplay:YES];
 }
 
 - (void)doAction:(id)sender

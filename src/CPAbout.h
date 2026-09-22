@@ -25,4 +25,12 @@
 // "Version 0.3 (build 8)".
 + (NSString *)versionLine;
 
+// Which WebKit is answering: the one bundled with the app, or the system's
+// own when the bundled one could not be loaded - on Tiger, until there is a
+// Tiger engine, that is what happens. The About window says so, and every
+// feedback report carries it.
++ (BOOL)usesBundledEngine;
++ (NSString *)engineVersion;
++ (NSString *)engineLine;
+
 @end

@@ -24,6 +24,7 @@
 #import "CPAbout.h"
 #import "CPFeedback.h"
 #import "CPWelcome.h"
+#import <ApplicationServices/ApplicationServices.h>
 #import "CPUpdateController.h"
 #import <WebKit/WebKit.h>
 
@@ -498,6 +499,14 @@ static size_t CPStatisticCount(Class statistics, NSString *name)
 
     if (CPDebugLogging() && [[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugMemory"])
         [NSTimer scheduledTimerWithTimeInterval:60.0 target:self selector:@selector(logMemoryStatistics:) userInfo:nil repeats:YES];
+
+    // The icon, set rather than left to LaunchServices. A copy that was
+    // dragged in by hand - onto an emulator, off a disk image - is not
+    // registered yet, and on Tiger it shows the generic application icon in
+    // the Dock until something registers it. Registering here fixes the
+    // Finder too from the next time it looks.
+    [NSApp setApplicationIconImage:CPApplicationIcon()];
+    LSRegisterURL((CFURLRef)[NSURL fileURLWithPath:[[NSBundle mainBundle] bundlePath]], false);
 
     // Before any page can ask for video.
     [CPMediaRelay start];

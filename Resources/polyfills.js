@@ -2087,4 +2087,51 @@
         }, true);
     })();
 
+    // HTMLImageElement.prototype.decode.
+    //
+    // It resolves once an image is loaded and decoded, and YouTube's image
+    // component waits on it before revealing a thumbnail: until then the
+    // picture sits at visibility:hidden. This engine is WebKit 604 and
+    // decode() arrived in 605, so the promise was never there to resolve,
+    // and every thumbnail on YouTube stayed hidden in a correctly sized box -
+    // titles, view counts and durations all present, pictures all missing.
+    //
+    // Resolving on load is what the method promises for a page's purposes;
+    // the decode itself happens when the image is drawn either way. A broken
+    // image rejects with EncodingError, as the specification says it should,
+    // so a page that handles the failure still sees one.
+    (function () {
+        var image = global.HTMLImageElement && global.HTMLImageElement.prototype;
+        if (!image || image.decode || !global.Promise)
+            return;
+        define(image, "decode", function () {
+            var img = this;
+            return new global.Promise(function (resolve, reject) {
+                function fail() {
+                    var error;
+                    try { error = new global.DOMException("The image could not be decoded.", "EncodingError"); }
+                    catch (e) { error = new Error("EncodingError"); }
+                    reject(error);
+                }
+                if (img.complete) {
+                    if (img.naturalWidth > 0)
+                        resolve();
+                    else if (img.src || img.currentSrc)
+                        fail();
+                    else
+                        resolve();      // no source yet: nothing to decode
+                    return;
+                }
+                function onLoad() { cleanup(); resolve(); }
+                function onError() { cleanup(); fail(); }
+                function cleanup() {
+                    img.removeEventListener("load", onLoad, false);
+                    img.removeEventListener("error", onError, false);
+                }
+                img.addEventListener("load", onLoad, false);
+                img.addEventListener("error", onError, false);
+            });
+        });
+    })();
+
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this);

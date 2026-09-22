@@ -108,15 +108,12 @@ static NSString *CPSystemJSON(void)
     sysctlbyname("hw.memsize", &memory, &length, NULL, 0);
     Gestalt(gestaltSystemVersionMajor, &major);
     Gestalt(gestaltSystemVersionMinor, &minor);
-    // Which WebKit answered: the bundled one, or the system's when the app
-    // has been moved out of /Applications and lost its DYLD_FRAMEWORK_PATH.
-    // That single fact explains a whole class of report.
-    engine = [[NSBundle mainBundle] pathForResource:@"WebCore" ofType:@"framework"
-                                        inDirectory:@"Frameworks"] != nil
-             || [[NSFileManager defaultManager] fileExistsAtPath:
-                    [[[NSBundle mainBundle] bundlePath]
-                        stringByAppendingPathComponent:@"Contents/Frameworks/WebCore.framework"]]
-             ? @"bundled" : @"system";
+    // Which WebKit answered - the one that loaded, not the one in the bundle.
+    // On Tiger the bundled engine may not load at all, and then every page is
+    // quietly the system's own from 2009; that one fact explains a whole
+    // class of report.
+    engine = [NSString stringWithFormat:@"%@ %@",
+              [CPAbout usesBundledEngine] ? @"bundled" : @"system", [CPAbout engineVersion]];
 
     return [NSString stringWithFormat:
         @"{\"os\":%@,\"arch\":%@,\"model\":%@,\"memoryMB\":%llu,\"screen\":%@,\"engine\":%@}",

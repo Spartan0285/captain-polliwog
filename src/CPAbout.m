@@ -5,6 +5,7 @@
 #import "CPAbout.h"
 #import "CPAppDelegate.h"
 #import "CPWelcome.h"
+#import <WebKit/WebKit.h>
 
 #define ABOUT_W 460.0
 #define ABOUT_H 430.0
@@ -64,6 +65,22 @@ static void CPDrawText(NSString *text, NSRect r, NSFont *font, NSColor *colour)
     [text drawInRect:r withAttributes:attributes];
 }
 
+// A paragraph at a given width, as tall as this system sets it - Tiger sets
+// Lucida Grande a little taller than Leopard does, so fixed boxes sized by
+// eye on one clip the last line on the other. Draws only when asked, so the
+// same pass can size the window before anything is on screen.
+static float CPParagraph(NSString *text, float x, float y, float width, NSFont *font, BOOL draw)
+{
+    NSDictionary *attributes = [NSDictionary dictionaryWithObjectsAndKeys:
+        font, NSFontAttributeName, [NSColor blackColor], NSForegroundColorAttributeName, nil];
+    float height = ceilf(NSHeight([text boundingRectWithSize:NSMakeSize(width, 10000.0f)
+                                                     options:NSStringDrawingUsesLineFragmentOrigin
+                                                  attributes:attributes]));
+    if (draw)
+        [text drawInRect:NSMakeRect(x, y, width, height + 2) withAttributes:attributes];
+    return height;
+}
+
 #pragma mark A button with a colour of its own
 
 // NSButton will not fill itself with an arbitrary colour on 10.4, so this
@@ -117,6 +134,7 @@ static void CPDrawText(NSString *text, NSRect r, NSFont *font, NSColor *colour)
 {
     NSImage *appIcon, *logo;
 }
+- (float)layout:(BOOL)draw width:(float)w;
 @end
 
 @implementation CPAboutView
@@ -143,52 +161,57 @@ static void CPDrawText(NSString *text, NSRect r, NSFont *font, NSColor *colour)
 // from the bottom of the window by hand.
 - (BOOL)isFlipped { return YES; }
 
-- (void)drawRect:(NSRect)dirty
+- (float)layout:(BOOL)draw width:(float)w
 {
-    float w = NSWidth([self bounds]), y = PAD;
+    float y = PAD, column = w - 2 * PAD;
     NSString *stage = [CPAbout stage];
 
-    [[NSColor whiteColor] set];
-    NSRectFill(dirty);
-
-    CPDrawImage(appIcon, NSMakeRect(PAD, y, 56, 56));
-    CPDrawText(@"Captain Polliwog", NSMakeRect(PAD + 70, y + 2, w - PAD - 70, 26),
-               [NSFont boldSystemFontOfSize:18], [NSColor blackColor]);
-    CPDrawText([CPAbout versionLine], NSMakeRect(PAD + 70, y + 30, w - PAD - 70, 16),
-               [NSFont systemFontOfSize:11], CPSubtleText());
-    if ([stage length] > 0) {
-        NSDictionary *attributes = [NSDictionary dictionaryWithObjectsAndKeys:
-            [NSFont boldSystemFontOfSize:10], NSFontAttributeName,
-            [NSColor whiteColor], NSForegroundColorAttributeName, nil];
-        NSSize size = [stage sizeWithAttributes:attributes];
-        NSRect badge = NSMakeRect(PAD + 70, y + 46, size.width + 16, 16);
-        [[NSColor colorWithCalibratedRed:0.80f green:0.35f blue:0.04f alpha:1] set];
-        [CPRoundRect(badge, 8.0f) fill];
-        [stage drawAtPoint:NSMakePoint(badge.origin.x + 8, badge.origin.y + 1) withAttributes:attributes];
+    if (draw) {
+        CPDrawImage(appIcon, NSMakeRect(PAD, y, 56, 56));
+        CPDrawText(@"Captain Polliwog", NSMakeRect(PAD + 70, y + 2, w - PAD - 70, 26),
+                   [NSFont boldSystemFontOfSize:18], [NSColor blackColor]);
+        CPDrawText([CPAbout versionLine], NSMakeRect(PAD + 70, y + 30, w - PAD - 70, 16),
+                   [NSFont systemFontOfSize:11], CPSubtleText());
+        // Which WebKit is actually answering. The bundled one reads the
+        // modern web; if this says the Mac's own, pages will struggle, and
+        // that one line explains why before anyone has to ask.
+        CPDrawText([CPAbout engineLine], NSMakeRect(PAD + 70, y + 46, w - PAD - 70, 16),
+                   [NSFont systemFontOfSize:11],
+                   [CPAbout usesBundledEngine] ? CPSubtleText()
+                       : [NSColor colorWithCalibratedRed:0.72f green:0.20f blue:0.05f alpha:1]);
+        if ([stage length] > 0) {
+            NSDictionary *attributes = [NSDictionary dictionaryWithObjectsAndKeys:
+                [NSFont boldSystemFontOfSize:10], NSFontAttributeName,
+                [NSColor whiteColor], NSForegroundColorAttributeName, nil];
+            NSSize size = [stage sizeWithAttributes:attributes];
+            NSRect badge = NSMakeRect(PAD + 70, y + 64, size.width + 16, 16);
+            [[NSColor colorWithCalibratedRed:0.80f green:0.35f blue:0.04f alpha:1] set];
+            [CPRoundRect(badge, 8.0f) fill];
+            [stage drawAtPoint:NSMakePoint(badge.origin.x + 8, badge.origin.y + 1) withAttributes:attributes];
+        }
     }
-    y += 76;
+    y += 94;
 
-    [[NSColor colorWithCalibratedWhite:0.87f alpha:1] set];
-    NSRectFill(NSMakeRect(PAD, y, w - 2 * PAD, 1));
+    if (draw) {
+        [[NSColor colorWithCalibratedWhite:0.87f alpha:1] set];
+        NSRectFill(NSMakeRect(PAD, y, column, 1));
+    }
     y += 14;
 
-    CPDrawText(@"This is an alpha build. Expect rough edges, and please say when you find one.",
-               NSMakeRect(PAD, y, w - 2 * PAD, 32), [NSFont boldSystemFontOfSize:11], [NSColor blackColor]);
-    y += 34;
+    y += CPParagraph(@"This is an alpha build. Expect rough edges, and please say when you find one.",
+                     PAD, y, column, [NSFont boldSystemFontOfSize:11], draw) + 10;
 
     // What it is not, plainly and early.
-    CPDrawText(@"Captain Polliwog is not made by Apple and is not Safari. It is built on "
-                "WebKit, the same engine Safari uses, brought forward to a version that can "
-                "still read the modern web - and it will not always agree with the browser "
-                "on your other computer.",
-               NSMakeRect(PAD, y, w - 2 * PAD, 64), [NSFont systemFontOfSize:11], [NSColor blackColor]);
-    y += 66;
+    y += CPParagraph(@"Captain Polliwog is not made by Apple and is not Safari. It is built on "
+                      "WebKit, the same engine Safari uses, brought forward to a version that can "
+                      "still read the modern web - and it will not always agree with the browser "
+                      "on your other computer.",
+                     PAD, y, column, [NSFont systemFontOfSize:11], draw) + 10;
 
-    CPDrawText(@"Cytrus Software (a.k.a. Cytrus Retro) is a personal side project by me, "
-                "Adam Cipoletti, a Creative Director and Career Coach. You can find more of "
-                "my vintage software and hardware projects at cytrusretro.com.",
-               NSMakeRect(PAD, y, w - 2 * PAD, 58), [NSFont systemFontOfSize:11], [NSColor blackColor]);
-    y += 56;
+    y += CPParagraph(@"Cytrus Software (a.k.a. Cytrus Retro) is a personal side project by me, "
+                      "Adam Cipoletti, a Creative Director and Career Coach. You can find more of "
+                      "my vintage software and hardware projects at cytrusretro.com.",
+                     PAD, y, column, [NSFont systemFontOfSize:11], draw) + 14;
 
     // The lockup, centred, at the artwork's own proportions.
     if (logo != nil) {
@@ -196,8 +219,18 @@ static void CPDrawText(NSString *text, NSRect r, NSFont *font, NSColor *colour)
         float logoWidth = 260.0f;
         float logoHeight = size.width > 0 ? logoWidth * size.height / size.width : 68.0f;
 
-        CPDrawImage(logo, NSMakeRect((w - logoWidth) / 2, y, logoWidth, logoHeight));
+        if (draw)
+            CPDrawImage(logo, NSMakeRect((w - logoWidth) / 2, y, logoWidth, logoHeight));
+        y += logoHeight;
     }
+    return y;
+}
+
+- (void)drawRect:(NSRect)dirty
+{
+    [[NSColor whiteColor] set];
+    NSRectFill(dirty);
+    [self layout:YES width:NSWidth([self bounds])];
 }
 
 @end
@@ -227,6 +260,35 @@ static CPAbout *sharedAbout = nil;
             version != nil ? version : @"?", build != nil ? build : @"?"];
 }
 
+// The WebKit that was actually loaded, not the one in the bundle: on Tiger
+// the bundled engine may not load, and then everything is quietly the
+// system's own, from 2009.
++ (BOOL)usesBundledEngine
+{
+    NSString *loaded = [[NSBundle bundleForClass:[WebView class]] bundlePath];
+    return [loaded hasPrefix:[[NSBundle mainBundle] bundlePath]];
+}
+
+// "WebKit 604.5.6", from the framework's own version. Apple's builds put the
+// operating system in front as a fourth digit - 5604 is WebKit 604 for 10.5,
+// 4533 is WebKit 533 for 10.4 - and that digit is not part of the answer.
++ (NSString *)engineVersion
+{
+    NSString *raw = [[NSBundle bundleForClass:[WebView class]] objectForInfoDictionaryKey:@"CFBundleVersion"];
+    NSMutableArray *parts = [NSMutableArray arrayWithArray:[raw componentsSeparatedByString:@"."]];
+
+    if ([parts count] > 0 && [[parts objectAtIndex:0] length] == 4)
+        [parts replaceObjectAtIndex:0 withObject:[[parts objectAtIndex:0] substringFromIndex:1]];
+    return [parts componentsJoinedByString:@"."];
+}
+
++ (NSString *)engineLine
+{
+    return [CPAbout usesBundledEngine]
+        ? [NSString stringWithFormat:@"Engine: WebKit %@, bundled", [self engineVersion]]
+        : [NSString stringWithFormat:@"Engine: WebKit %@, this Mac's own - older", [self engineVersion]];
+}
+
 + (void)show
 {
     if (sharedAbout == nil)
@@ -242,20 +304,29 @@ static CPAbout *sharedAbout = nil;
         CPColorButton *cytrus, *coach;
         float buttonWidth = (ABOUT_W - 2 * PAD - 16) / 2;
 
+        float height;
+
+        // Measured before the window exists: the text above the buttons is
+        // as tall as this system sets it, and the window follows.
+        view = [[[CPAboutView alloc] initWithFrame:frame] autorelease];
+        height = [view layout:NO width:ABOUT_W] + 24 + 34 + 24;
+        if (height < ABOUT_H)
+            height = ABOUT_H;
+        frame = NSMakeRect(0, 0, ABOUT_W, height);
+        [view setFrame:frame];
+
         window = [[NSWindow alloc] initWithContentRect:frame
                       styleMask:(NSTitledWindowMask | NSClosableWindowMask)
                         backing:NSBackingStoreBuffered defer:NO];
         [window setTitle:@"About Captain Polliwog"];
         [window setReleasedWhenClosed:NO];
-
-        view = [[[CPAboutView alloc] initWithFrame:frame] autorelease];
         [window setContentView:view];
 
         // The view draws top-down, which places subviews top-down too, so a
         // button at y = 24 would land over the icon. Measured from the
         // bottom by hand.
         cytrus = [[[CPColorButton alloc] initWithFrame:
-                      NSMakeRect(PAD, ABOUT_H - 24 - 34, buttonWidth, 34)] autorelease];
+                      NSMakeRect(PAD, height - 24 - 34, buttonWidth, 34)] autorelease];
         [cytrus setBordered:NO];
         [cytrus setTitle:@"cytrusretro.com"];
         [cytrus setFill:CPLime() ink:CPLimeInk()];
@@ -264,7 +335,7 @@ static CPAbout *sharedAbout = nil;
         [view addSubview:cytrus];
 
         coach = [[[CPColorButton alloc] initWithFrame:
-                     NSMakeRect(PAD + buttonWidth + 16, ABOUT_H - 24 - 34, buttonWidth, 34)] autorelease];
+                     NSMakeRect(PAD + buttonWidth + 16, height - 24 - 34, buttonWidth, 34)] autorelease];
         [coach setBordered:NO];
         [coach setTitle:@"amcreativecoach.com"];
         [coach setFill:CPPurple() ink:[NSColor whiteColor]];

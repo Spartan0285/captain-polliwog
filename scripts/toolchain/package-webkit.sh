@@ -20,7 +20,18 @@ OUT=/Users/adam/polliwog-build/stage/$VARIANT
 FW=$OUT/Frameworks
 INT=/opt/ppc/bin/powerpc-apple-darwin9-install_name_tool
 SYS=/System/Library/Frameworks
-VERSION=5604.5.6  # Leopard WebKit's style: an OS digit, then WebKit's version
+# The oldest system this engine runs on, written into every framework's
+# Info.plist as LSMinimumSystemVersion. The app reads it before loading
+# anything (src/main.m) and only switches to the bundled engine when it is one
+# this Mac can run: pointing Tiger at a Leopard engine would stop the browser
+# launching at all, which is worse than the system WebKit it falls back to.
+case $VARIANT in
+    tiger-*) MINIMUM=10.4 ;;
+    *)       MINIMUM=10.5 ;;
+esac
+# Apple's style: an OS digit, then WebKit's version - 4604 for 10.4, 5604 for
+# 10.5. The About window strips the first digit to show "WebKit 604.5.6".
+VERSION=${MINIMUM#10.}604.5.6
 
 rm -rf "$OUT" && mkdir -p "$FW"
 
@@ -51,6 +62,8 @@ framework() {
 	<string>${VERSION%%.*}</string>
 	<key>CFBundleVersion</key>
 	<string>$VERSION</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$MINIMUM</string>
 </dict>
 </plist>
 EOF
