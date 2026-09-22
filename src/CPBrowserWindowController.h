@@ -30,6 +30,11 @@
     CPAddressBar        *addressBar;
     NSTextField         *addressField;      // the address bar's text
     NSTextField         *statusField;
+    NSString            *linkStatus;        // the link under the pointer, which comes first
+    NSTimer             *activityTimer;     // while Show Page Activity is on
+    NSTimeInterval       lastTick;
+    NSTimeInterval       busySeconds;       // the last time the page held everything up
+    NSTimeInterval       busyNotedAt;
     NSProgressIndicator *progressBar;
     BOOL                 selectedWasLoading;
 }

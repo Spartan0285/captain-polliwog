@@ -35,8 +35,14 @@
     NSDate   *loadStarted;
     // With debug logging on: what each resource request is for, until it
     // finishes, so a page that stops making progress can say what it waits on.
+    // With Show Page Activity on, the same list says what is still coming.
     NSMutableDictionary *pendingResources;
     unsigned  nextResourceID;
+    unsigned  firstResourceID;      // this page's first; earlier ones were the last page's
+    unsigned  finishedResources;
+    unsigned  failedResources;
+    BOOL      committed;            // the page has started to arrive
+    NSTimeInterval loadSeconds;     // how long the page took, once it has
     // Reader: showing a page's article on its own (see CPReader).
     id        reader;           // a CPReader fetching the page, if any
     BOOL      showingReader;
@@ -64,6 +70,11 @@
 - (NSData *)pageData;          // the main frame's bytes as they came
 - (BOOL)isLoading;
 - (double)progress;
+
+// What the page is doing, for the status bar: "Contacting example.com...",
+// "Loading example.com: 12 of 30 items", "Still fetching 3 items from
+// i.ytimg.com", "Done: 64 items in 9.2 seconds". Empty for a blank tab.
+- (NSString *)activityText;
 - (BOOL)canGoBack;
 - (BOOL)canGoForward;
 

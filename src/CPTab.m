@@ -74,11 +74,13 @@ static NSString *CPEscapeHTML(NSString *text)
         [webView setPreferences:preferences];
         [self applyPreferencesForURL:URL];
     }
-    if (CPDebugLogging()) {
-        [webView setResourceLoadDelegate:self];
-        if (pendingResources == nil)
-            pendingResources = [[NSMutableDictionary alloc] init];
-    }
+    // Always: a page that has "finished" goes on fetching (thumbnails, data
+    // for its scripts) with nothing on screen to say so, and Show Page
+    // Activity can be turned on at any time. A dictionary entry per request
+    // in flight costs next to nothing.
+    [webView setResourceLoadDelegate:self];
+    if (pendingResources == nil)
+        pendingResources = [[NSMutableDictionary alloc] init];
     [CPScriptWatchdog installForWebView:webView];
 
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(progressChanged:)
@@ -529,7 +531,7 @@ static NSString *CPEscapeHTML(NSString *text)
         progress = 0.0;
     else
         progress = [webView estimatedProgress];
-    if (pendingResources != nil) {
+    if (CPDebugLogging()) {
         [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(reportStall) object:nil];
         if (!finished)
             [self performSelector:@selector(reportStall) withObject:nil afterDelay:CPStallReportDelay];
@@ -550,7 +552,57 @@ static NSString *CPEscapeHTML(NSString *text)
           [[waiting subarrayWithRange:NSMakeRange(0, MIN([waiting count], 8U))] componentsJoinedByString:@" "]);
 }
 
-#pragma mark WebResourceLoadDelegate (debug logging only)
+#pragma mark Activity
+
+static NSString *CPHostOf(NSString *address)
+{
+    NSString *host = [[NSURL URLWithString:address] host];
+    if ([host hasPrefix:@"www."])
+        host = [host substringFromIndex:4];
+    return [host length] > 0 ? host : nil;
+}
+
+static NSString *CPItems(unsigned count)
+{
+    return [NSString stringWithFormat:(count == 1 ? @"%u item" : @"%u items"), count];
+}
+
+- (NSString *)activityText
+{
+    NSString *site = CPHostOf([URL absoluteString]);
+    unsigned pending = [pendingResources count];
+    unsigned started = nextResourceID >= firstResourceID ? nextResourceID - firstResourceID + 1 : 0;
+    NSString *failed = failedResources > 0
+        ? [NSString stringWithFormat:@", %u failed", failedResources] : @"";
+
+    if (webView == nil || URL == nil || site == nil)
+        return @"";
+    if (reader != nil)
+        return [NSString stringWithFormat:@"Fetching the article from %@...", site];
+    if (loading && !committed)
+        return [NSString stringWithFormat:@"Contacting %@...", site];
+    if (loading)
+        return [NSString stringWithFormat:@"Loading %@: %u of %@%@", site,
+                finishedResources, CPItems(started), failed];
+    if (pending > 0) {
+        // The request that has waited longest is the one worth naming.
+        NSEnumerator *keys = [pendingResources keyEnumerator];
+        NSNumber *key, *oldest = nil;
+        NSString *from;
+        while ((key = [keys nextObject]) != nil)
+            if (oldest == nil || [key unsignedIntValue] < [oldest unsignedIntValue])
+                oldest = key;
+        from = CPHostOf([pendingResources objectForKey:oldest]);
+        return [NSString stringWithFormat:@"Still fetching %@%@%@ (%u done%@)", CPItems(pending),
+                from != nil ? @" from " : @"", from != nil ? from : @"", finishedResources, failed];
+    }
+    if (loadSeconds > 0.0)
+        return [NSString stringWithFormat:@"Done: %@ in %.1f seconds%@", CPItems(finishedResources),
+                loadSeconds, failed];
+    return [NSString stringWithFormat:@"Done: %@%@", CPItems(finishedResources), failed];
+}
+
+#pragma mark WebResourceLoadDelegate
 
 - (id)webView:(WebView *)sender identifierForInitialRequest:(NSURLRequest *)request
 fromDataSource:(WebDataSource *)dataSource
@@ -572,6 +624,8 @@ fromDataSource:(WebDataSource *)dataSource
 
 - (void)webView:(WebView *)sender resource:(id)identifier didFinishLoadingFromDataSource:(WebDataSource *)dataSource
 {
+    if ([pendingResources objectForKey:identifier] != nil && [identifier unsignedIntValue] >= firstResourceID)
+        finishedResources++;
     [pendingResources removeObjectForKey:identifier];
 }
 
@@ -579,7 +633,9 @@ fromDataSource:(WebDataSource *)dataSource
  fromDataSource:(WebDataSource *)dataSource
 {
     NSString *address = [pendingResources objectForKey:identifier];
-    if (address != nil && [error code] != NSURLErrorCancelled)
+    if (address != nil && [error code] != NSURLErrorCancelled && [identifier unsignedIntValue] >= firstResourceID)
+        failedResources++;
+    if (address != nil && [error code] != NSURLErrorCancelled && CPDebugLogging())
         NSLog(@"Captain Polliwog: resource failed %@ (%@ %d)", address, [error domain], [error code]);
     [pendingResources removeObjectForKey:identifier];
 }
@@ -592,6 +648,10 @@ fromDataSource:(WebDataSource *)dataSource
         return;
     [loadStarted release];
     loadStarted = [[NSDate date] retain];
+    firstResourceID = nextResourceID + 1;
+    finishedResources = failedResources = 0;
+    committed = NO;
+    loadSeconds = 0.0;
     [self setURL:[[[frame provisionalDataSource] request] URL]];
     [self setLoading:YES];
     [self changed];
@@ -606,6 +666,7 @@ fromDataSource:(WebDataSource *)dataSource
     // Anything that replaces the reader page (a link, Back) leaves Reader.
     showingReader = readerLoadPending;
     readerLoadPending = NO;
+    committed = YES;
     warningLoadPending = NO;
     if (CPDebugLogging())
         NSLog(@"Captain Polliwog: committed %@%@", [[[frame dataSource] request] URL], showingReader ? @" (reader)" : @"");
@@ -642,6 +703,8 @@ fromDataSource:(WebDataSource *)dataSource
     if (!showingReader)
         [CPFavicons loadIconForPage:sender URL:URL target:self action:@selector(setFavicon:)];
 
+    if (loadStarted != nil)
+        loadSeconds = -[loadStarted timeIntervalSinceNow];
     if (CPDebugLogging() && loadStarted != nil)
         NSLog(@"Captain Polliwog: page-load %.1fs %@",
               -[loadStarted timeIntervalSinceNow], [[[frame dataSource] request] URL]);

@@ -66,6 +66,12 @@ typedef enum {
 // pointer is on. The player itself is chosen in CPExternalPlayer.
 - (BOOL)showsVideoPlayButton;
 - (void)setShowsVideoPlayButton:(BOOL)flag;
+
+// View > Show Page Activity: the status bar says what the page is doing -
+// connecting, how many of its pieces have arrived, which site it is still
+// waiting on, and when its scripts held everything up. Off by default.
+- (BOOL)showsPageActivity;
+- (void)setShowsPageActivity:(BOOL)flag;
 - (void)setAutoplaysVideo:(BOOL)flag;
 - (BOOL)showsAnimatedImages;
 - (void)setShowsAnimatedImages:(BOOL)flag;

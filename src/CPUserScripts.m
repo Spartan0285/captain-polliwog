@@ -54,7 +54,7 @@ typedef void (*CPAddUserScriptFunction)(id, SEL, NSString *, id, NSString *, NSU
         NSString *flags = [NSString stringWithFormat:
             @"window.__polliwog = { playButton: %@, playerName: \"%@\", autoplay: %@ };",
             ([[CPSettings sharedSettings] showsVideoPlayButton] && player != nil) ? @"true" : @"false",
-            [name stringByReplacingOccurrencesOfString:@"\"" withString:@""],
+            [[name componentsSeparatedByString:@"\""] componentsJoinedByString:@""],   // Tiger has no -stringByReplacing...
             [[CPSettings sharedSettings] autoplaysVideo] ? @"true" : @"false"];
         ((CPAddUserScriptFunction)[WebView methodForSelector:addUserScript])(
             [WebView class], addUserScript, groupName, world, flags,

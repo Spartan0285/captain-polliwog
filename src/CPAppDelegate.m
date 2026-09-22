@@ -175,6 +175,8 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     CPAddItem(menu, @"Make Text Bigger", @selector(makeTextLarger:), @"+");
     CPAddItem(menu, @"Make Text Smaller", @selector(makeTextSmaller:), @"-");
     [menu addItem:[NSMenuItem separatorItem]];
+    CPAddItem(menu, @"Show Page Activity", @selector(togglePageActivity:), nil);
+    [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Reader", @selector(toggleReader:), @"R");
     // Retitled in validateMenuItem: to name the player that will be used.
     CPAddItem(menu, @"Play Video in Media Player", @selector(playVideoExternally:), @"E");
@@ -315,8 +317,18 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
         [privacy setEnabled:YES];
 }
 
+- (IBAction)togglePageActivity:(id)sender
+{
+    CPSettings *settings = [CPSettings sharedSettings];
+    [settings setShowsPageActivity:![settings showsPageActivity]];
+}
+
 - (BOOL)validateMenuItem:(NSMenuItem *)item
 {
+    if ([item action] == @selector(togglePageActivity:)) {
+        [item setState:([[CPSettings sharedSettings] showsPageActivity] ? NSOnState : NSOffState)];
+        return YES;
+    }
     if ([item action] == @selector(togglePrivateBrowsing:)) {
         [item setState:([[CPPrivateBrowsing sharedPrivateBrowsing] isEnabled] ? NSOnState : NSOffState)];
         return YES;
@@ -439,6 +451,11 @@ static size_t CPStatisticCount(Class statistics, NSString *name)
 
 // One place for every way a page arrives from outside: an Apple Event, a
 // dropped file, or a document opened in the Finder.
+- (void)showDebugWelcome:(NSNumber *)step
+{
+    [CPWelcome showAtStep:[step intValue] > 0 ? [step intValue] : 1];
+}
+
 // The panel CPDebugPanel opened, rather than the browser window behind it.
 - (void)writeDebugPanelSnapshot
 {
@@ -534,7 +551,8 @@ static size_t CPStatisticCount(Class statistics, NSString *name)
     if (debugURL == nil)
         [CPWelcome showIfNeeded];
     // Testing aid: CPDebugPanel opens a window at launch, for the test
-    // scripts to photograph ("preferences", "downloads", "bookmarks").
+    // scripts to photograph ("preferences", "downloads", "bookmarks",
+    // "about", "welcome1" to "welcome4").
     {
         NSString *panel = [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugPanel"];
         if ([panel length] > 0 && CPDebugSnapshotPath() != nil)
@@ -549,6 +567,12 @@ static size_t CPStatisticCount(Class statistics, NSString *name)
         else if ([panel isEqualToString:@"bookmarks"])
             [[CPBookmarksController sharedController] performSelector:@selector(showWindow:)
                                                            withObject:self afterDelay:1.0];
+        else if ([panel isEqualToString:@"about"])
+            [CPAbout performSelector:@selector(show) withObject:nil afterDelay:1.0];
+        else if ([panel hasPrefix:@"welcome"])
+            [self performSelector:@selector(showDebugWelcome:)
+                       withObject:[NSNumber numberWithInt:[[panel substringFromIndex:7] intValue]]
+                       afterDelay:1.0];
     }
 
     // Testing aid: CPDebugTabs, an array of addresses, opens one tab each.

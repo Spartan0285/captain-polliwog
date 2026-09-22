@@ -247,12 +247,67 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 }
 
 // Mouse-over fires constantly; only redraw the status bar when the text changes.
+// The link under the pointer wins; otherwise, with Show Page Activity on,
+// what the page is doing.
 - (void)setStatusText:(NSString *)text
 {
+    if ([text length] == 0 && activityTimer != nil) {
+        text = [selectedTab activityText];
+        if (busySeconds > 0.0 && [NSDate timeIntervalSinceReferenceDate] - busyNotedAt < 5.0)
+            text = [NSString stringWithFormat:@"%@  -  busy for %.1f seconds running the page",
+                    text, busySeconds];
+    }
     if (text == nil)
         text = @"";
-    if (![[statusField stringValue] isEqualToString:text])
+    if (![[statusField stringValue] isEqualToString:text]) {
         [statusField setStringValue:text];
+        if (CPDebugLogging() && linkStatus == nil)
+            NSLog(@"Captain Polliwog: status %@", text);
+    }
+}
+
+- (void)refreshStatus
+{
+    [self setStatusText:linkStatus];
+}
+
+// Four times a second, while Show Page Activity is on. Also a stopwatch: the
+// page's scripts and layout run on this same thread, so when a tick arrives
+// late, the page held everything up for that long - on a G3 that is most
+// often why a page sits there grey, and worth saying.
+- (void)activityTick:(NSTimer *)timer
+{
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    NSTimeInterval gap = now - lastTick;
+
+    // Not the machine asleep, or the first tick.
+    if (lastTick > 0.0 && gap > 1.0 && gap < 120.0) {
+        busySeconds = gap;
+        busyNotedAt = now;
+    }
+    lastTick = now;
+    [self refreshStatus];
+}
+
+- (void)settingsChanged:(NSNotification *)notification
+{
+    BOOL wanted = [[CPSettings sharedSettings] showsPageActivity];
+
+    if (wanted && activityTimer == nil) {
+        activityTimer = [NSTimer timerWithTimeInterval:0.25 target:self selector:@selector(activityTick:)
+                                              userInfo:nil repeats:YES];
+        // Menus and live scrolling run the loop in other modes; a tick missed
+        // there would be taken for a busy page.
+        [[NSRunLoop currentRunLoop] addTimer:activityTimer forMode:NSDefaultRunLoopMode];
+        [[NSRunLoop currentRunLoop] addTimer:activityTimer forMode:NSEventTrackingRunLoopMode];
+        [[NSRunLoop currentRunLoop] addTimer:activityTimer forMode:NSModalPanelRunLoopMode];
+        lastTick = 0.0;
+        busySeconds = 0.0;
+    } else if (!wanted && activityTimer != nil) {
+        [activityTimer invalidate];
+        activityTimer = nil;
+    }
+    [self refreshStatus];
 }
 
 - (void)setAddressFromURL:(NSURL *)url
@@ -374,6 +429,9 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     downloadsProgressStep = -2;
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(downloadsChanged:)
                                                  name:CPDownloadDidChangeNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(settingsChanged:)
+                                                 name:CPSettingsDidChangeNotification object:nil];
+    [self settingsChanged:nil];
     return self;
 }
 
@@ -383,6 +441,7 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [tabs release];
     [closedTabURLs release];
+    [linkStatus release];
     if (!findBarVisible)
         [findBar release];
     [super dealloc];
@@ -519,8 +578,11 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 
 - (void)tab:(CPTab *)tab showStatusText:(NSString *)text
 {
-    if (tab == selectedTab)
-        [self setStatusText:text];
+    if (tab != selectedTab)
+        return;
+    [linkStatus release];
+    linkStatus = [text copy];
+    [self setStatusText:text];
 }
 
 - (CPTab *)tab:(CPTab *)tab openTabWithRequest:(NSURLRequest *)request inBackground:(BOOL)background
@@ -1188,6 +1250,10 @@ static NSMenuItem *CPMenuItem(NSMenu *menu, NSString *title, SEL action, id targ
     unsigned index;
 
     [NSObject cancelPreviousPerformRequestsWithTarget:self];
+    // The timer holds on to this controller; it has to go for it to.
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:CPSettingsDidChangeNotification object:nil];
+    [activityTimer invalidate];
+    activityTimer = nil;
     for (index = 0; index < [tabs count]; index++)
         [[tabs objectAtIndex:index] close];
     [tabs removeAllObjects];

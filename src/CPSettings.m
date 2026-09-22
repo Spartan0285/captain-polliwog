@@ -25,6 +25,7 @@ static NSString * const CPBlocksAdsKey         = @"CPBlocksAdsAndTrackers";
 static NSString * const CPPlaysVideoKey        = @"CPPlaysVideo";
 static NSString * const CPAutoplayKey          = @"CPAutoplaysVideo";
 static NSString * const CPPlayButtonKey        = @"CPShowsVideoPlayButton";
+static NSString * const CPPageActivityKey      = @"CPShowsPageActivity";
 static NSString * const CPAnimatedImagesKey    = @"CPAnimatedImages";
 static NSString * const CPWebGLKey             = @"CPWebGL";
 static NSString * const CPStopsLongScriptsKey  = @"CPStopsLongScripts";
@@ -205,6 +206,7 @@ CPBooleanSetting(blocksAdsAndTrackers, setBlocksAdsAndTrackers, CPBlocksAdsKey)
 CPBooleanSetting(playsVideo, setPlaysVideo, CPPlaysVideoKey)
 CPBooleanSetting(autoplaysVideo, setAutoplaysVideo, CPAutoplayKey)
 CPBooleanSetting(showsVideoPlayButton, setShowsVideoPlayButton, CPPlayButtonKey)
+CPBooleanSetting(showsPageActivity, setShowsPageActivity, CPPageActivityKey)
 CPBooleanSetting(showsAnimatedImages, setShowsAnimatedImages, CPAnimatedImagesKey)
 CPBooleanSetting(webGLEnabled, setWebGLEnabled, CPWebGLKey)
 CPBooleanSetting(stopsLongScripts, setStopsLongScripts, CPStopsLongScriptsKey)
