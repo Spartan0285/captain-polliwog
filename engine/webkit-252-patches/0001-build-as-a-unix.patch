@@ -1,0 +1,50 @@
+WebKit 2.52 for PowerPC Mac OS X: build as a Unix, not as Cocoa.
+
+POLLIWOG_DARWIN_AS_UNIX makes the JSCOnly port take the generic Unix
+implementations on Darwin. Tiger and Leopard have neither the frameworks
+nor the system calls the Cocoa files use, and the released tarball does not
+ship wtf/mac or wtf/cocoa in any case.
+
+diff -ur a/Source/WTF/wtf/CMakeLists.txt b/Source/WTF/wtf/CMakeLists.txt
+--- a/Source/WTF/wtf/CMakeLists.txt	2026-09-22 16:00:54
++++ b/Source/WTF/wtf/CMakeLists.txt	2026-09-22 16:01:12
+@@ -701,6 +701,9 @@
+         win/SoftLinking.h
+         win/Win32Handle.h
+     )
++elseif (APPLE AND POLLIWOG_DARWIN_AS_UNIX)
++    # No os_log (10.12), no CoreFoundation-flavoured WTF: see
++    # PlatformJSCOnly.cmake in this directory.
+ elseif (APPLE)
+     list(APPEND WTF_SOURCES
+         darwin/OSLogPrintStream.mm
+diff -ur a/Source/WTF/wtf/PlatformJSCOnly.cmake b/Source/WTF/wtf/PlatformJSCOnly.cmake
+--- a/Source/WTF/wtf/PlatformJSCOnly.cmake	2026-09-22 16:00:53
++++ b/Source/WTF/wtf/PlatformJSCOnly.cmake	2026-09-22 16:01:12
+@@ -69,6 +69,17 @@
+         win/MemoryFootprintWin.cpp
+         win/MemoryPressureHandlerWin.cpp
+     )
++elseif (APPLE AND POLLIWOG_DARWIN_AS_UNIX)
++    # PowerPC Mac OS X: this is Darwin, but Darwin of 2005-07, without the
++    # dispatch, XPC and os_log the Cocoa files are written against - and the
++    # released tarball does not carry wtf/mac or wtf/cocoa at all. The
++    # generic implementations every new port starts from are used instead.
++    # Mach exception handling goes with them: it is the JIT's fault handler,
++    # and there is no PowerPC JIT.
++    list(APPEND WTF_SOURCES
++        generic/MemoryFootprintGeneric.cpp
++        generic/MemoryPressureHandlerGeneric.cpp
++    )
+ elseif (APPLE)
+     file(COPY mac/MachExceptions.defs DESTINATION ${WTF_DERIVED_SOURCES_DIR})
+     add_custom_command(
+diff -ur a/Source/bmalloc/PlatformJSCOnly.cmake b/Source/bmalloc/PlatformJSCOnly.cmake
+--- a/Source/bmalloc/PlatformJSCOnly.cmake	2026-09-22 16:00:54
++++ b/Source/bmalloc/PlatformJSCOnly.cmake	2026-09-22 16:01:12
+@@ -1,4 +1,4 @@
+-if (APPLE)
++if (APPLE AND NOT POLLIWOG_DARWIN_AS_UNIX)
+     list(APPEND bmalloc_SOURCES
+         bmalloc/ProcessCheck.mm
+     )

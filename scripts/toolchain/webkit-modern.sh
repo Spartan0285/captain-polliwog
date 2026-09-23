@@ -19,7 +19,9 @@ VERSION=${VERSION:-2.52.6}
 step=${1:?usage: webkit-modern.sh configure|build|shell [args]}
 shift
 
-$LIMACTL shell $VM -- env STEP="$step" VERSION="$VERSION" ARGS="$*" bash -s <<'VMSCRIPT'
+REPO=$(cd "$(dirname "$0")/../.." && pwd)
+
+$LIMACTL shell $VM -- env STEP="$step" VERSION="$VERSION" ARGS="$*" REPO="$REPO" bash -s <<'VMSCRIPT'
 set -e
 PREFIX=/opt/ppc-modern
 CMAKE=/opt/cmake/bin/cmake
@@ -32,6 +34,13 @@ if [ ! -d "$SRC" ]; then
     wget -q -O sums https://webkitgtk.org/releases/webkitgtk-$VERSION.tar.xz.sums
     grep -A3 "^webkitgtk-$VERSION.tar.xz " sums | awk '/sha256sum:/ {print $2"  webkitgtk-'"$VERSION"'.tar.xz"}' | sha256sum -c
     tar -xJf webkitgtk-$VERSION.tar.xz
+    # What this port changes in the released source, one patch per subject,
+    # as with the 604 engine (engine/webkit-252-patches).
+    for patch in "$REPO"/engine/webkit-252-patches/*.patch; do
+        [ -f "$patch" ] || continue
+        echo "applying $(basename "$patch")"
+        ( cd webkitgtk-$VERSION && patch -p1 --forward -i "$patch" )
+    done
 fi
 
 case "$STEP" in
@@ -43,6 +52,7 @@ configure)
     $CMAKE -S "$SRC" -B . -G Ninja \
         -DCMAKE_TOOLCHAIN_FILE=$PREFIX/share/ppc-darwin-modern.cmake \
         -DPORT=JSCOnly -DCMAKE_BUILD_TYPE=Release \
+        -DPOLLIWOG_DARWIN_AS_UNIX=ON \
         -DENABLE_STATIC_JSC=ON -DENABLE_C_LOOP=ON -DENABLE_JIT=OFF \
         -DENABLE_REMOTE_INSPECTOR=OFF -DUSE_SYSTEM_MALLOC=ON \
         -DICU_INCLUDE_DIR=$PREFIX/icu/include \

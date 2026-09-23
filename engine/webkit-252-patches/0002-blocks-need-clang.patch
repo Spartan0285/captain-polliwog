@@ -1,0 +1,29 @@
+Objective-C blocks are a Clang extension, not a Darwin one.
+
+WTF::Function deletes a block constructor on __APPLE__, which the PowerPC
+compiler (GCC 14) cannot parse. __BLOCKS__ is what says whether the
+compiler has blocks at all.
+
+--- a/Source/WTF/wtf/Function.h	2026-09-22 16:07:30
++++ b/Source/WTF/wtf/Function.h	2026-09-22 16:07:30
+@@ -84,7 +84,10 @@
+     Function(FunctionType f)
+         : m_callableWrapper(makeUnique<Detail::CallableWrapper<FunctionType, Out, In...>>(std::forward<FunctionType>(f))) { }
+ 
+-#if defined(__APPLE__)
++#if defined(__APPLE__) && defined(__BLOCKS__)
++    // Blocks are a Clang extension. On Darwin WebKit takes them for granted,
++    // but the PowerPC compiler is GCC, which has never had them; __BLOCKS__
++    // is what says whether this compiler does.
+     // Always use C++ lambdas to create a WTF::Function in Objective-C++.
+     // Always use Swift closures (implicitly as Objective-C blocks) to create a WTF::Function in Swift.
+ #ifndef __swift__
+@@ -95,7 +98,7 @@
+     {
+     }
+ #endif
+-#endif // defined(__APPLE__)
++#endif // defined(__APPLE__) && defined(__BLOCKS__)
+ 
+     Out operator()(In... in) const
+     {

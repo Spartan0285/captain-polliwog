@@ -1,0 +1,19 @@
+CPU(PPC) could never be defined.
+
+The 32-bit PowerPC test asks for CPU(BIG_ENDIAN), which this same header
+defines 230 lines further down, so it was always false and the build
+stopped at "#error Unknown Architecture". The 64-bit tests above it ask
+__BYTE_ORDER__ directly; this makes the 32-bit one match.
+
+--- a/Source/WTF/wtf/PlatformCPU.h	2026-09-22 16:07:59
++++ b/Source/WTF/wtf/PlatformCPU.h	2026-09-22 16:08:13
+@@ -90,7 +90,8 @@
+     || defined(_M_PPC)         \
+     || defined(__PPC))         \
+     && !CPU(PPC64)             \
+-    && CPU(BIG_ENDIAN)
++    && defined(__BYTE_ORDER__) \
++    && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+ #define WTF_CPU_PPC 1
+ #define WTF_CPU_KNOWN 1
+ #endif

@@ -51,7 +51,9 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 # (__text_cold, __text_startup), whatever the optimization flags say, so
 # those are folded into __text.
 set(PPC_RUNTIME /opt/ppc-modern/runtime)
-set(PPC_LINK_FLAGS "-nodefaultlibs -static-libgcc -Wl,-no_function_starts,-no_data_in_code_info,-no_version_load_command,-no_source_version")
+# -L the runtime, so that -latomic (which WebKit's configure links by name)
+# finds the shared one that is shipped rather than nothing at all.
+set(PPC_LINK_FLAGS "-nodefaultlibs -static-libgcc -L${PPC_RUNTIME} -Wl,-no_function_starts,-no_data_in_code_info,-no_version_load_command,-no_source_version")
 foreach (_section __text_cold __text_startup __text_exit __text_hot)
     set(PPC_LINK_FLAGS "${PPC_LINK_FLAGS} -Wl,-rename_section,__TEXT,${_section},__TEXT,__text")
 endforeach ()

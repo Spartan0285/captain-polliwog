@@ -49,6 +49,8 @@ sudo $INT -id $F/libstdc++.6.dylib -change $L/libgcc_s.1.dylib $F/libgcc_s.1.dyl
 if [ -f $L/libatomic.1.dylib ]; then
     sudo cp $L/libatomic.1.dylib $R/
     sudo $INT -id $F/libatomic.1.dylib -change $L/libgcc_s.1.dylib $F/libgcc_s.1.dylib $R/libatomic.1.dylib
+    # The name -latomic looks for; WebKit's configure links it that way.
+    sudo ln -sf libatomic.1.dylib $R/libatomic.dylib
 fi
 sudo cp "$REPO/scripts/toolchain/ppc-darwin-modern.cmake" $PREFIX/share/ 2>/dev/null || \
     { sudo mkdir -p $PREFIX/share && sudo cp "$REPO/scripts/toolchain/ppc-darwin-modern.cmake" $PREFIX/share/; }
