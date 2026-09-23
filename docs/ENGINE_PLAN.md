@@ -1035,3 +1035,59 @@ refuses to package a Tiger build that wants anything outside it.
 though on the machine itself Tiger's own `nm` cannot read binaries this
 toolchain produces - it reports "unknown load command" and then says nothing
 is wrong, which is worse than refusing - so dyld remains the honest test.
+
+## 23 September: the smear where a heading should be
+
+Reported as "everything, especially text, is on top of each other" on a
+G3, with apple.com's hero section unreadable. It was, and the way it was
+wrong is worth writing down, because two plausible explanations were wrong
+before the right one turned up.
+
+The screenshot said more than the report did: Apple's navigation bar -
+Store, Mac, iPad, iPhone, Watch - was perfect, directly above a headline
+that was a single unreadable blob. So it was not text in general. The
+first guess was web fonts, since apple.com and YouTube use them and
+example.com, which had always rendered, does not. A test page with the
+same sentence in Helvetica and in a downloaded font killed that: both
+collapsed.
+
+What settled it was measuring rather than looking. The browser can run a
+script on a page and report the answer (`scripts/debug-probe.sh`), so it
+was asked for the width of one line of text in eleven fonts, twice each -
+once as the page would get it, and once with `text-rendering:
+optimizeLegibility`, which is the one property that makes WebKit measure
+through CoreText instead of CoreGraphics:
+
+    Lucida Grande  plain=260  legibility=260
+    Helvetica      plain=22   legibility=234
+    Times          plain=20   legibility=214
+    Courier        plain=26   legibility=277
+    Verdana        plain=25   legibility=267
+
+Twenty-two pixels for twenty-one characters. Asked again at four sizes,
+the plain answer was 22 at 11px, at 22px, at 44px and at 88px, while
+CoreText said 117, 234, 467 and 934. CoreGraphics on 10.4 ignores the
+text matrix it is handed for glyph advances and answers in em units, so
+every glyph is drawn about one unit from the last: the line piles up in
+the space of a single character.
+
+Lucida Grande is the exception, which is why the system font and only the
+system font looked right, and why the navigation bar sat crisply above
+the smear.
+
+The first fix was wrong in a way worth remembering. It fell back to
+CoreText when the advance came back as zero - but it does not come back
+as zero, it comes back as one per glyph, so the fallback never ran and
+the rebuilt engine behaved exactly as before. A screenshot would have
+been read as "still broken, try something else"; the numbers said "your
+condition never fired". Tiger now measures every glyph through CoreText,
+under the `CP_TIGER` build flag, which marks the places where 10.4 needs
+different code rather than a missing function filled in (patch 0072).
+WebKit caches advances per glyph, so it costs one call per glyph per font.
+
+Three bugs today were this same species: 10.4's CoreText taking `double`
+where Leopard takes `float`, the QuickTime constants that abort when
+absent, and this. None of them are missing symbols, so no symbol
+inventory finds them - they are the same calls behaving differently. The
+probe is the tool that finds them, and it is worth running against a new
+Tiger build rather than trusting a page that looks about right.
