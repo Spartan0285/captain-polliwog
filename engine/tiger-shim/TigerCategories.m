@@ -287,6 +287,25 @@ static pthread_t CPMainPThread;
 
 @end
 
+// WebCore reaches through a request to the CFNetwork object behind it, to
+// set a priority, ask for pipelining, or attach a body. Tiger's Foundation
+// has no such accessor, and an unrecognized selector here is not a small
+// thing: Tiger's Objective-C runtime raises with longjmp, which walks the
+// stack without running a single C++ destructor on the way. Anything JSC
+// was holding - which thread is executing, which call frame is current - is
+// left as it was, and the next piece of code to ask crashes reading it.
+// That is how a missing accessor turns into a crash in the inspector's
+// stack walker, two callbacks later.
+//
+// Answering null puts every one of those calls into a stub that ignores it
+// (engine/tiger-shim/CoreFoundationStubs.c); the request still goes out,
+// through Foundation, without the tuning.
+@implementation NSURLRequest (CPTigerCFAccess)
+
+- (void *)_CFURLRequest { return NULL; }
+
+@end
+
 // WebCore reads a response's headers from the CFNetwork message behind it.
 // Tiger's Foundation has no such accessor, and this browser's responses are
 // its own anyway; answering null sends WebCore down the -allHeaderFields

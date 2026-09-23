@@ -206,6 +206,16 @@ void CFURLRequestSetHTTPRequestBodyParts(CFTypeRef request, CFArrayRef parts) { 
 CFArrayRef CFURLRequestCopyHTTPRequestBodyParts(CFTypeRef request) { return NULL; }
 void _CFURLRequestSetProtocolProperty(CFTypeRef request, CFStringRef key, CFTypeRef value) { }
 
+// The tuning WebCore applies through the CFNetwork request behind an
+// NSURLRequest. There is no getting at that object on 10.4 (see
+// -[NSURLRequest _CFURLRequest] in TigerCategories.m), so the request these
+// would adjust is always null and there is nothing to adjust. The loads
+// still happen; they are just not prioritized or pipelined.
+int CFURLRequestGetRequestPriority(CFTypeRef request) { return 0; }
+void CFURLRequestSetRequestPriority(CFTypeRef request, int priority) { }
+void CFURLRequestSetShouldPipelineHTTP(CFTypeRef request, unsigned char shouldPipeline, unsigned char allowPipelining) { }
+void CFURLRequestSetShouldStartSynchronously(CFTypeRef request, int shouldStart) { }
+
 CFTypeRef CFURLResponseCreateWithHTTPResponse(CFAllocatorRef allocator, CFURLRef url,
                                               CFTypeRef message, CFIndex policy) { return NULL; }
 CFTypeRef CFURLResponseGetHTTPResponse(CFTypeRef response) { return NULL; }
