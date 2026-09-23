@@ -13,9 +13,10 @@
 # This builds those two functions, and nothing else, as a library every image
 # can share. ppc-darwin.cmake lists it ahead of the static libgcc.
 #
-# Note what it does not fix: libstdc++.6.dylib carries a hidden copy of its
-# own, so a once_flag shared across two frameworks still does not work. That
-# wants libstdc++ relinked to import these instead, which is the next piece.
+# libstdc++ carries a hidden copy of its own, so this script also relinks it
+# from its static archive to import these two instead - with the object that
+# defines them taken out of the unwinder archive first, or the linker puts
+# the copy straight back.
 #
 # Runs inside the build VM:  scripts/toolchain/build-modern-emutls.sh
 set -e
@@ -50,3 +51,25 @@ sudo mkdir -p $PREFIX/runtime
 sudo cp libemutls.1.dylib $PREFIX/runtime/
 echo "libemutls.1.dylib exports:"
 $PREFIX/bin/$TARGET-nm -g $PREFIX/runtime/libemutls.1.dylib | grep emutls
+
+# libstdc++, relinked to import the two functions rather than carry them.
+# -all_load because a dylib built from an archive keeps only what something
+# references, and this one is the reference for everything above it.
+cd /tmp/emutls
+cp "$GCCLIB/libgcc_eh.a" libgcc_eh_noemutls.a
+$PREFIX/bin/$TARGET-ar d libgcc_eh_noemutls.a "$OBJ"
+$PREFIX/bin/$TARGET-ranlib libgcc_eh_noemutls.a
+
+$PREFIX/bin/$TARGET-g++ -dynamiclib -o libstdc++.6.dylib \
+    -isysroot $SDK -mmacosx-version-min=10.4 -mcpu=750 \
+    -install_name $F/libstdc++.6.dylib \
+    -compatibility_version 7.0.0 -current_version 7.33.0 \
+    -Wl,-all_load $PREFIX/$TARGET/lib/libstdc++.a \
+    -nodefaultlibs $PREFIX/runtime/libemutls.1.dylib -lgcc ./libgcc_eh_noemutls.a -liconv -lSystem \
+    -Wl,-no_function_starts,-no_data_in_code_info,-no_version_load_command,-no_source_version
+
+# U here, not T: it asks for the shared copy rather than having its own.
+$PREFIX/bin/$TARGET-nm libstdc++.6.dylib | grep -q "U ___emutls_get_address" \
+    || { echo "libstdc++ still has its own emulated-TLS state" >&2; exit 1; }
+sudo cp libstdc++.6.dylib $PREFIX/runtime/
+echo "libstdc++.6.dylib now shares the emulated thread-local state"

@@ -955,15 +955,20 @@ own code either way. The part of the engine where a compiler has the most
 to say is WebCore, which is what Speedometer actually spends its time in,
 so the number to care about is not this one.
 
-Getting there needs one more thing solved. Thread-local storage is
-emulated on 10.5, and the state lives in whichever copy of the runtime an
-image links. GCC 6's shared libgcc exports the two functions that reach
-it, so the engine's three frameworks share one copy. GCC 14 hides them.
-`build-modern-emutls.sh` builds those two functions as a library every
-image can share, which is most of the answer, but libstdc++ carries a
-hidden copy of its own, so a `std::once_flag` shared across two frameworks
-still finds nothing and the engine jumps to null on startup. The fix is to
-relink libstdc++ so that it imports them too - it is one library, not a
-toolchain rebuild. Until then `PPC_STATIC_RUNTIME=1` gives each image its
-own runtime, which is self-contained enough to measure with and not to
-ship.
+One thing had to be solved to get there. Thread-local storage is emulated
+on 10.5, and the state lives in whichever copy of the runtime an image
+links. GCC 6's shared libgcc exports the two functions that reach it, so
+the engine's three frameworks share one copy. GCC 14 hides them, and each
+framework would take its own from the unwinder archive - at which point
+`std::call_once` writes its callable through one copy, libstdc++ reads it
+through another, finds null, and the engine jumps to zero before it has
+done anything at all. It is the first thing that happens on startup, so
+this is not subtle to find; it is only subtle to explain.
+
+`build-modern-emutls.sh` is the answer. It builds those two functions, and
+nothing else, as a library every image shares, and relinks libstdc++ from
+its static archive to import them rather than carry its own - which needs
+the object that defines them removed from the unwinder archive first, or
+the linker puts the copy straight back. After that the engine starts.
+`PPC_STATIC_RUNTIME=1` remains for giving each image its own runtime,
+which is what the measurement above was taken with.
