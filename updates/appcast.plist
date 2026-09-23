@@ -156,6 +156,64 @@ Smaller things.
 			<key>version</key>
 			<string>0.3.2</string>
 		</dict>
+		<dict>
+			<key>length</key>
+			<integer>69278460</integer>
+			<key>minimumSystemVersion</key>
+			<string>10.4</string>
+			<key>notes</key>
+			<string>Captain Polliwog 0.3.3 (alpha)
+
+Tiger stops losing the browser on ordinary pages.
+  On Mac OS X 10.4 this would start, render, and then disappear - on
+  YouTube, on MacRumors, on most pages with a video. Three separate
+  reasons, and none of them was a crash: each was a function the browser
+  asked 10.4 for that 10.4 has never had. Because those are looked up
+  only when first used, the application always started, and always died
+  later, on whichever page reached one first.
+
+  The 10.5 headers this is built against rename open, close, mmap and
+  mktime to conformance variants Tiger's system library does not have.
+  ICU wanted mktime, which is any page with a date on it. libxml2 wanted
+  a zlib function Leopard added, for reading compressed files off disk -
+  something a browser never does, so that is simply gone now. And the C++
+  runtime asked the system for the function that unwinds a thrown
+  exception, which on 10.4 would have ended the browser the first time
+  anything threw.
+
+  Six QuickTime names finish the list. WebKit looks them up by name and
+  treats a miss as fatal; Tiger ships QuickTime 7.0.4 and six of them came
+  later. So on 10.4 the browser did not fail to play a video - it stopped,
+  on the first page holding one.
+
+Text on Tiger is laid out at the size the page asked for.
+  Headings came out as an unreadable smear with every letter on top of
+  the last. 10.4's CoreGraphics answers glyph widths in its own units
+  whatever size it is given: the same line at 11, 22, 44 and 88 pixels all
+  measured 22 pixels wide. Lucida Grande was the one font it got right,
+  which is why menus and toolbars looked fine above headlines that did
+  not. Tiger now measures through CoreText, which gets every font right.
+
+Open in VLC opens VLC again.
+  It was passing an option the PowerPC build of VLC does not have, so VLC
+  printed its usage and exited before drawing a window. Nothing reported
+  it, because starting VLC had succeeded - it started, and chose to leave.
+  The button also used to fail silently when a page's video could not be
+  handed over at all; now it says so.
+
+Smaller things.
+  ICU, libxml2, libxslt, SQLite and the font sanitiser are all rebuilt.
+  On Leopard nothing here should look different - every one of these was a
+  10.4 problem - so if it does, that is worth reporting.</string>
+			<key>sha256</key>
+			<string>4108490c95d7f288e4b1146956c1a4bc95383d611cb5127d739ac16a3d287511</string>
+			<key>signature</key>
+			<string>hY0by+RwUgnzkgMMhTt2xg6szxBbNNLFXIKcaFh0zjenPX6irc+eKlC/3UI9/aCIyI7XgdALbpcsM9u51D/6Ag==</string>
+			<key>url</key>
+			<string>https://github.com/Spartan0285/captain-polliwog/releases/download/v0.3.3/CaptainPolliwog-0.3.3.zip</string>
+			<key>version</key>
+			<string>0.3.3</string>
+		</dict>
 	</array>
 </dict>
 </plist>
