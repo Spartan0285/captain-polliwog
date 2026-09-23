@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #import "CPExternalPlayer.h"
+#import "CPDebugSnapshot.h"
 #import <WebKit/WebKit.h>
 #include <CoreServices/CoreServices.h>
 #include <signal.h>
@@ -128,13 +129,6 @@ static NSURL *CPRelayedURL(NSString *mediaURL)
 // rather than leaving it open behind the new one.
 static pid_t lastLaunched = 0;
 
-static BOOL CPIsVLC(NSString *bundlePath)
-{
-    NSString *identifier = [[[NSBundle bundleWithPath:bundlePath] infoDictionary]
-                            objectForKey:@"CFBundleIdentifier"];
-    return [identifier hasPrefix:@"org.videolan"] || [identifier hasPrefix:@"com.videolan"];
-}
-
 // The players that read an address from argv. Both of these are ports of
 // command-line programs and have always taken one.
 static BOOL CPTakesURLArgument(NSString *bundlePath)
@@ -154,8 +148,22 @@ static BOOL CPTakesURLArgument(NSString *bundlePath)
     NSString *name;
     NSTask *task;
 
-    if (player == nil || relayed == nil)
+    // Failing here used to be silent: the overlay button ignores the answer,
+    // so a hand-over that never happened looked exactly like a button that
+    // did nothing. Each way out says which way it went.
+    if (player == nil) {
+        NSLog(@"Captain Polliwog: no media player is set, so %@ cannot be handed over",
+              [mediaURL substringToIndex:MIN((unsigned)60, (unsigned)[mediaURL length])]);
         return NO;
+    }
+    if (relayed == nil) {
+        NSLog(@"Captain Polliwog: cannot hand over this address (%lu characters, scheme %@): "
+              @"only http and https can be passed to another program",
+              (unsigned long)[mediaURL length],
+              [[NSURL URLWithString:mediaURL] scheme] != nil
+                  ? [[NSURL URLWithString:mediaURL] scheme] : @"unreadable");
+        return NO;
+    }
 
     // Not NSWorkspace, and this is the whole reason: the browser runs with
     // DYLD_FRAMEWORK_PATH pointing at its own bundled WebKit, and a player
@@ -181,10 +189,16 @@ static BOOL CPTakesURLArgument(NSString *bundlePath)
     // happen: every hand-over started another copy, and they piled up one
     // per click. Two answers, because neither covers both players.
     //
-    // VLC has --one-instance for exactly this: a second invocation passes
-    // the item to the one already running and exits. MPlayer has nothing of
-    // the kind, so the one we started last is ended first - only ever a
-    // process this browser launched, never a copy opened by hand.
+    // The one we started last is ended first - only ever a process this
+    // browser launched, never a copy opened by hand.
+    //
+    // This used to pass --one-instance to VLC as well, to let a second
+    // hand-over go to the copy already running. The PowerPC builds do not
+    // have that option: VLC 2.0.10 answers "unknown option or missing
+    // mandatory argument `--one-instance'", prints its usage and exits
+    // before it draws a window. Nothing showed that, because launching it
+    // succeeded - the browser had started a program, and the program chose
+    // to leave. Which looked exactly like a button that did nothing.
     if (lastLaunched > 0 && kill(lastLaunched, 0) == 0)
         kill(lastLaunched, SIGTERM);
     lastLaunched = 0;
@@ -196,8 +210,6 @@ static BOOL CPTakesURLArgument(NSString *bundlePath)
         NSMutableArray *arguments = [NSMutableArray array];
         if (executable == nil)
             return NO;
-        if (CPIsVLC(player))
-            [arguments addObject:@"--one-instance"];
         [arguments addObject:[relayed absoluteString]];
         [task setLaunchPath:[[player stringByAppendingPathComponent:@"Contents/MacOS"]
                              stringByAppendingPathComponent:executable]];
@@ -207,9 +219,12 @@ static BOOL CPTakesURLArgument(NSString *bundlePath)
         [task setArguments:[NSArray arrayWithObjects:@"-a", player, [relayed absoluteString], nil]];
     }
     [task setEnvironment:environment];
+    if (CPDebugLogging())
+        NSLog(@"Captain Polliwog: handing %@ to %@", [relayed absoluteString], [task launchPath]);
     NS_DURING
         [task launch];
     NS_HANDLER
+        NSLog(@"Captain Polliwog: %@ would not start: %@", player, [localException reason]);
         return NO;
     NS_ENDHANDLER
 

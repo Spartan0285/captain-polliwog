@@ -73,3 +73,26 @@ $PREFIX/bin/$TARGET-nm libstdc++.6.dylib | grep -q "U ___emutls_get_address" \
     || { echo "libstdc++ still has its own emulated-TLS state" >&2; exit 1; }
 sudo cp libstdc++.6.dylib $PREFIX/runtime/
 echo "libstdc++.6.dylib now shares the emulated thread-local state"
+
+# GCC 14 names its real unwinder libgcc_s.1.1.dylib and ships libgcc_s.1.dylib
+# as a shim in front of it, both recorded by their build paths. An engine
+# bundle cannot refer to /opt on the machine that built it, so the two are
+# copied in beside the rest and every reference rewritten to the folder they
+# will actually live in. package-webkit.sh refuses to package anything still
+# pointing at the build machine, which is how this was noticed.
+cd /tmp/emutls
+for lib in libgcc_s.1.1.dylib libgcc_ehs.1.1.dylib; do
+    cp "$PREFIX/$TARGET/lib/$lib" .
+    chmod u+w "$lib"
+    $PREFIX/bin/$TARGET-install_name_tool -id "$F/$lib" "$lib"
+done
+cp "$PREFIX/runtime/libgcc_s.1.dylib" . 2>/dev/null || cp "$PREFIX/$TARGET/lib/libgcc_s.1.dylib" .
+chmod u+w libgcc_s.1.dylib
+$PREFIX/bin/$TARGET-install_name_tool -id "$F/libgcc_s.1.dylib" libgcc_s.1.dylib
+for image in libgcc_s.1.dylib libgcc_s.1.1.dylib libgcc_ehs.1.1.dylib libstdc++.6.dylib; do
+    for dep in $($PREFIX/bin/$TARGET-otool -L "$image" | awk '{print $1}' | grep "^$PREFIX/"); do
+        $PREFIX/bin/$TARGET-install_name_tool -change "$dep" "$F/$(basename "$dep")" "$image"
+    done
+done
+sudo cp libgcc_s.1.dylib libgcc_s.1.1.dylib libgcc_ehs.1.1.dylib libstdc++.6.dylib $PREFIX/runtime/
+echo "runtime libraries now name only the folder they ship in"

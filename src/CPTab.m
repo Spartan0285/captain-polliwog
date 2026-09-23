@@ -755,8 +755,19 @@ decisionListener:(id<WebPolicyDecisionListener>)listener
     // because this arrives at the same place every other navigation does.
     if ([[[[request URL] scheme] lowercaseString] isEqualToString:@"x-polliwog-play"]) {
         NSString *media = [[[request URL] absoluteString] substringFromIndex:[@"x-polliwog-play:" length]];
+        NSString *decoded = [media stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
         [listener ignore];
-        [CPExternalPlayer playMediaURL:[media stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding]];
+        if (CPDebugLogging())
+            NSLog(@"Captain Polliwog: play request, %lu characters encoded, %lu decoded",
+                  (unsigned long)[media length], (unsigned long)[decoded length]);
+        // Undoing the escaping can fail - on a string that is not valid UTF-8
+        // once unescaped - and used to fail silently, handing nil onwards.
+        if (decoded == nil) {
+            NSLog(@"Captain Polliwog: the address on the play button could not be unescaped");
+            return;
+        }
+        if (![CPExternalPlayer playMediaURL:decoded])
+            NSLog(@"Captain Polliwog: nothing played %@", [decoded substringToIndex:MIN((unsigned)60, (unsigned)[decoded length])]);
         return;
     }
 

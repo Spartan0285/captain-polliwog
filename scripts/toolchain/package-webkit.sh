@@ -15,6 +15,16 @@
 set -e
 VARIANT=$1
 [ -n "$VARIANT" ] || { echo "usage: $0 leopard-g4" >&2; exit 1; }
+
+# A variant built by the GCC 14 toolchain carries that toolchain's runtime,
+# not GCC 6's: one libstdc++ per process, and it has to be the one the
+# frameworks were built against. It also needs libemutls, which is where the
+# emulated thread-local state lives when every image shares one copy
+# (build-modern-emutls.sh).
+case $VARIANT in
+*-gcc14) PPC_ROOT=/opt/ppc-modern ;;
+*)       PPC_ROOT=/opt/ppc ;;
+esac
 BUILD=$HOME/build/$VARIANT/lib
 SRC=$HOME/src/webkit-604/Source
 OUT=/Users/adam/polliwog-build/stage/$VARIANT
@@ -111,7 +121,10 @@ cp "$SRC/WebKitLegacy/mac/Resources/url_icon.tiff" "$R/"
 
 # Bundled libraries.
 cp /opt/ppc/icu/lib/libicucore.dylib /opt/ppc/sqlite/lib/libsqlite3.dylib \
-   /opt/ppc/runtime/libstdc++.6.dylib /opt/ppc/runtime/libgcc_s.1.dylib "$FW/"
+   $PPC_ROOT/runtime/libstdc++.6.dylib $PPC_ROOT/runtime/libgcc_s.1.dylib "$FW/"
+for extra in libemutls.1.dylib libgcc_s.1.1.dylib libgcc_ehs.1.1.dylib; do
+    [ -f "$PPC_ROOT/runtime/$extra" ] && cp "$PPC_ROOT/runtime/$extra" "$FW/"
+done
 cp -L /opt/ppc/xml/lib/libxml2.dylib "$FW/$(basename "$(readlink /opt/ppc/xml/lib/libxml2.dylib)")"
 cp -L /opt/ppc/xml/lib/libxslt.dylib "$FW/$(basename "$(readlink /opt/ppc/xml/lib/libxslt.dylib)")"
 
