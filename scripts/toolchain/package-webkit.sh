@@ -10,14 +10,23 @@
 #   WebKit picks these up through DYLD_FRAMEWORK_PATH; among themselves they
 #   refer to each other through @loader_path.
 # - The libraries WebKit bundles (ICU, SQLite, libxml2, libxslt, and GCC's
-#   C++ runtime) load from @executable_path/../Frameworks.
+#   C++ runtime) load from @executable_path/../<folder>, where the folder is
+#   Frameworks for the Leopard engine and Frameworks-10.4 for the Tiger one.
 set -e
 VARIANT=$1
 [ -n "$VARIANT" ] || { echo "usage: $0 leopard-g4" >&2; exit 1; }
 BUILD=$HOME/build/$VARIANT/lib
 SRC=$HOME/src/webkit-604/Source
 OUT=/Users/adam/polliwog-build/stage/$VARIANT
-FW=$OUT/Frameworks
+# One application bundle carries both engines, in a folder each: the Leopard
+# one in Frameworks and the Tiger one beside it. src/main.m picks whichever
+# this Mac can run and points dyld at that folder. The libraries inside must
+# therefore name their own folder, not the other engine's.
+case $VARIANT in
+    tiger-*) FOLDER=Frameworks-10.4 ;;
+    *)       FOLDER=Frameworks ;;
+esac
+FW=$OUT/$FOLDER
 INT=/opt/ppc/bin/powerpc-apple-darwin9-install_name_tool
 SYS=/System/Library/Frameworks
 # The oldest system this engine runs on, written into every framework's
@@ -105,6 +114,38 @@ cp /opt/ppc/icu/lib/libicucore.dylib /opt/ppc/sqlite/lib/libsqlite3.dylib \
 cp -L /opt/ppc/xml/lib/libxml2.dylib "$FW/$(basename "$(readlink /opt/ppc/xml/lib/libxml2.dylib)")"
 cp -L /opt/ppc/xml/lib/libxslt.dylib "$FW/$(basename "$(readlink /opt/ppc/xml/lib/libxslt.dylib)")"
 
+# Tiger: the stand-ins the frameworks are linked against (engine/tiger-shim),
+# and the G3 stamp. Apple's WebKitSystemInterface objects are marked for the
+# G4, which raises whatever links them; dyld then refuses that binary on a
+# G3 and falls back to the system WebKit without saying so. Nothing that is
+# actually linked uses AltiVec - checked here rather than assumed - so the
+# binaries are stamped back to ppc750.
+case $VARIANT in
+tiger-*)
+    cp /opt/ppc/tiger-shim/libTigerShim.dylib "$FW/"
+    OTOOL=/opt/ppc/bin/powerpc-apple-darwin9-otool
+    for binary in $FW/*.framework/Versions/A/[A-Z]* $FW/*.dylib; do
+        [ -f "$binary" ] || continue
+        # The bundled libraries were built naming ../Frameworks, which in this
+        # bundle is the Leopard engine. Point them at their own folder.
+        id=$($OTOOL -D "$binary" | tail -1)
+        case $id in
+        @executable_path/../Frameworks/*)
+            $INT -id "@executable_path/../$FOLDER/${id##*/}" "$binary" ;;
+        esac
+        for dep in $($OTOOL -L "$binary" | awk '{print $1}' | grep '^@executable_path/../Frameworks/'); do
+            $INT -change "$dep" "@executable_path/../$FOLDER/${dep##*/}" "$binary"
+        done
+        vector=$(/opt/ppc/bin/powerpc-apple-darwin9-otool -tV "$binary" 2>/dev/null \
+            | grep -cE '[[:space:]](lvx|stvx|vperm|vspltw|vsel|vmsum|vmaddfp|vaddubm)[[:space:]]') || true
+        if [ "${vector:-0}" -gt 0 ]; then
+            echo "!! $binary has $vector AltiVec instructions; leaving its CPU stamp alone" >&2
+            continue
+        fi
+        python3 "$(dirname "$0")/stamp-ppc750.py" "$binary"
+    done ;;
+esac
+
 # Anything still pointing into the build machine is a packaging bug.
 for binary in $FW/*.framework/Versions/A/* $FW/*.dylib; do
     [ -f "$binary" ] && [ ! -d "$binary" ] || continue
@@ -116,5 +157,5 @@ for binary in $FW/*.framework/Versions/A/* $FW/*.dylib; do
     fi
 done
 
-cd "$OUT" && rm -f Frameworks.zip && zip -qry Frameworks.zip Frameworks  # -y keeps symlinks
+cd "$OUT" && rm -f Frameworks.zip && zip -qry Frameworks.zip "$FOLDER"  # -y keeps symlinks
 du -sh "$FW" "$OUT/Frameworks.zip"

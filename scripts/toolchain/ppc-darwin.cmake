@@ -51,6 +51,13 @@ set(PPC_LINK_FLAGS "-nodefaultlibs -static-libgcc -Wl,-no_function_starts,-no_da
 foreach (_section __text_cold __text_startup __text_exit __text_hot)
     set(PPC_LINK_FLAGS "${PPC_LINK_FLAGS} -Wl,-rename_section,__TEXT,${_section},__TEXT,__text")
 endforeach ()
+# Tiger: the stand-ins for what 10.4 has not got, ahead of the system
+# frameworks so that those symbols bind here and everything else still comes
+# from the system (engine/tiger-shim; webkit.sh sets this for 10.4).
+if (DEFINED ENV{TIGER_SHIM})
+    set(PPC_LINK_FLAGS "-L/opt/ppc/tiger-shim -lTigerShim ${PPC_LINK_FLAGS}")
+endif ()
+
 set(CMAKE_EXE_LINKER_FLAGS_INIT    "${PPC_LINK_FLAGS}")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "${PPC_LINK_FLAGS}")
 set(CMAKE_MODULE_LINKER_FLAGS_INIT "${PPC_LINK_FLAGS}")

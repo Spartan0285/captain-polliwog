@@ -1,0 +1,90 @@
+From 0243755bcf1b8489ad3dad756f821ce2dc8bd90e Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Wed, 23 Sep 2026 00:05:03 -0400
+Subject: [PATCH 63/65] Engine: build without WebGL, gamepads or Web Audio
+
+Tiger has none of what those three need: 154 OpenGL functions, 26 IOHID
+calls and about twenty vDSP additions to Accelerate. Turning them off for
+10.4 left three loose ends in the source - a video-to-texture file and a
+WebGL layer compiled without the 3D context they call, and Web Audio's
+Float32Array, which had been arriving through a WebGL header.
+---
+ Source/WebCore/Modules/webaudio/AudioContext.h       |  3 +++
+ Source/WebCore/PlatformMac.cmake                     | 12 ++++++++++--
+ .../graphics/ca/cocoa/PlatformCALayerCocoa.mm        |  4 ++++
+ 3 files changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/Source/WebCore/Modules/webaudio/AudioContext.h b/Source/WebCore/Modules/webaudio/AudioContext.h
+index 577317d2..0e464c07 100644
+--- a/Source/WebCore/Modules/webaudio/AudioContext.h
++++ b/Source/WebCore/Modules/webaudio/AudioContext.h
+@@ -36,6 +36,9 @@
+ #include "PlatformMediaSession.h"
+ #include "VisibilityChangeClient.h"
+ #include <atomic>
++// createPeriodicWave takes Float32Array by reference. Without WebGL, whose
++// headers used to pull this in on the way past, nothing declares it here.
++#include <runtime/Float32Array.h>
+ #include <wtf/HashSet.h>
+ #include <wtf/MainThread.h>
+ #include <wtf/RefPtr.h>
+diff --git a/Source/WebCore/PlatformMac.cmake b/Source/WebCore/PlatformMac.cmake
+index f78409c8..3132bad8 100644
+--- a/Source/WebCore/PlatformMac.cmake
++++ b/Source/WebCore/PlatformMac.cmake
+@@ -507,13 +507,11 @@ list(APPEND WebCore_SOURCES
+     platform/graphics/cocoa/WebActionDisablingCALayerDelegate.mm
+     platform/graphics/cocoa/WebCoreCALayerExtras.mm
+     platform/graphics/cocoa/WebCoreDecompressionSession.mm
+-    platform/graphics/cocoa/WebGLLayer.mm
+     platform/graphics/cocoa/WebGPULayer.mm
+     platform/graphics/mac/WebLayer.mm
+ 
+     platform/graphics/cv/PixelBufferConformerCV.cpp
+     platform/graphics/cv/TextureCacheCV.mm
+-    platform/graphics/cv/VideoTextureCopierCV.cpp
+ 
+     platform/graphics/gpu/Texture.cpp
+     platform/graphics/gpu/TilingData.cpp
+@@ -852,3 +850,13 @@ list(APPEND WebCoreTestSupport_SOURCES
+ )
+ 
+ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -compatibility_version 1 -current_version ${WEBKIT_MAC_VERSION}")
++
++# Copying video frames into a texture is only of use with a 3D context, and
++# calls into one: without WebGL (10.4, where Tiger's OpenGL is too old) it
++# has nothing to link against.
++if (ENABLE_GRAPHICS_CONTEXT_3D)
++    list(APPEND WebCore_SOURCES
++        platform/graphics/cocoa/WebGLLayer.mm
++        platform/graphics/cv/VideoTextureCopierCV.cpp
++    )
++endif ()
+diff --git a/Source/WebCore/platform/graphics/ca/cocoa/PlatformCALayerCocoa.mm b/Source/WebCore/platform/graphics/ca/cocoa/PlatformCALayerCocoa.mm
+index d5471956..47d06569 100644
+--- a/Source/WebCore/platform/graphics/ca/cocoa/PlatformCALayerCocoa.mm
++++ b/Source/WebCore/platform/graphics/ca/cocoa/PlatformCALayerCocoa.mm
+@@ -38,7 +38,9 @@
+ #import "TiledBacking.h"
+ #import "WebActionDisablingCALayerDelegate.h"
+ #import "WebCoreCALayerExtras.h"
++#if ENABLE(WEBGL)
+ #import "WebGLLayer.h"
++#endif
+ #import <wtf/SoftLinking.h>
+ #if ENABLE(WEBGPU)
+ #import "WebGPULayer.h"
+@@ -219,8 +221,10 @@ PlatformCALayer::LayerType PlatformCALayerCocoa::layerTypeForPlatformLayer(Platf
+         return LayerTypeAVPlayerLayer;
+ #endif
+ 
++#if ENABLE(WEBGL)
+     if ([layer isKindOfClass:[WebGLLayer class]])
+         return LayerTypeContentsProvidedLayer;
++#endif
+ 
+ #if ENABLE(WEBGPU)
+     if ([layer isKindOfClass:[WebGPULayer class]])
+-- 
+2.54.0 (Apple Git-157)
+

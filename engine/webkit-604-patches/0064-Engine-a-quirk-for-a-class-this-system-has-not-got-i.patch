@@ -1,0 +1,63 @@
+From eb12c1c1ffbdb088112f84dfb2c397f05c0a958f Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Wed, 23 Sep 2026 00:05:04 -0400
+Subject: [PATCH 64/65] Engine: a quirk for a class this system has not got is
+ not a quirk
+
+WebKit patches three classes at startup for application compatibility, and
+asks for them with objc_getRequiredClass, which stops the application when
+one is missing. NSCTFont is AppKit's and Leopard's, so a Tiger build died
+before its first window. A missing class now means the quirk is skipped.
+---
+ Source/WebKitLegacy/mac/WebView/WebView.mm | 21 ++++++++++++++++++---
+ 1 file changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/Source/WebKitLegacy/mac/WebView/WebView.mm b/Source/WebKitLegacy/mac/WebView/WebView.mm
+index 2333b724..15b18b34 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebView.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebView.mm
+@@ -10366,7 +10366,10 @@ static void recursivelyRemoveMailAttributes(DOMNode *self, SEL selector, BOOL a,
+ 
+     // It's a little bit strange to patch a method defined by WebKit, but it helps keep this workaround self-contained.
+ 
+-    Method methodToPatch = class_getInstanceMethod(objc_getRequiredClass("DOMHTMLObjectElement"), @selector(data));
++    Class elementClass = objc_getClass("DOMHTMLObjectElement");
++    Method methodToPatch = elementClass ? class_getInstanceMethod(elementClass, @selector(data)) : nullptr;
++    if (!methodToPatch)
++        return;
+     IMP originalDataImp = method_setImplementation(methodToPatch, reinterpret_cast<IMP>(objectElementDataAttribute));
+     wtfCallIMP<id>(originalRecursivelyRemoveMailAttributesImp, self, selector, a, b, c);
+     method_setImplementation(methodToPatch, originalDataImp);
+@@ -10379,7 +10382,11 @@ static void patchMailRemoveAttributesMethod()
+ #if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+     if (!WKAppVersionCheckLessThan(@"com.apple.mail", -1, 4.0))
+         return;
+-    Method methodToPatch = class_getInstanceMethod(objc_getRequiredClass("DOMNode"), @selector(recursivelyRemoveMailAttributes:convertObjectsToImages:convertEditableElements:));
++    Class nodeClass = objc_getClass("DOMNode");
++    Method methodToPatch = nodeClass ? class_getInstanceMethod(nodeClass,
++        @selector(recursivelyRemoveMailAttributes:convertObjectsToImages:convertEditableElements:)) : nullptr;
++    if (!methodToPatch)
++        return;
+     if (!methodToPatch)
+         return;
+     originalRecursivelyRemoveMailAttributesImp = method_setImplementation(methodToPatch, reinterpret_cast<IMP>(recursivelyRemoveMailAttributes));
+@@ -10405,7 +10412,15 @@ static BOOL _isHiraginoFont(NSCTFont *self, SEL)
+ static void patch_NSCTFont_isHiraginoFont()
+ {
+ #if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1050
+-    Method methodToPatch = class_getInstanceMethod(objc_getRequiredClass("NSCTFont"), @selector(_isHiraginoFont));
++    // NSCTFont is AppKit's, and Leopard's: Tiger has no such class, and
++    // objc_getRequiredClass stops the application when it cannot find one.
++    // Without the patch, a Hiragino font is not recognised as one, which
++    // costs a line-height quirk for Japanese text and nothing else.
++    Class fontClass = objc_getClass("NSCTFont");
++    Method methodToPatch = fontClass != Nil
++        ? class_getInstanceMethod(fontClass, @selector(_isHiraginoFont)) : nullptr;
++    if (!methodToPatch)
++        return;
+     method_setImplementation(methodToPatch, reinterpret_cast<IMP>(_isHiraginoFont));
+ #endif
+ }
+-- 
+2.54.0 (Apple Git-157)
+

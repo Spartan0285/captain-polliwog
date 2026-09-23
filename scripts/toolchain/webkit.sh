@@ -35,11 +35,20 @@ case $VARIANT in
     # rely on, and 10.4 as the floor. The toolchain already builds against
     # the 10.5 SDK with a 10.4 deployment target, so Leopard-only functions
     # are weakly linked and simply absent here.
-    tiger-g3|tiger-g3-jit) TARGET=10.4; CPU="-mcpu=750 -mtune=750" ;;
+    tiger-g3|tiger-g3-jit) TARGET=10.4; CPU="-mcpu=750 -mtune=750"; TIGER_SHIM=1 ;;
     *) echo "usage: $0 configure|build leopard-g4[-jit]|tiger-g3[-jit] [targets...]" >&2; exit 1 ;;
 esac
 JIT=OFF
 case $VARIANT in *-jit) JIT=ON ;; esac
+
+# Tiger has neither the OpenGL of 10.5 (WebGL and ANGLE want 154 functions
+# it does not export) nor IOHID's game controller calls (26 more). Both are
+# off on 10.4: WebGL mostly fails on these machines anyway, and a browser
+# that will not load is worse than one without gamepads.
+TIGER_FEATURES=
+# Web Audio goes too, for now: its FFT and vector work is vDSP that Leopard
+# added to Accelerate, about twenty functions Tiger has not got.
+[ -n "${TIGER_SHIM:-}" ] && TIGER_FEATURES="-DENABLE_WEBGL=OFF -DENABLE_GAMEPAD=OFF -DENABLE_WEB_AUDIO=OFF"
 # WebCore is about 30MB of code, past the reach of PowerPC's branch
 # instruction; ld64 bridges that with branch islands, but only within one
 # section. Fewer cold and hot sections for the linker to fold back into
@@ -55,14 +64,31 @@ CPU="$CPU ${EXTRA_FLAGS:-}"
 mkdir -p "$SRC"
 rsync -a -c --delete --exclude .git "$MAC_SRC/" "$SRC/"
 
+# Core Animation is 10.5. A 10.4 engine still names its classes, and a class
+# reference cannot be weak on Tiger's runtime, so the build links a stand-in
+# for them ahead of QuartzCore, which stays for Core Image. Accelerated
+# compositing is off on 10.4, so nothing should call into it; see
+# engine/tiger-shim/CoreAnimationStubs.m.
+# ppc-darwin.cmake reads TIGER_SHIM from the environment and adds the
+# library to every link; setting the linker flags on the command line here
+# would replace the ones that toolchain file sets, not add to them.
+if [ -n "${TIGER_SHIM:-}" ]; then
+    bash "$(dirname "$0")/build-tiger-shim.sh" >/dev/null
+    export TIGER_SHIM
+fi
+
 case $ACTION in
 configure)
+    # The toolchain file is edited in the repository; install the current
+    # copy rather than whatever build-ppc-toolchain.sh left behind.
+    sudo cp "$(dirname "$0")/ppc-darwin.cmake" /opt/ppc/share/ppc-darwin.cmake
     mkdir -p "$BUILD" && cd "$BUILD"
     rm -f CMakeCache.txt  # linker and feature defaults only apply to a fresh cache
     cmake -G Ninja "$SRC" -DPORT=Mac \
         -DCMAKE_TOOLCHAIN_FILE=/opt/ppc/share/ppc-darwin.cmake \
         -DCMAKE_OSX_DEPLOYMENT_TARGET=$TARGET -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_FLAGS="$CPU" -DCMAKE_CXX_FLAGS="$CPU -D_GLIBCXX_USE_C99_MATH_TR1=1" \
+        $TIGER_FEATURES \
         -DENABLE_JIT=$JIT -DENABLE_DFG_JIT=OFF -DENABLE_SAMPLING_PROFILER=OFF -DENABLE_FTL_JIT=OFF -DENABLE_API_TESTS=OFF \
         -DPOLLIWOG_ENABLE_WEBKIT2=OFF \
         -DICU_INCLUDE_DIR=/opt/ppc/icu/include \

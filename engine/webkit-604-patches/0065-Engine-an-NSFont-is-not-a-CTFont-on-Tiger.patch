@@ -1,0 +1,89 @@
+From c289efe745ad4ff455457cfb8c214f2bd4eaa0bd Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Wed, 23 Sep 2026 00:05:04 -0400
+Subject: [PATCH 65/65] Engine: an NSFont is not a CTFont on Tiger
+
+The two are toll-free bridged from Leopard onwards, and WebKit cast freely
+between them. On Tiger CoreText is still the private thing it started as
+and its fonts are not NSFonts: every such cast raised, which is why no page
+laid out. They are converted through the PostScript name, which carries the
+style with it, and the size.
+---
+ .../platform/graphics/FontPlatformData.h      | 17 ++++++++++++-
+ .../graphics/cocoa/FontPlatformDataCocoa.mm   | 25 +++++++++++++++++++
+ 2 files changed, 41 insertions(+), 1 deletion(-)
+
+diff --git a/Source/WebCore/platform/graphics/FontPlatformData.h b/Source/WebCore/platform/graphics/FontPlatformData.h
+index 88be6a89..e3eea8cc 100644
+--- a/Source/WebCore/platform/graphics/FontPlatformData.h
++++ b/Source/WebCore/platform/graphics/FontPlatformData.h
+@@ -305,7 +305,20 @@ private:
+ 
+ #if USE(APPKIT)
+ 
+-// NSFonts and CTFontRefs are toll-free-bridged.
++// NSFonts and CTFontRefs are toll-free-bridged - from Leopard onwards.
++// On Tiger CoreText is the private one it started as, its fonts are not
++// NSFonts, and sending an NSFont message to one raises. The two are
++// converted through the font's PostScript name instead, which carries the
++// style with it ("Helvetica-Bold"), and the size.
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1040
++
++// Defined in FontPlatformDataCocoa.mm: this header is compiled as C++ as
++// well as Objective-C++, so the conversion cannot be written here.
++WEBCORE_EXPORT CTFontRef toCTFont(NSFont *);
++WEBCORE_EXPORT const NSFont *toNSFont(CTFontRef);
++
++#else
++
+ inline CTFontRef toCTFont(NSFont *font)
+ {
+     return reinterpret_cast<CTFontRef>(font);
+@@ -318,6 +331,8 @@ inline const NSFont *toNSFont(CTFontRef font)
+ 
+ #endif
+ 
++#endif
++
+ #if USE(CG)
+ 
+ class ScopedTextMatrix {
+diff --git a/Source/WebCore/platform/graphics/cocoa/FontPlatformDataCocoa.mm b/Source/WebCore/platform/graphics/cocoa/FontPlatformDataCocoa.mm
+index 021963ce..56e594b3 100644
+--- a/Source/WebCore/platform/graphics/cocoa/FontPlatformDataCocoa.mm
++++ b/Source/WebCore/platform/graphics/cocoa/FontPlatformDataCocoa.mm
+@@ -42,6 +42,31 @@
+ 
+ namespace WebCore {
+ 
++#if __MAC_OS_X_VERSION_MIN_REQUIRED <= 1040
++
++// Tiger's CoreText is the private one it started as, and its fonts are not
++// NSFonts: sending one an NSFont message raises. The two are converted
++// through the PostScript name, which carries the style with it
++// ("Helvetica-Bold"), and the size. See FontPlatformData.h.
++CTFontRef toCTFont(NSFont *font)
++{
++    if (!font)
++        return nullptr;
++    CTFontRef converted = CTFontCreateWithName((CFStringRef)[font fontName], [font pointSize], nullptr);
++    return (CTFontRef)[(id)converted autorelease];
++}
++
++const NSFont *toNSFont(CTFontRef font)
++{
++    if (!font)
++        return nil;
++    RetainPtr<CFStringRef> name = adoptCF(CTFontCopyPostScriptName(font));
++    return [NSFont fontWithName:(NSString *)name.get() size:CTFontGetSize(font)];
++}
++
++#endif
++
++
+ // These CoreText Text Spacing feature selectors are not defined in CoreText.
+ enum TextSpacingCTFeatureSelector { TextSpacingProportional, TextSpacingFullWidth, TextSpacingHalfWidth, TextSpacingThirdWidth, TextSpacingQuarterWidth };
+ 
+-- 
+2.54.0 (Apple Git-157)
+
