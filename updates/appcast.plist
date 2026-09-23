@@ -104,6 +104,58 @@ build.</string>
 			<key>version</key>
 			<string>0.3.1</string>
 		</dict>
+		<dict>
+			<key>length</key>
+			<integer>69340674</integer>
+			<key>minimumSystemVersion</key>
+			<string>10.4</string>
+			<key>notes</key>
+			<string>Captain Polliwog 0.3.2 (alpha)
+
+The modern engine now runs on Tiger.
+  Until now, Mac OS X 10.4 fell back to the WebKit the system shipped with
+  in 2005, and modern sites had no chance. This build carries a second
+  engine built for 10.4 and a G3, and picks whichever your Mac can run
+  when it opens. It renders pages on a 500MHz Pismo.
+
+  Tiger's CoreText turned out to take font sizes as a different kind of
+  number than Leopard's, which is why every earlier attempt stopped on the
+  first line of styled text. Three of its calls differ that way.
+
+  What is off on Tiger: WebGL, Web Audio and game controllers. Tiger has
+  nothing to build them on. Everything else is the same engine the Leopard
+  build uses.
+
+  The download is larger because both engines are in it.
+
+YouTube no longer quits the browser.
+  YouTube's main script contains one function large enough that compiling
+  it produced about 50MB of PowerPC code, and a PowerPC jump instruction
+  reaches 32MB. The engine noticed and stopped the app, which looked like
+  a page of grey boxes that never finished loading. The compiler now
+  leaves a function that big to the interpreter and compiles everything
+  else as before.
+
+The status bar can tell you what a page is doing.
+  Turn on Show Page Activity in the View menu. The bottom left then says
+  what is being contacted, how many of the page's pieces have arrived,
+  what it is still fetching after the page looks finished, and how long
+  the page's own scripts held the browser up. Off unless you ask for it.
+
+Smaller things.
+  The setup assistant no longer counts QuickTime Player as a video player,
+  since every Mac has it and it is the decoder the browser already uses -
+  it now offers VLC as it was meant to. One call the browser made on every
+  page only existed on Leopard, which would have raised on Tiger.</string>
+			<key>sha256</key>
+			<string>bbacada4653bc8ec439705927283b75f4bed2a9344151cc18d070535260ab960</string>
+			<key>signature</key>
+			<string>c0QLwbYRSCJd/6jI2MjdJTD45Q99YfforMuzuRFgi69FXp/8UekoR8gcLAdmdSFczZ7J1szIOzVjRx2XfRBRAw==</string>
+			<key>url</key>
+			<string>https://github.com/Spartan0285/captain-polliwog/releases/download/v0.3.2/CaptainPolliwog-0.3.2.zip</string>
+			<key>version</key>
+			<string>0.3.2</string>
+		</dict>
 	</array>
 </dict>
 </plist>
