@@ -47,11 +47,15 @@ static BOOL CPSystemIsAtLeast(NSString *minimum)
 // build before this one was.
 static void CPUseBundledEngine(int argc, const char *argv[])
 {
+    // Best first: the Leopard engine is built for the G4 with AltiVec and
+    // has WebGL and Web Audio; the Tiger one is the G3 baseline without
+    // them. A Mac takes the first it can run.
+    static NSString * const folders[] = { @"Frameworks", @"Frameworks-10.4", nil };
     char executable[MAXPATHLEN], resolved[MAXPATHLEN];
     uint32_t size = sizeof executable;
     NSAutoreleasePool *pool;
-    NSString *contents, *frameworks, *minimum, *current;
-    NSDictionary *engineInfo;
+    NSString *contents, *current;
+    unsigned index;
 
     if (getenv("CP_ENGINE_CHOSEN") != NULL)
         return;     // this is the second time through
@@ -62,21 +66,29 @@ static void CPUseBundledEngine(int argc, const char *argv[])
     // .../Captain Polliwog.app/Contents/MacOS/CaptainPolliwog -> .../Contents
     contents = [[[NSString stringWithUTF8String:resolved]
                     stringByDeletingLastPathComponent] stringByDeletingLastPathComponent];
-    frameworks = [contents stringByAppendingPathComponent:@"Frameworks"];
-    engineInfo = [NSDictionary dictionaryWithContentsOfFile:
-        [frameworks stringByAppendingPathComponent:@"WebKit.framework/Resources/Info.plist"]];
-    minimum = [engineInfo objectForKey:@"LSMinimumSystemVersion"];
-    if (minimum == nil)
-        minimum = @"10.5";
     current = getenv("DYLD_FRAMEWORK_PATH") != NULL
         ? [NSString stringWithUTF8String:getenv("DYLD_FRAMEWORK_PATH")] : nil;
 
-    if (engineInfo != nil && CPSystemIsAtLeast(minimum)
-        && (current == nil || [current rangeOfString:frameworks].location == NSNotFound)) {
+    for (index = 0; folders[index] != nil; index++) {
+        NSString *frameworks = [contents stringByAppendingPathComponent:folders[index]];
+        NSDictionary *engineInfo = [NSDictionary dictionaryWithContentsOfFile:
+            [frameworks stringByAppendingPathComponent:@"WebKit.framework/Resources/Info.plist"]];
+        NSString *minimum = [engineInfo objectForKey:@"LSMinimumSystemVersion"];
+
+        if (engineInfo == nil)
+            continue;
+        if (minimum == nil)
+            minimum = @"10.5";
+        if (!CPSystemIsAtLeast(minimum))
+            continue;
+        if (current != nil && [current rangeOfString:frameworks].location != NSNotFound)
+            break;      // already running with this one
+
         setenv("DYLD_FRAMEWORK_PATH", [frameworks fileSystemRepresentation], 1);
         setenv("CP_ENGINE_CHOSEN", "1", 1);
         execv(resolved, (char * const *)argv);
         // Only reached if exec failed; carry on with whatever loaded.
+        break;
     }
     [pool release];
 }
