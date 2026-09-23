@@ -972,3 +972,66 @@ the object that defines them removed from the unwinder archive first, or
 the linker puts the copy straight back. After that the engine starts.
 `PPC_STATIC_RUNTIME=1` remains for giving each image its own runtime,
 which is what the measurement above was taken with.
+
+## 23 September: why 0.3.2 disappeared on a G3
+
+Reported as "it crashes on YouTube and MacRumors". Eighteen entries in the
+crash log on the Pismo, and not one of them was a crash: every one was dyld
+refusing to bind a symbol. Three separate faults, and the first two are the
+same fault wearing different hats.
+
+The lazy binding is what makes this hard to see. A reference dyld cannot
+satisfy does not stop the application starting - it is resolved the first
+time the code that needs it runs. So the browser launches, renders, browses,
+and then vanishes on the page that happens to reach it. From the outside that
+is a browser that crashes on YouTube, and it sends you to look at YouTube.
+
+**The conformance variants.** The 10.5 SDK renames `open`, `close`, `mmap`,
+`mktime` and a dozen others to `$UNIX2003` symbols, and decides whether to by
+reading `__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__` - which Apple's
+compiler defines from `-mmacosx-version-min` and FSF's does not. So every
+library cross-built here asked for seven functions 10.4 never had. ICU wanted
+`mktime$UNIX2003`, which is a page with a date on it.
+
+Saying `-mmacosx-version-min=10.4` is not enough, and neither is
+`_NONSTD_SOURCE`: a project that defines `_POSIX_C_SOURCE` or `_XOPEN_SOURCE`
+- ICU and libxslt both do - takes an earlier branch in `cdefs.h` that turns
+conformance on regardless, and combining the two is an error. The flag that
+works is `-D__DARWIN_UNIX03=0`, which is what the header itself ends up
+testing. Every dependency is built with it now.
+
+**zlib.** libxml2 was configured `--with-zlib` for a feature a browser never
+uses: reading a `.gz` straight off disk. Against the 10.5 SDK that recorded a
+call to `gzdirect()`, which Leopard's zlib has and Tiger's has not. Built
+`--without-zlib` now.
+
+**The unwinder.** GCC built libstdc++ naming the system's libgcc_s as well as
+its own, and the unwinder functions it imports are hinted at the system one.
+Leopard's has `_Unwind_GetIPInfo`; Tiger's has not. So the first C++
+exception the engine threw would have ended it. package-webkit.sh now points
+that reference at the libgcc_s in the bundle, which is the one everything
+else already uses.
+
+With those three fixed the application binds every symbol it has at launch -
+`DYLD_BIND_AT_LAUNCH=1` is the way to ask, and is worth running on any build
+before it goes near a Tiger machine. MacRumors then loaded 44 of its 49
+pieces before dying of something else entirely.
+
+**The something else: QuickTime.** WebCore looks up QTKit's constants by name
+at runtime, and a required lookup that misses is a deliberate abort. Mac OS X
+10.4 ships QTKit 7.0.4, and six of the names WebCore asks for arrived later -
+the aperture modes in 7.2, the cross-site security policy and the video
+renderer's own notification later still. So on 10.4 the browser did not fail
+to play a video. It stopped, on the first page holding one, which on the
+modern web is most of them. Those six are looked up the optional way now and
+each use asks first (patch 0070). Clean aperture is the only loss: a movie
+plays at its encoded size rather than its display size.
+
+To stop this class of thing shipping again, `engine/tiger-baseline-symbols.txt`
+records what 10.4.11 actually exports for the three libraries where a build
+against the 10.5 SDK can ask for something absent, and package-webkit.sh
+refuses to package a Tiger build that wants anything outside it.
+`scripts/tiger-symbol-check.sh` does the same against an installed copy,
+though on the machine itself Tiger's own `nm` cannot read binaries this
+toolchain produces - it reports "unknown load command" and then says nothing
+is wrong, which is worse than refusing - so dyld remains the honest test.

@@ -1,0 +1,133 @@
+From c3bc36de458b7f942b814a24b0090a716c7dec9b Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Wed, 23 Sep 2026 05:07:41 -0400
+Subject: [PATCH] Engine: six QuickTime names Tiger's QTKit has not got
+
+WebCore looks QTKit's constants up by name at runtime, and a required
+lookup that misses is a deliberate abort rather than a null. Mac OS X 10.4
+ships QTKit 7.0.4, and six of the names it asks for came later: the
+aperture modes in 7.2, the cross-site security policy and the video
+renderer's notification later still.
+
+So on 10.4 the browser did not fail to play a video. It stopped, on the
+first page that held one - which on the modern web is most of them, and
+which is why this was reported as crashing on YouTube.
+
+They are looked up the optional way now, and each use asks whether it has
+the name first. The only thing lost is clean aperture: a movie plays at
+its encoded size rather than its display size.
+---
+ .../graphics/mac/MediaPlayerPrivateQTKit.mm   | 43 +++++++++++++------
+ 1 file changed, 31 insertions(+), 12 deletions(-)
+
+diff --git a/Source/WebCore/platform/graphics/mac/MediaPlayerPrivateQTKit.mm b/Source/WebCore/platform/graphics/mac/MediaPlayerPrivateQTKit.mm
+index 2e427680..a51027a1 100644
+--- a/Source/WebCore/platform/graphics/mac/MediaPlayerPrivateQTKit.mm
++++ b/Source/WebCore/platform/graphics/mac/MediaPlayerPrivateQTKit.mm
+@@ -59,7 +59,7 @@ SOFT_LINK_CLASS(QTKit, QTMovieLayer)
+ SOFT_LINK_POINTER(QTKit, QTTrackMediaTypeAttribute, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTTrackIDAttribute, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTTrackDisplayNameAttribute, NSString *)
+-SOFT_LINK_POINTER(QTKit, QTTrackIsChapterTrackAttribute, NSString *)
++SOFT_LINK_POINTER_OPTIONAL(QTKit, QTTrackIsChapterTrackAttribute, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTMediaTypeAttribute, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTMediaTypeBase, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTMediaTypeMPEG, NSString *)
+@@ -75,7 +75,7 @@ SOFT_LINK_POINTER(QTKit, QTMovieHasVideoAttribute, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTMovieHasAudioAttribute, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTMovieIsActiveAttribute, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTMovieLoadStateAttribute, NSString *)
+-SOFT_LINK_POINTER(QTKit, QTMovieLoadStateErrorAttribute, NSString *)
++SOFT_LINK_POINTER_OPTIONAL(QTKit, QTMovieLoadStateErrorAttribute, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTMovieLoadStateDidChangeNotification, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTMovieNaturalSizeAttribute, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTMovieCurrentSizeAttribute, NSString *)
+@@ -87,14 +87,22 @@ SOFT_LINK_POINTER(QTKit, QTMovieTimeDidChangeNotification, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTMovieTimeScaleAttribute, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTMovieURLAttribute, NSString *)
+ SOFT_LINK_POINTER(QTKit, QTMovieVolumeDidChangeNotification, NSString *)
+-SOFT_LINK_POINTER(QTKit, QTSecurityPolicyNoCrossSiteAttribute, NSString *)
+-SOFT_LINK_POINTER(QTKit, QTVideoRendererWebKitOnlyNewImageAvailableNotification, NSString *)
+-SOFT_LINK_POINTER(QTKit, QTMovieApertureModeClean, NSString *)
+-SOFT_LINK_POINTER(QTKit, QTMovieApertureModeAttribute, NSString *)
++SOFT_LINK_POINTER_OPTIONAL(QTKit, QTSecurityPolicyNoCrossSiteAttribute, NSString *)
++SOFT_LINK_POINTER_OPTIONAL(QTKit, QTVideoRendererWebKitOnlyNewImageAvailableNotification, NSString *)
++SOFT_LINK_POINTER_OPTIONAL(QTKit, QTMovieApertureModeClean, NSString *)
++SOFT_LINK_POINTER_OPTIONAL(QTKit, QTMovieApertureModeAttribute, NSString *)
+ 
+ SOFT_LINK_POINTER_OPTIONAL(QTKit, QTSecurityPolicyNoLocalToRemoteSiteAttribute, NSString *)
+ SOFT_LINK_POINTER_OPTIONAL(QTKit, QTSecurityPolicyNoRemoteToLocalSiteAttribute, NSString *)
+ 
++// Six of the names above are looked up the optional way, which answers null
++// rather than ending the process when QTKit has not got them. Mac OS X 10.4
++// ships QTKit 7.0.4: the aperture modes arrived in 7.2, the cross-site
++// security policy and the renderer's own notification later still. A
++// required lookup that misses is a deliberate abort, so on 10.4 the browser
++// did not fail to play a video - it disappeared, on the first page holding
++// one. Each use below asks whether it has the name before using it.
++
+ @interface QTMovie(WebKitExtras)
+ - (QTTime)maxTimeLoaded;
+ - (NSArray *)availableRanges;
+@@ -248,17 +256,23 @@ NSMutableDictionary *MediaPlayerPrivateQTKit::commonMovieAttributes()
+             [NSNumber numberWithBool:NO], QTMovieAskUnresolvedDataRefsAttribute,
+             [NSNumber numberWithBool:NO], QTMovieLoopsAttribute,
+             [NSNumber numberWithBool:!m_privateBrowsing], @"QTMovieAllowPersistentCacheAttribute",
+-            QTMovieApertureModeClean, QTMovieApertureModeAttribute,
+             nil];
+ 
++    // Clean aperture is QuickTime 7.2 and later. Without it a movie plays at
++    // its encoded size rather than its display size, which is the right
++    // answer for almost everything and the only answer available here.
++    if (QTMovieApertureModeAttribute && QTMovieApertureModeClean)
++        [movieAttributes setValue:QTMovieApertureModeClean forKey:QTMovieApertureModeAttribute];
++
+     // Check to see if QTSecurityPolicyNoRemoteToLocalSiteAttribute is defined, which was added in QTKit 7.6.3.
+     // If not, just set NoCrossSite = YES, which does the same thing as NoRemoteToLocal = YES and 
+     // NoLocalToRemote = YES in QTKit < 7.6.3.
+     if (QTSecurityPolicyNoRemoteToLocalSiteAttribute) {
+-        [movieAttributes setValue:[NSNumber numberWithBool:NO] forKey:QTSecurityPolicyNoCrossSiteAttribute];
++        if (QTSecurityPolicyNoCrossSiteAttribute)
++            [movieAttributes setValue:[NSNumber numberWithBool:NO] forKey:QTSecurityPolicyNoCrossSiteAttribute];
+         [movieAttributes setValue:[NSNumber numberWithBool:YES] forKey:QTSecurityPolicyNoRemoteToLocalSiteAttribute];
+         [movieAttributes setValue:[NSNumber numberWithBool:YES] forKey:QTSecurityPolicyNoLocalToRemoteSiteAttribute];
+-    } else
++    } else if (QTSecurityPolicyNoCrossSiteAttribute)
+         [movieAttributes setValue:[NSNumber numberWithBool:YES] forKey:QTSecurityPolicyNoCrossSiteAttribute];
+ 
+     if (m_preload < MediaPlayer::Auto)
+@@ -442,7 +456,10 @@ void MediaPlayerPrivateQTKit::createQTVideoRenderer(QTVideoRendererMode renderer
+     // associate our movie with our instance of QTVideoRendererWebKitOnly
+     [(id<WebKitVideoRenderingDetails>)m_qtVideoRenderer.get() setMovie:m_qtMovie.get()];
+ 
+-    if (rendererMode == QTVideoRendererModeListensForNewImages) {
++    // A nil name would register for every notification there is, so on a
++    // system whose QTKit does not define this one there is nothing to listen
++    // for and nothing to do.
++    if (rendererMode == QTVideoRendererModeListensForNewImages && QTVideoRendererWebKitOnlyNewImageAvailableNotification) {
+         // listen to QTVideoRendererWebKitOnly's QTVideoRendererWebKitOnlyNewImageDidBecomeAvailableNotification
+         [[NSNotificationCenter defaultCenter] addObserver:m_objcObserver.get()
+                                                  selector:@selector(newImageAvailable:)
+@@ -1135,7 +1152,8 @@ long MediaPlayerPrivateQTKit::platformErrorCode() const
+     if (!m_qtMovie)
+         return 0;
+ 
+-    NSError* error = (NSError*)[m_qtMovie.get() attributeForKey:QTMovieLoadStateErrorAttribute];
++    NSError* error = QTMovieLoadStateErrorAttribute
++        ? (NSError*)[m_qtMovie.get() attributeForKey:QTMovieLoadStateErrorAttribute] : nil;
+     if (!error || ![error isKindOfClass:[NSError class]])
+         return 0;
+ 
+@@ -1497,7 +1515,8 @@ void MediaPlayerPrivateQTKit::disableUnsupportedTracks()
+         }
+ 
+ #if ENABLE(VIDEO_TRACK)
+-        NSNumber *isChapterTrack = (NSNumber*)[track attributeForKey:QTTrackIsChapterTrackAttribute];
++        NSNumber *isChapterTrack = QTTrackIsChapterTrackAttribute
++            ? (NSNumber*)[track attributeForKey:QTTrackIsChapterTrackAttribute] : nil;
+         if (!(isChapterTrack && [isChapterTrack boolValue])) {
+             if ([mediaType isEqualToString:QTMediaTypeVideo]) {
+                 RefPtr<VideoTrackPrivateQTKit> videoTrack = VideoTrackPrivateQTKit::create(track);
+-- 
+2.54.0 (Apple Git-157)
+

@@ -49,10 +49,16 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential clang
 
 mkdir -p ~/src && cd ~/src
 sudo mkdir -p /opt/ppc/SDKs
-# Lima mounts the Mac's home folder read-only at the same path.
-for sdk in /Users/*/polliwog-build/sdks/sdk105.zip /Users/*/polliwog-build/sdks/sdk104.zip; do
-    ( cd /opt/ppc/SDKs && sudo unzip -qo "$sdk" )
-done
+# Lima mounts the Mac's home folder read-only at the same path. Already
+# unpacked on a re-run, and the zips may not be on this Mac at all by then -
+# so this step is skipped rather than allowed to end the script before the
+# parts a re-run is usually for, which are the libraries further down.
+if [ ! -d /opt/ppc/SDKs/MacOSX10.5.sdk ]; then
+    for sdk in /Users/*/polliwog-build/sdks/sdk105.zip /Users/*/polliwog-build/sdks/sdk104.zip; do
+        [ -f "$sdk" ] || { echo "no SDK at $sdk" >&2; exit 1; }
+        ( cd /opt/ppc/SDKs && sudo unzip -qo "$sdk" )
+    done
+fi
 
 if [ ! -x /opt/ppc/bin/powerpc-apple-darwin9-ld ]; then
     rm -rf cctools-port
@@ -120,36 +126,23 @@ sudo $INT -id $F/libstdc++.6.dylib -change $L/libgcc_s.1.dylib $F/libgcc_s.1.dyl
 sudo mkdir -p /opt/ppc/share
 sudo cp "$REPO/scripts/toolchain/ppc-darwin.cmake" /opt/ppc/share/
 
-# ICU 55.2, the version Leopard WebKit 604 bundles, as one libicucore.dylib
-# with unrenamed symbols. Cross-building ICU needs a native build for its tools.
-if [ ! -f /opt/ppc/icu/lib/libicucore.dylib ]; then
-    [ -f icu4c-55_2-src.tgz ] || wget -q https://github.com/unicode-org/icu/releases/download/release-55-2/icu4c-55_2-src.tgz
-    echo "eda2aa9f9c787748a2e2d310590720ca8bcc6252adf6b4cfb03b65bef9d66759  icu4c-55_2-src.tgz" | sha256sum -c
-    rm -rf icu icu-host icu-ppc && tar -xzf icu4c-55_2-src.tgz
-    mkdir icu-host && ( cd icu-host && ../icu/source/configure --disable-tests --disable-samples && make -j8 )
-    mkdir icu-ppc && cd icu-ppc
-    CC=powerpc-apple-darwin9-gcc CXX=powerpc-apple-darwin9-g++ \
-    CFLAGS="-O2 -mmacosx-version-min=10.4" CXXFLAGS="-O2 -mmacosx-version-min=10.4" \
-    LDFLAGS="-mmacosx-version-min=10.4 -static-libgcc" \
-        ../icu/source/configure --host=powerpc-apple-darwin9 --with-cross-build=$HOME/src/icu-host \
-        --prefix=/opt/ppc/icu --disable-renaming --enable-static --disable-shared \
-        --with-data-packaging=static --disable-tests --disable-samples --disable-extras --disable-tools
-    make -j8
-    sudo env PATH=$PATH make install
-    # ICU's genccode reverses the big-endian data when run on little-endian
-    # Linux; write the data object ourselves.
-    python3 "$REPO/scripts/toolchain/icu-data-asm.py" data/out/icudt55b.dat icudt55 > /tmp/icudt55b_dat.S
-    powerpc-apple-darwin9-gcc -c /tmp/icudt55b_dat.S -o /tmp/icudt55b_dat.o
-    rm -f /tmp/libicudata.a && powerpc-apple-darwin9-ar rcs /tmp/libicudata.a /tmp/icudt55b_dat.o
-    sudo cp /tmp/libicudata.a /opt/ppc/icu/lib/libicudata.a
-    cd /opt/ppc/icu/lib
-    powerpc-apple-darwin9-g++ -dynamiclib -nodefaultlibs -static-libgcc \
-        -isysroot /opt/ppc/SDKs/MacOSX10.5.sdk -mmacosx-version-min=10.4 \
-        -install_name $F/libicucore.dylib -compatibility_version 1.0.0 -current_version 55.2.0 \
-        -Wl,-force_load,libicuuc.a -Wl,-force_load,libicui18n.a -Wl,-force_load,libicudata.a \
-        $R/libstdc++.6.dylib $R/libgcc_s.1.dylib -lgcc -lSystem -o /tmp/libicucore.dylib
-    sudo mv /tmp/libicucore.dylib /opt/ppc/icu/lib/
-fi
+# __DARWIN_UNIX03=0 is what keeps this build on Tiger's side of the line.
+#
+# The 10.5 SDK renames close(), open(), mmap(), mktime() and a dozen others
+# to "$UNIX2003" conformance variants, and decides whether to by reading
+# __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ - a macro Apple's compiler
+# defines from -mmacosx-version-min and FSF's does not. So a cross-built
+# library asks for functions Tiger's libSystem has never had, lazily, and
+# the browser starts, renders, and vanishes on the first page that formats a
+# date. Saying the version macro here is not enough, because a project that
+# defines _POSIX_C_SOURCE or _XOPEN_SOURCE (ICU and libxslt both do) takes an
+# earlier branch that forces conformance on regardless; and _NONSTD_SOURCE,
+# the other way in, is an error to combine with those. This sets the flag
+# the header itself ends up testing.
+
+# The libraries WebKit bundles, each in its own script so that a re-run
+# rebuilds only what is missing.
+[ -f /opt/ppc/icu/lib/libicucore.dylib ] || bash "$REPO/scripts/toolchain/build-icu.sh"
 
 # The other libraries WebKit bundles.
 [ -f /opt/ppc/sqlite/lib/libsqlite3.dylib ] || bash "$REPO/scripts/toolchain/build-sqlite.sh"

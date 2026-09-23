@@ -18,8 +18,8 @@ patch -p1 < "$REPO/scripts/toolchain/ots-unique-font-names.patch"
 # WebKit: in strict mode Leopard's math.h hides the C99 functions <cmath> needs.
 ./configure --host=powerpc-apple-darwin9 --prefix=/opt/ppc/ots \
     CC=powerpc-apple-darwin9-gcc CXX=powerpc-apple-darwin9-g++ \
-    CFLAGS="-O2 -mmacosx-version-min=10.4" \
-    CXXFLAGS="-O2 -mmacosx-version-min=10.4 -std=gnu++11 -D_GLIBCXX_USE_C99_MATH_TR1=1" \
+    CFLAGS="-O2 -mmacosx-version-min=10.4 -D__DARWIN_UNIX03=0" \
+    CXXFLAGS="-O2 -mmacosx-version-min=10.4 -D__DARWIN_UNIX03=0 -std=gnu++11 -D_GLIBCXX_USE_C99_MATH_TR1=1" \
     LDFLAGS="-mmacosx-version-min=10.4 -static-libgcc"
 # The archiver must be Apple's (the Makefile hard-codes plain `ar`): the Linux
 # one writes long member names in a form ld64 cannot follow, and the objects

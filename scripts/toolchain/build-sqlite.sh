@@ -15,7 +15,7 @@ mkdir -p ~/src/deps && cd ~/src/deps
 python3 -c "import hashlib,sys; h=hashlib.sha3_256(open('sqlite-autoconf-$VERSION.tar.gz','rb').read()).hexdigest(); sys.exit(0 if h=='$SHA3' else 'SHA3-256 mismatch: '+h)"
 rm -rf sqlite-autoconf-$VERSION && tar xzf sqlite-autoconf-$VERSION.tar.gz && cd sqlite-autoconf-$VERSION
 
-powerpc-apple-darwin9-gcc -O2 -mmacosx-version-min=10.4 -dynamiclib \
+powerpc-apple-darwin9-gcc -O2 -mmacosx-version-min=10.4 -D__DARWIN_UNIX03=0 -dynamiclib \
     -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_ENABLE_LOCKING_STYLE=1 \
     -install_name @executable_path/../Frameworks/libsqlite3.dylib \
     -compatibility_version 9.0.0 -current_version $((VERSION / 100)).0.0 \

@@ -3,7 +3,15 @@
 # load from the app's Frameworks folder. Leopard's libxml2 (2.6) is older than
 # WebCore 604 needs, so Leopard WebKit bundles both; this uses the current
 # releases. Built for the G3 and Tiger, so every variant can use them; iconv
-# and zlib come from the system, which has both on Tiger and Leopard.
+# and iconv come from the system.
+#
+# Not zlib. libxml2 wants it only to read a .gz file straight off disk,
+# which nothing in a browser does - the engine has already decompressed
+# anything a server sent by the time libxml2 sees it. Asking for it against
+# the 10.5 SDK records a reference to gzdirect(), which Leopard's zlib has
+# and Tiger's has not, and that reference is bound lazily: the application
+# launches, renders, and disappears the first time a page reaches the code
+# that would have called it. Which looked like "it crashes on YouTube".
 # Run inside the cross-build VM.
 set -e
 export PATH=/opt/ppc/bin:$PATH
@@ -12,7 +20,7 @@ XSLT=1.1.45 XSLT_SHA256=9acfe68419c4d06a45c550321b3212762d92f41465062ca4ea19e632
 P=/opt/ppc/xml
 F=@executable_path/../Frameworks
 INT=powerpc-apple-darwin9-install_name_tool
-FLAGS="-O2 -mmacosx-version-min=10.4"
+FLAGS="-O2 -mmacosx-version-min=10.4 -D__DARWIN_UNIX03=0"
 # pkg-config sees only what is built here, never the Linux host's libraries.
 export PKG_CONFIG_LIBDIR=$P/lib/pkgconfig PKG_CONFIG_PATH=
 # libiconv comes from Tiger's SDK, everything else from Leopard's.
@@ -35,7 +43,7 @@ sudo rm -rf $P && sudo mkdir -p $P && sudo chown "$(id -u)" $P
 
 rm -rf libxml2-$XML2 && tar xJf libxml2-$XML2.tar.xz && cd libxml2-$XML2
 ./configure --host=powerpc-apple-darwin9 --prefix=$P --disable-static \
-    --without-python --without-lzma --with-zlib --with-iconv --with-threads \
+    --without-python --without-lzma --without-zlib --with-iconv --with-threads \
     CC=powerpc-apple-darwin9-gcc CFLAGS="$FLAGS" LDFLAGS="$LINK"
 make -j8 && make install
 lib() { basename "$(readlink "$P/lib/$1.dylib")"; }  # e.g. libxml2.16.dylib

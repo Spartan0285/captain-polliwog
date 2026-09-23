@@ -28,6 +28,7 @@ case $VARIANT in
 esac
 FW=$OUT/$FOLDER
 INT=/opt/ppc/bin/powerpc-apple-darwin9-install_name_tool
+OTOOL=/opt/ppc/bin/powerpc-apple-darwin9-otool
 SYS=/System/Library/Frameworks
 # The oldest system this engine runs on, written into every framework's
 # Info.plist as LSMinimumSystemVersion. The app reads it before loading
@@ -114,6 +115,20 @@ cp /opt/ppc/icu/lib/libicucore.dylib /opt/ppc/sqlite/lib/libsqlite3.dylib \
 cp -L /opt/ppc/xml/lib/libxml2.dylib "$FW/$(basename "$(readlink /opt/ppc/xml/lib/libxml2.dylib)")"
 cp -L /opt/ppc/xml/lib/libxslt.dylib "$FW/$(basename "$(readlink /opt/ppc/xml/lib/libxslt.dylib)")"
 
+# GCC built libstdc++ naming the system's libgcc_s as well as its own, and
+# the unwinder functions it imports are hinted at the system one. Leopard's
+# libgcc_s has them; Tiger's has not, so on 10.4 the first C++ exception the
+# engine throws takes the application with it - and because that reference
+# is bound lazily, it happens on whatever page throws first rather than at
+# startup, which makes it look like the page. Point it at the copy bundled
+# here, which is the one everything else already uses.
+for binary in "$FW"/*.dylib "$FW"/*.framework/Versions/A/[A-Z]*; do
+    [ -f "$binary" ] || continue
+    for dep in $($OTOOL -L "$binary" | awk '{print $1}' | grep '^/usr/lib/libgcc_s\.'); do
+        $INT -change "$dep" "@executable_path/../$FOLDER/libgcc_s.1.dylib" "$binary"
+    done
+done
+
 # Tiger: the stand-ins the frameworks are linked against (engine/tiger-shim),
 # and the G3 stamp. Apple's WebKitSystemInterface objects are marked for the
 # G4, which raises whatever links them; dyld then refuses that binary on a
@@ -143,7 +158,48 @@ tiger-*)
             continue
         fi
         python3 "$(dirname "$0")/stamp-ppc750.py" "$binary"
-    done ;;
+    done
+
+    # Nothing here may ask 10.4 for something it has not got. Apple's GCC
+    # defines _NONSTD_SOURCE when told to target 10.4, which is what stops
+    # the 10.5 SDK renaming open(), close() and mktime() to their $UNIX2003
+    # conformance variants; FSF's GCC has no such rule, so a library built
+    # without it asks for functions Tiger's libSystem never had. The same
+    # goes for anything Leopard added to zlib or to libgcc's unwinder.
+    #
+    # A missing one of these does not stop the application starting, because
+    # it is bound lazily. It starts, renders, and disappears on the first
+    # page that reaches the code that calls it. Which is why this is checked
+    # here, and not left to be discovered as a crash report from a G3.
+    BASELINE=$(dirname "$0")/../../engine/tiger-baseline-symbols.txt
+    NM=/opt/ppc/bin/powerpc-apple-darwin9-nm
+    absent=0
+    for binary in $FW/*.framework/Versions/A/[A-Z]* $FW/*.dylib; do
+        [ -f "$binary" ] || continue
+        # Weak imports are the design - everything Leopard added is linked
+        # that way and dyld leaves it null. It is the others that matter.
+        $NM -m "$binary" 2>/dev/null | grep -v "weak external" \
+          | awk '/\(undefined\)/ && /\(from (libSystem|libz|libgcc_s)\)/ {
+                sym = ""; from = "";
+                for (i = 1; i <= NF; i++) {
+                    if (substr($i, 1, 1) == "_") sym = $i;
+                    if ($i == "(from") { from = $(i+1); sub(/\)$/, "", from); }
+                }
+                # libSystem is only checked for the conformance variants;
+                # the rest of it has not changed under us.
+                if (from == "libSystem" && sym !~ /UNIX2003/) next;
+                print sym;
+            }' | sort -u | while read -r sym; do
+                grep -qx "$sym" "$BASELINE" || echo "$(basename "$binary") wants $sym"
+            done
+    done > /tmp/tiger-absent.$$
+    if [ -s /tmp/tiger-absent.$$ ]; then
+        echo "error: this build asks 10.4 for symbols it has not got:" >&2
+        sed 's/^/  /' /tmp/tiger-absent.$$ >&2
+        rm -f /tmp/tiger-absent.$$
+        exit 1
+    fi
+    rm -f /tmp/tiger-absent.$$ ;;
 esac
 
 # Anything still pointing into the build machine is a packaging bug.
