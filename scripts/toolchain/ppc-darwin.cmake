@@ -6,7 +6,17 @@ set(CMAKE_SYSTEM_NAME Darwin)
 set(CMAKE_SYSTEM_PROCESSOR ppc)  # the name WebKit CMake recognises
 set(CMAKE_SYSTEM_VERSION 8.0)
 
-set(PPC_PREFIX /opt/ppc/bin/powerpc-apple-darwin9-)
+# Which compiler builds this. The default is the GCC 6.5 that Leopard
+# WebKit's port was written for; TOOLCHAIN=/opt/ppc-modern in the
+# environment selects the GCC 14 built for the 2.52 port instead, which
+# knows this processor far better than 2015's compiler did. Each has its own
+# runtime libraries, and an image must not see two of them.
+if (DEFINED ENV{PPC_TOOLCHAIN})
+    set(PPC_ROOT $ENV{PPC_TOOLCHAIN})
+else ()
+    set(PPC_ROOT /opt/ppc)
+endif ()
+set(PPC_PREFIX ${PPC_ROOT}/bin/powerpc-apple-darwin9-)
 set(CMAKE_C_COMPILER   ${PPC_PREFIX}gcc)
 set(CMAKE_CXX_COMPILER ${PPC_PREFIX}g++)
 set(CMAKE_AR           ${PPC_PREFIX}ar CACHE FILEPATH "" FORCE)
@@ -46,7 +56,7 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 # GCC puts cold code and static initializers in sections of their own
 # (__text_cold, __text_startup), whatever the optimization flags say, so
 # those are folded into __text.
-set(PPC_RUNTIME /opt/ppc/runtime)
+set(PPC_RUNTIME ${PPC_ROOT}/runtime)
 set(PPC_LINK_FLAGS "-nodefaultlibs -static-libgcc -Wl,-no_function_starts,-no_data_in_code_info,-no_version_load_command,-no_source_version")
 foreach (_section __text_cold __text_startup __text_exit __text_hot)
     set(PPC_LINK_FLAGS "${PPC_LINK_FLAGS} -Wl,-rename_section,__TEXT,${_section},__TEXT,__text")
@@ -61,8 +71,32 @@ endif ()
 set(CMAKE_EXE_LINKER_FLAGS_INIT    "${PPC_LINK_FLAGS}")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "${PPC_LINK_FLAGS}")
 set(CMAKE_MODULE_LINKER_FLAGS_INIT "${PPC_LINK_FLAGS}")
-set(CMAKE_C_STANDARD_LIBRARIES_INIT "${PPC_RUNTIME}/libgcc_s.1.dylib -lgcc -lSystem")
-set(CMAKE_CXX_STANDARD_LIBRARIES_INIT "${PPC_RUNTIME}/libstdc++.6.dylib ${PPC_RUNTIME}/libgcc_s.1.dylib -lgcc -lSystem")
+# Thread-local storage is emulated on 10.5, and its state lives in whichever
+# copy of the runtime an image happens to link. GCC 6's shared libgcc
+# exports the two functions that reach it, so every image shares one copy.
+# GCC 14 hides them, and each image would take its own from libgcc_eh.a -
+# at which point std::call_once writes one copy and libstdc++ reads another,
+# and the first thing the engine does on startup is jump to null.
+# libemutls.1.dylib is those two functions and nothing else, listed ahead of
+# the static libgcc so they bind there (build-modern-emutls.sh).
+if (EXISTS ${PPC_RUNTIME}/libemutls.1.dylib)
+    set(PPC_EMUTLS "${PPC_RUNTIME}/libemutls.1.dylib ")
+else ()
+    set(PPC_EMUTLS "")
+endif ()
+# PPC_STATIC_RUNTIME builds each image with its own copy of the C++ runtime.
+# That is not how the engine ships - it breaks anything that shares a
+# std::once_flag across two frameworks, because the emulated thread-local
+# state is per copy - but it is self-contained, which is what a measurement
+# of one compiler against another needs.
+if (DEFINED ENV{PPC_STATIC_RUNTIME})
+    set(PPC_LIBCXX "${PPC_ROOT}/powerpc-apple-darwin9/lib/libstdc++.a")
+    set(CMAKE_C_STANDARD_LIBRARIES_INIT "-lgcc -lgcc_eh -lSystem")
+    set(CMAKE_CXX_STANDARD_LIBRARIES_INIT "${PPC_LIBCXX} -lgcc -lgcc_eh -lSystem")
+else ()
+    set(CMAKE_C_STANDARD_LIBRARIES_INIT "${PPC_RUNTIME}/libgcc_s.1.dylib ${PPC_EMUTLS}-lgcc -lSystem")
+    set(CMAKE_CXX_STANDARD_LIBRARIES_INIT "${PPC_RUNTIME}/libstdc++.6.dylib ${PPC_RUNTIME}/libgcc_s.1.dylib ${PPC_EMUTLS}-lgcc -lSystem")
+endif ()
 
 # libstdc++ tested for C99 TR1 math in strict mode, where the old math.h
 # hides llround and friends; WebKit builds in GNU mode, where they exist.

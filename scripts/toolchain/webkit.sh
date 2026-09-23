@@ -22,6 +22,13 @@ shift 2 || true
 MAC_SRC=${MAC_SRC:-/Users/adam/polliwog-build/webkit-604}
 SRC=$HOME/src/webkit-604
 BUILD=$HOME/build/$VARIANT
+# TOOLCHAIN=modern builds with the GCC 14 at /opt/ppc-modern rather than the
+# GCC 6.5 the port was written for, into a build directory of its own so the
+# two can be compared without rebuilding either.
+if [ "${TOOLCHAIN:-}" = modern ]; then
+    export PPC_TOOLCHAIN=/opt/ppc-modern
+    BUILD=$BUILD-gcc14
+fi
 # Libraries bundled as Leopard WebKit bundles them (built by the other
 # scripts here): ICU, SQLite, libxml2/libxslt, and OTS for web fonts.
 ICU=/opt/ppc/icu/lib/libicucore.dylib

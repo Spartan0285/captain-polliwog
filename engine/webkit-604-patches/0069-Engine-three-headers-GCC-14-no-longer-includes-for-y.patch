@@ -1,0 +1,59 @@
+From 39d4289ec2c1b4f95d47858d310e941a3c97db78 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Wed, 23 Sep 2026 04:06:11 -0400
+Subject: [PATCH] Engine: three headers GCC 14 no longer includes for you
+
+A newer compiler's standard headers stopped pulling in stdio, <iterator>
+and <functional> by accident. Three includes, and the engine builds with
+GCC 14 instead of the GCC 6.5 the port was written for.
+---
+ Source/WTF/wtf/cocoa/MemoryPressureHandlerCocoa.mm | 3 +++
+ Source/WTF/wtf/text/IntegerToStringConversion.h    | 3 +++
+ Source/bmalloc/bmalloc/Zone.cpp                    | 3 +++
+ 3 files changed, 9 insertions(+)
+
+diff --git a/Source/WTF/wtf/cocoa/MemoryPressureHandlerCocoa.mm b/Source/WTF/wtf/cocoa/MemoryPressureHandlerCocoa.mm
+index ec744e4b..d4f55535 100644
+--- a/Source/WTF/wtf/cocoa/MemoryPressureHandlerCocoa.mm
++++ b/Source/WTF/wtf/cocoa/MemoryPressureHandlerCocoa.mm
+@@ -37,6 +37,9 @@
+ #include <mach/mach_types.h>
+ #include <mach/mach_init.h>
+ #include <mach/mach_host.h>
++
++// std::function needs its own header under GCC 14.
++#include <functional>
+ #endif
+ 
+ #define ENABLE_FMW_FOOTPRINT_COMPARISON 0
+diff --git a/Source/WTF/wtf/text/IntegerToStringConversion.h b/Source/WTF/wtf/text/IntegerToStringConversion.h
+index 61942e7f..649c5eb2 100644
+--- a/Source/WTF/wtf/text/IntegerToStringConversion.h
++++ b/Source/WTF/wtf/text/IntegerToStringConversion.h
+@@ -22,6 +22,9 @@
+ #ifndef IntegerToStringConversion_h
+ #define IntegerToStringConversion_h
+ 
++// std::end lives in <iterator>; GCC 14 no longer supplies it by accident.
++#include <iterator>
++
+ namespace WTF {
+ 
+ enum PositiveOrNegativeNumber {
+diff --git a/Source/bmalloc/bmalloc/Zone.cpp b/Source/bmalloc/bmalloc/Zone.cpp
+index 822150b4..b97d213d 100644
+--- a/Source/bmalloc/bmalloc/Zone.cpp
++++ b/Source/bmalloc/bmalloc/Zone.cpp
+@@ -25,6 +25,9 @@
+ 
+ #include "Sizes.h"
+ #include "Zone.h"
++
++// GCC 14 no longer brings stdio in through another header.
++#include <cstdio>
+ #include <cstring>
+ 
+ namespace bmalloc {
+-- 
+2.54.0 (Apple Git-157)
+

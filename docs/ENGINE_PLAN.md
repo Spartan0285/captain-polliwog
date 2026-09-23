@@ -923,3 +923,47 @@ read back as 4,3,2,1, while a `Float64Array` is native. That is upstream
 WebKit's deliberate choice for big-endian machines, because web content
 assumes it, and patch 0052 is what makes the JIT's own fast paths agree
 with the runtime. It is not something to fix.
+
+## 23 September: what a newer compiler is worth
+
+The engine is built by GCC 6.5, because that is what Leopard WebKit's
+PowerPC port was written against. The 2.52 port needed a newer one and has
+GCC 14.2 at `/opt/ppc-modern`, which knows the 7450 far better than 2015's
+compiler did, so it is worth asking what the same source does through it.
+`TOOLCHAIN=modern` on `webkit.sh` selects it, into a build directory of its
+own so the two can be compared without rebuilding either.
+
+JavaScriptCore builds with three added includes and nothing else (patch
+0069): GCC 14's headers no longer pull in stdio, `<iterator>` or
+`<functional>` by accident.
+
+Measured on the PowerBook, same source, same JIT, both runs back to back:
+
+    JSON             422ms -> 384ms   9%
+    bit operations  1614   -> 1525    5.5%
+    array sort       480   ->  459    4.4%
+    string building  292   ->  283    3.3%
+    object churn    1421   -> 1383    2.7%
+    integer loop    2883   -> 2810    2.5%
+    floating point  1465   -> 1436    2%
+    recursion         30   ->   30
+
+Between two and nine per cent, for nothing but a newer compiler. It is
+modest here because these are JIT-bound: the compiler only gets to improve
+the runtime, the interpreter and the collector, while the JIT writes its
+own code either way. The part of the engine where a compiler has the most
+to say is WebCore, which is what Speedometer actually spends its time in,
+so the number to care about is not this one.
+
+Getting there needs one more thing solved. Thread-local storage is
+emulated on 10.5, and the state lives in whichever copy of the runtime an
+image links. GCC 6's shared libgcc exports the two functions that reach
+it, so the engine's three frameworks share one copy. GCC 14 hides them.
+`build-modern-emutls.sh` builds those two functions as a library every
+image can share, which is most of the answer, but libstdc++ carries a
+hidden copy of its own, so a `std::once_flag` shared across two frameworks
+still finds nothing and the engine jumps to null on startup. The fix is to
+relink libstdc++ so that it imports them too - it is one library, not a
+toolchain rebuild. Until then `PPC_STATIC_RUNTIME=1` gives each image its
+own runtime, which is self-contained enough to measure with and not to
+ship.
