@@ -1,0 +1,324 @@
+From 2056a78af28adb31abb8c38f8996cb644a386ba9 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Wed, 23 Sep 2026 15:25:22 -0400
+Subject: [PATCH] Engine: what nine years of compiler does to a 2017 codebase
+
+Building WebKit 604 with GCC 14 instead of the GCC 6.5 this port was
+written against, so that what a newer compiler is worth here can be
+measured rather than guessed at.
+
+Seven headers it no longer supplies by accident - <cstdint>, <utility>
+and <functional> among them, the last inside the __cplusplus guard the
+declarations already use, because plain Objective-C files read the same
+headers. Three linker options it forwards differently: -umbrella WebKit
+and its kind arrive as two arguments unless spelled -Wl,-umbrella,WebKit,
+and the build stops on "file not found: WebKit". Two inline definitions
+it declines to emit, wanting the defining header in view. Four functions
+and constants the 10.5 SDK marks as 10.6-and-later, which makes them
+unavailable rather than absent: a soft link cannot help, because the name
+it defines is the name the SDK has spoken for, so they are looked up
+under names of their own.
+
+And one internal compiler error, on one file, which -fno-tree-pre does
+not avoid despite the crash being in that pass. That file is built at -O1
+instead, and only when the compiler is GCC 14, so that comparing the two
+compilers is not quietly comparing one fewer optimization everywhere.
+---
+ Source/WebCore/CMakeLists.txt                 |  7 ++++++-
+ .../WebCore/bindings/js/JSImageDataCustom.cpp |  3 +++
+ .../audio/mac/AudioHardwareListenerMac.h      |  1 +
+ .../WebCore/platform/network/cf/DNSCFNet.cpp  | 18 +++++++++++-----
+ .../platform/network/cf/ProxyServerCFNet.cpp  | 18 +++++++++++-----
+ .../cf/SocketStreamHandleImplCFNet.cpp        | 18 +++++++++++-----
+ .../network/cocoa/ResourceResponseCocoa.mm    | 21 ++++++++++++++++++-
+ Source/WebCore/svg/SVGLengthContext.cpp       |  4 ++++
+ Source/WebKitLegacy/CMakeLists.txt            |  4 ++--
+ Source/WebKitLegacy/PlatformMac.cmake         | 11 ++++++++++
+ .../mac/DOM/WebDOMOperationsPrivate.h         |  6 ++++++
+ .../WebKitLegacy/mac/WebView/WebViewPrivate.h |  6 ++++++
+ 12 files changed, 98 insertions(+), 19 deletions(-)
+
+diff --git a/Source/WebCore/CMakeLists.txt b/Source/WebCore/CMakeLists.txt
+index 9a4be46f..ae1081eb 100644
+--- a/Source/WebCore/CMakeLists.txt
++++ b/Source/WebCore/CMakeLists.txt
+@@ -3955,7 +3955,12 @@ endif ()
+ WEBKIT_FRAMEWORK(WebCore)
+ 
+ if (APPLE)
+-    set_target_properties(WebCore PROPERTIES LINK_FLAGS "-lobjc -sub_library libobjc -umbrella WebKit -allowable_client WebCoreTestSupport -allowable_client WebKit2 -allowable_client WebKitLegacy")
++    # Each of these is a linker option with an argument, and the two have to
++    # arrive at the linker together. GCC 6's driver passed them through as
++    # written; GCC 14's hands the argument on as if it were a file to link,
++    # and the build stops on "file not found: WebKit". Spelling them -Wl,
++    # with commas says what was meant either way.
++    set_target_properties(WebCore PROPERTIES LINK_FLAGS "-lobjc -Wl,-sub_library,libobjc -Wl,-umbrella,WebKit -Wl,-allowable_client,WebCoreTestSupport -Wl,-allowable_client,WebKit2 -Wl,-allowable_client,WebKitLegacy")
+ endif ()
+ 
+ if (WIN32)
+diff --git a/Source/WebCore/bindings/js/JSImageDataCustom.cpp b/Source/WebCore/bindings/js/JSImageDataCustom.cpp
+index 518b5ef1..e13ed745 100644
+--- a/Source/WebCore/bindings/js/JSImageDataCustom.cpp
++++ b/Source/WebCore/bindings/js/JSImageDataCustom.cpp
+@@ -24,6 +24,9 @@
+  */
+ 
+ #include "config.h"
++// putDirectInternal<> lives here; without it GCC 14 emits a call to a
++// template body that is never instantiated anywhere else.
++#include <runtime/JSObjectInlines.h>
+ #include "JSImageData.h"
+ 
+ #include "JSDOMConvertBufferSource.h"
+diff --git a/Source/WebCore/platform/audio/mac/AudioHardwareListenerMac.h b/Source/WebCore/platform/audio/mac/AudioHardwareListenerMac.h
+index 1049827a..66db4443 100644
+--- a/Source/WebCore/platform/audio/mac/AudioHardwareListenerMac.h
++++ b/Source/WebCore/platform/audio/mac/AudioHardwareListenerMac.h
+@@ -27,6 +27,7 @@
+ #define AudioHardwareListenerMac_h
+ 
+ #include "AudioHardwareListener.h"
++#include <functional>   // std::function, which GCC 14 no longer supplies through another header
+ #include <wtf/WeakPtr.h>
+ 
+ #if PLATFORM(MAC)
+diff --git a/Source/WebCore/platform/network/cf/DNSCFNet.cpp b/Source/WebCore/platform/network/cf/DNSCFNet.cpp
+index 155b7d99..12e7dd85 100644
+--- a/Source/WebCore/platform/network/cf/DNSCFNet.cpp
++++ b/Source/WebCore/platform/network/cf/DNSCFNet.cpp
+@@ -50,17 +50,25 @@
+ #include <wtf/SoftLinking.h>
+ 
+ SOFT_LINK_FRAMEWORK_IN_UMBRELLA(CoreServices, CFNetwork)
+-#pragma GCC diagnostic push
+-#pragma GCC diagnostic ignored "-Wredundant-decls"
+-SOFT_LINK(CFNetwork, CFNetworkCopySystemProxySettings, CFDictionaryRef, (), ())
+-#pragma GCC diagnostic pop
++// The 10.5 SDK declares this one as 10.6-and-later, which makes it
++// unavailable rather than merely absent. GCC 6 let a call through anyway;
++// GCC 14 refuses it, and a soft link cannot help because the name it
++// defines is the name the SDK has already spoken for. So it is looked up
++// here under a name of its own. The symbol is still the real one at
++// runtime - this only keeps the compiler away from the SDK's declaration.
++static CFDictionaryRef copySystemProxySettings()
++{
++    typedef CFDictionaryRef (*CopySystemProxySettingsFunction)(void);
++    static CopySystemProxySettingsFunction function = reinterpret_cast<CopySystemProxySettingsFunction>(dlsym(CFNetworkLibrary(), "CFNetworkCopySystemProxySettings"));
++    return function ? function() : 0;
++}
+ #endif
+ 
+ namespace WebCore {
+ 
+ void DNSResolveQueue::updateIsUsingProxy()
+ {
+-    RetainPtr<CFDictionaryRef> proxySettings = adoptCF(CFNetworkCopySystemProxySettings());
++    RetainPtr<CFDictionaryRef> proxySettings = adoptCF(copySystemProxySettings());
+     if (!proxySettings) {
+         m_isUsingProxy = false;
+         return;
+diff --git a/Source/WebCore/platform/network/cf/ProxyServerCFNet.cpp b/Source/WebCore/platform/network/cf/ProxyServerCFNet.cpp
+index 906f6421..3ea26515 100644
+--- a/Source/WebCore/platform/network/cf/ProxyServerCFNet.cpp
++++ b/Source/WebCore/platform/network/cf/ProxyServerCFNet.cpp
+@@ -39,10 +39,18 @@
+ #include <wtf/SoftLinking.h>
+ 
+ SOFT_LINK_FRAMEWORK_IN_UMBRELLA(CoreServices, CFNetwork)
+-#pragma GCC diagnostic push
+-#pragma GCC diagnostic ignored "-Wredundant-decls"
+-SOFT_LINK(CFNetwork, CFNetworkCopySystemProxySettings, CFDictionaryRef, (), ())
+-#pragma GCC diagnostic pop
++// The 10.5 SDK declares this one as 10.6-and-later, which makes it
++// unavailable rather than merely absent. GCC 6 let a call through anyway;
++// GCC 14 refuses it, and a soft link cannot help because the name it
++// defines is the name the SDK has already spoken for. So it is looked up
++// here under a name of its own. The symbol is still the real one at
++// runtime - this only keeps the compiler away from the SDK's declaration.
++static CFDictionaryRef copySystemProxySettings()
++{
++    typedef CFDictionaryRef (*CopySystemProxySettingsFunction)(void);
++    static CopySystemProxySettingsFunction function = reinterpret_cast<CopySystemProxySettingsFunction>(dlsym(CFNetworkLibrary(), "CFNetworkCopySystemProxySettings"));
++    return function ? function() : 0;
++}
+ #endif
+ 
+ namespace WebCore {
+@@ -131,7 +139,7 @@ static void processProxyServers(Vector<ProxyServer>& proxyServers, CFArrayRef pr
+ 
+ static void addProxyServersForURL(Vector<ProxyServer>& proxyServers, const URL& url)
+ {
+-    RetainPtr<CFDictionaryRef> proxySettings = adoptCF(CFNetworkCopySystemProxySettings());
++    RetainPtr<CFDictionaryRef> proxySettings = adoptCF(copySystemProxySettings());
+     if (!proxySettings)
+         return;
+ 
+diff --git a/Source/WebCore/platform/network/cf/SocketStreamHandleImplCFNet.cpp b/Source/WebCore/platform/network/cf/SocketStreamHandleImplCFNet.cpp
+index 4154d1a8..a5bcf7e0 100644
+--- a/Source/WebCore/platform/network/cf/SocketStreamHandleImplCFNet.cpp
++++ b/Source/WebCore/platform/network/cf/SocketStreamHandleImplCFNet.cpp
+@@ -59,10 +59,18 @@ extern "C" const CFStringRef kCFStreamPropertySourceApplication;
+ extern "C" const CFStringRef _kCFStreamSocketSetNoDelay;
+ #else
+ SOFT_LINK_FRAMEWORK_IN_UMBRELLA(CoreServices, CFNetwork)
+-#pragma GCC diagnostic push
+-#pragma GCC diagnostic ignored "-Wredundant-decls"
+-SOFT_LINK(CFNetwork, CFNetworkCopySystemProxySettings, CFDictionaryRef, (), ())
+-#pragma GCC diagnostic pop
++// The 10.5 SDK declares this one as 10.6-and-later, which makes it
++// unavailable rather than merely absent. GCC 6 let a call through anyway;
++// GCC 14 refuses it, and a soft link cannot help because the name it
++// defines is the name the SDK has already spoken for. So it is looked up
++// here under a name of its own. The symbol is still the real one at
++// runtime - this only keeps the compiler away from the SDK's declaration.
++static CFDictionaryRef copySystemProxySettings()
++{
++    typedef CFDictionaryRef (*CopySystemProxySettingsFunction)(void);
++    static CopySystemProxySettingsFunction function = reinterpret_cast<CopySystemProxySettingsFunction>(dlsym(CFNetworkLibrary(), "CFNetworkCopySystemProxySettings"));
++    return function ? function() : 0;
++}
+ #define _kCFStreamSocketSetNoDelay CFSTR("_kCFStreamSocketSetNoDelay")
+ #endif
+ 
+@@ -234,7 +242,7 @@ void SocketStreamHandleImpl::removePACRunLoopSource()
+ 
+ void SocketStreamHandleImpl::chooseProxy()
+ {
+-    RetainPtr<CFDictionaryRef> proxyDictionary = adoptCF(CFNetworkCopySystemProxySettings());
++    RetainPtr<CFDictionaryRef> proxyDictionary = adoptCF(copySystemProxySettings());
+ 
+     // SOCKS or HTTPS (AKA CONNECT) proxies are supported.
+     // WebSocket protocol relies on handshake being transferred unchanged, so we need a proxy that will not modify headers.
+diff --git a/Source/WebCore/platform/network/cocoa/ResourceResponseCocoa.mm b/Source/WebCore/platform/network/cocoa/ResourceResponseCocoa.mm
+index 5bea8280..15bfd4fe 100644
+--- a/Source/WebCore/platform/network/cocoa/ResourceResponseCocoa.mm
++++ b/Source/WebCore/platform/network/cocoa/ResourceResponseCocoa.mm
+@@ -31,6 +31,7 @@
+ #import "CFNetworkSPI.h"
+ #import "HTTPParsers.h"
+ #import "WebCoreURLResponse.h"
++#import <dlfcn.h>
+ #import <Foundation/Foundation.h>
+ #import <limits>
+ #import <wtf/AutodrainedPool.h>
+@@ -84,6 +85,24 @@ void ResourceResponse::disableLazyInitialization()
+     lazyInit(AllFields);
+ }
+ 
++// 10.6 and later declare this key; the 10.5 SDK marks it as 10.6-and-later,
++// which makes it unavailable rather than absent - GCC 6 let it through and
++// GCC 14 refuses it. Looked up by name at runtime, falling back to the
++// string it is defined as, so this works either way.
++static CFStringRef sslPeerTrustKey()
++{
++    static CFStringRef key = 0;
++    static bool looked = false;
++    if (!looked) {
++        looked = true;
++        if (void** pointer = static_cast<void**>(dlsym(RTLD_DEFAULT, "kCFStreamPropertySSLPeerTrust")))
++            key = static_cast<CFStringRef>(*pointer);
++        if (!key)
++            key = CFSTR("kCFStreamPropertySSLPeerTrust");
++    }
++    return key;
++}
++
+ CertificateInfo ResourceResponse::platformCertificateInfo() const
+ {
+ #if USE(CFURLCONNECTION)
+@@ -101,7 +120,7 @@ CertificateInfo ResourceResponse::platformCertificateInfo() const
+     if (!context)
+         return { };
+ 
+-    auto trustValue = CFDictionaryGetValue(context, kCFStreamPropertySSLPeerTrust);
++    auto trustValue = CFDictionaryGetValue(context, sslPeerTrustKey());
+     if (!trustValue)
+         return { };
+     ASSERT(CFGetTypeID(trustValue) == SecTrustGetTypeID());
+diff --git a/Source/WebCore/svg/SVGLengthContext.cpp b/Source/WebCore/svg/SVGLengthContext.cpp
+index f1011ca9..ba485e54 100644
+--- a/Source/WebCore/svg/SVGLengthContext.cpp
++++ b/Source/WebCore/svg/SVGLengthContext.cpp
+@@ -29,6 +29,10 @@
+ #include "FontMetrics.h"
+ #include "Frame.h"
+ #include "LengthFunctions.h"
++// Node::renderStyle() is defined here. GCC 6 inlined it from wherever it
++// reached this file; GCC 14 wants the definition in view or it emits a call
++// to a symbol nothing defines.
++#include "NodeRenderStyle.h"
+ #include "RenderSVGRoot.h"
+ #include "RenderSVGViewportContainer.h"
+ #include "RenderView.h"
+diff --git a/Source/WebKitLegacy/CMakeLists.txt b/Source/WebKitLegacy/CMakeLists.txt
+index f07a6dec..2e2c7e08 100644
+--- a/Source/WebKitLegacy/CMakeLists.txt
++++ b/Source/WebKitLegacy/CMakeLists.txt
+@@ -62,9 +62,9 @@ if (APPLE)
+     if (POLLIWOG_LEGACY_MAC)
+         # As on Mac OS X 10.5, this is WebKit.framework itself, and re-exports
+         # WebCore (and through it libobjc) to the applications linked to it.
+-        set_target_properties(WebKit PROPERTIES LINK_FLAGS "-sub_umbrella WebCore")
++        set_target_properties(WebKit PROPERTIES LINK_FLAGS "-Wl,-sub_umbrella,WebCore")
+     else ()
+-        set_target_properties(WebKit PROPERTIES LINK_FLAGS "-umbrella WebKit")
++        set_target_properties(WebKit PROPERTIES LINK_FLAGS "-Wl,-umbrella,WebKit")
+     endif ()
+ endif ()
+ 
+diff --git a/Source/WebKitLegacy/PlatformMac.cmake b/Source/WebKitLegacy/PlatformMac.cmake
+index 3becb741..e30c54c0 100644
+--- a/Source/WebKitLegacy/PlatformMac.cmake
++++ b/Source/WebKitLegacy/PlatformMac.cmake
+@@ -522,3 +522,14 @@ WEBKIT_CREATE_FORWARDING_HEADERS(WebKit DIRECTORIES ${FORWARDING_HEADERS_DIR}/We
+ set(WebKit_OUTPUT_NAME WebKitLegacy)
+ 
+ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -compatibility_version 1 -current_version ${WEBKIT_MAC_VERSION}")
++
++# GCC 14.2 crashes compiling this one file - an internal compiler error in
++# its partial redundancy pass, tree-ssa-pre.cc:2609. The pass is turned off
++# for this file alone rather than for the whole build, so that a measurement
++# of this compiler against the old one is not quietly measuring one fewer
++# optimization everywhere.
++if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14)
++    # -fno-tree-pre alone does not avoid it, so this file is built at -O1,
++    # where the pass does not run at all. One file out of three thousand.
++    set_source_files_properties(mac/WebView/WebHTMLView.mm PROPERTIES COMPILE_FLAGS "-O1 -fno-tree-pre")
++endif ()
+diff --git a/Source/WebKitLegacy/mac/DOM/WebDOMOperationsPrivate.h b/Source/WebKitLegacy/mac/DOM/WebDOMOperationsPrivate.h
+index 7dc281c5..73c89b1a 100644
+--- a/Source/WebKitLegacy/mac/DOM/WebDOMOperationsPrivate.h
++++ b/Source/WebKitLegacy/mac/DOM/WebDOMOperationsPrivate.h
+@@ -27,6 +27,12 @@
+  */
+ 
+ #import <WebKit/WebDOMOperations.h>
++
++// std::function needs its own header under GCC 14, and only where C++ is
++// being compiled: these headers are read by plain Objective-C files too.
++#ifdef __cplusplus
++#include <functional>
++#endif
+ #import <JavaScriptCore/JSBase.h>
+ 
+ #if TARGET_OS_IPHONE
+diff --git a/Source/WebKitLegacy/mac/WebView/WebViewPrivate.h b/Source/WebKitLegacy/mac/WebView/WebViewPrivate.h
+index 1b597294..d6a818f0 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebViewPrivate.h
++++ b/Source/WebKitLegacy/mac/WebView/WebViewPrivate.h
+@@ -27,6 +27,12 @@
+  */
+ 
+ #import <WebKit/WebView.h>
++
++// std::function needs its own header under GCC 14, and only where C++ is
++// being compiled: these headers are read by plain Objective-C files too.
++#ifdef __cplusplus
++#include <functional>
++#endif
+ #import <WebKit/WebFramePrivate.h>
+ #import <JavaScriptCore/JSBase.h>
+ 
+-- 
+2.54.0 (Apple Git-157)
+

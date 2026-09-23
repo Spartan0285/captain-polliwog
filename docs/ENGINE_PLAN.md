@@ -1091,3 +1091,47 @@ absent, and this. None of them are missing symbols, so no symbol
 inventory finds them - they are the same calls behaving differently. The
 probe is the tool that finds them, and it is worth running against a new
 Tiger build rather than trusting a page that looks about right.
+
+## 23 September: the GCC 14 engine builds, and does not start
+
+WebKit 604 compiles end to end with GCC 14.2 now (patch 0073). What it
+took, for anyone doing this again: seven headers it no longer supplies by
+accident, three linker options it forwards differently, two inline
+definitions it declines to emit, four availability collisions where the
+10.5 SDK marks a 10.6 function unavailable rather than absent, and one
+internal compiler error.
+
+It also does not run. The first WebView it makes takes the application
+down:
+
+    0  libobjc  _class_isInitialized + 0
+    1  libobjc  _class_lookupMethodAndLoadCache + 84
+    2  libobjc  objc_msgSendSuper + 188
+    3  AppKit   -[NSScrollView tile] + 148
+    4  WebKit   -[WebDynamicScrollBarsView(WebInternal) tile] + 60
+
+A null class reaching objc_msgSendSuper: `[super tile]` in a category,
+with the superclass pointer never fixed up. Three things that would
+explain it have been checked and are not it. Both builds emit the same
+__OBJC segment, so it is not the fragile-versus-modern runtime ABI. Both
+carry an identical __image_info, so the runtime is not refusing the image.
+And the same harness runs the GCC 6 engine on the same machine, so it is
+not the test.
+
+What has not been ruled out: -fvisibility=hidden, which both builds are
+given and which means something different to GCC 14; the section renaming
+this port does to keep WebCore inside PowerPC's branch reach; and two
+copies of libstdc++ in one process, since the application links the
+system's and the bundle now carries GCC 14's.
+
+So the measurement this was all for - what a modern compiler is worth on
+WebCore, where Speedometer actually spends its time - is still not taken.
+The JavaScript-only figure stands at two to nine per cent, and that
+understates it.
+
+For the record, the same site survey on the GCC 6 engine, on the
+PowerBook G4:
+
+    en.wikipedia.org/wiki/PowerPC    7.3s   117MB
+    apple.com                       31.3s   180MB
+    cnn.com                     no load    285MB   3 script errors
