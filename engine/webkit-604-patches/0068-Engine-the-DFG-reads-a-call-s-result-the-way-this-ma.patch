@@ -1,0 +1,41 @@
+From ba68b7bd578b1dfd9e95f28377ea5cf109f64b91 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Wed, 23 Sep 2026 03:49:54 -0400
+Subject: [PATCH 68/68] Engine: the DFG reads a call's result the way this
+ machine returns it
+
+A C function hands back a 64-bit value in a pair of registers, high word
+first, and the high word of a JSValue on a big-endian machine is its tag.
+The baseline JIT says so at each of its own call sites; the DFG has one
+place where all of its calls arrive, and it was reading the pair in the
+order x86 returns it. Getting this the wrong way round does not crash:
+a string comes back as a tiny denormal number, an integer as a value
+whose tag is its own contents, and the wrongness surfaces somewhere else
+entirely.
+---
+ Source/JavaScriptCore/dfg/DFGSpeculativeJIT.h | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/Source/JavaScriptCore/dfg/DFGSpeculativeJIT.h b/Source/JavaScriptCore/dfg/DFGSpeculativeJIT.h
+index d4c3067b..36b6ddc3 100644
+--- a/Source/JavaScriptCore/dfg/DFGSpeculativeJIT.h
++++ b/Source/JavaScriptCore/dfg/DFGSpeculativeJIT.h
+@@ -2513,6 +2513,15 @@ public:
+     {
+ #if USE(JSVALUE64)
+         return appendCallSetResult(function, resultRegs.gpr());
++#elif CPU(PPC)
++        // A C function hands back an EncodedJSValue in a pair of registers,
++        // high word first, and the high word of a JSValue on a big-endian
++        // machine is its tag. The baseline JIT says the same thing at each of
++        // its own call sites; this is where every one of the DFG's arrives.
++        // Getting it the other way round does not crash: it returns a
++        // pointer read as a tiny denormal double, or an integer whose tag is
++        // its own value, and the wrongness surfaces somewhere else entirely.
++        return appendCallSetResult(function, resultRegs.tagGPR(), resultRegs.payloadGPR());
+ #else
+         return appendCallSetResult(function, resultRegs.payloadGPR(), resultRegs.tagGPR());
+ #endif
+-- 
+2.54.0 (Apple Git-157)
+

@@ -851,3 +851,75 @@ after milestone 1.
 and the VM's disk image only grows; a full WebKit build tree is 20-30GB.
 Milestone 1 fits. The full engine will need space freed, an external disk,
 or the Mac Studio.
+
+## 23 September: the optimizing compiler on a G4
+
+JavaScriptCore has three tiers. This browser has had two of them: the
+interpreter and the baseline JIT that Leopard WebKit's PowerPC port
+provides. The third, the DFG, was switched off in `Platform.h` for PowerPC
+and had, as far as any record shows, never been built for a big-endian
+32-bit machine. It is the largest single lever left in the engine, so it
+was worth finding out what it does here.
+
+It builds. Turning it on is `DFG=ON scripts/toolchain/webkit.sh configure
+leopard-g4-jit`; the CMake option is what matters, because WebKit generates
+a config header from it that overrides anything passed as a compiler flag.
+It compiles a hundred and forty-one more object files, and the code it
+produces for a hot function is smaller than the baseline's - 960 bytes
+against 2496 for the same loop.
+
+Where it works, it is worth a great deal. Measured on the PowerBook G4
+against the same build with the tier switched off, both runs back to back
+under the same load:
+
+    bit operations   1630ms -> 238ms    6.9x
+    array sort        479   -> 226      2.1x
+    floating point   1542   -> 1026     1.5x
+    integer loop     2889   -> 2325     1.24x
+    recursion          31   ->   29
+    string building   290   -> 456      0.6x - slower
+    JSON             407   -> 430       about the same
+
+It is also not correct yet. Three things were wrong and two are fixed:
+
+The DFG stopped in its own bytecode parser on the first function it tried
+to compile. Each node stores its operand in a union of a 64-bit field with
+a pointer, writes the 64-bit member and reads the pointer; on a
+little-endian machine those are the same word, and on this one the pointer
+read returns the zero above it (patch 0067).
+
+Every result the DFG takes back from a C function had its two halves the
+wrong way round. A 64-bit value comes back in a register pair, high word
+first, and the high word of a JSValue here is its tag. The baseline JIT
+says so at each of its own call sites, having been ported by hand; the DFG
+has one place where all of its calls arrive and nobody had been there
+(patch 0068). This does not crash. A string comes back as a denormal
+number around 1e-275 - a heap pointer read as a double - and an integer as
+a value whose tag is its own contents.
+
+What remains is in the same family and has not been found yet. Reading a
+global inside compiled code can return a wrong value, and entering
+compiled code from a loop already running makes it much more likely:
+`--useOSREntryToDFG=false` takes one test from 77 wrong answers to none.
+Arithmetic itself is clean - every operator over every interesting operand
+pair, including the overflow boundaries, matches the interpreter exactly.
+
+So the tier stays off by default, which is what `DFG=OFF` in `webkit.sh`
+means. What it needs is the rest of the work the baseline JIT already had:
+someone going through the paths that move a JSValue between registers,
+the stack and C, and saying which half is which. The gain measured above
+is what that would buy.
+
+`scripts/jit/dfg-differential.js` is how the wrong answers were found. It
+runs the same work through the engine twice, once with the tier on and
+once with it off, and folds every answer into one number per case, so a
+value that goes wrong on the two hundredth iteration of one case shows up
+as a single changed line. It needs no special build - any `jsc` will run
+it, and it is the first thing to run after touching anything in this area.
+
+One thing that looked like a bug is not one. Integer typed arrays on this
+engine are little-endian: the bytes under `new Uint32Array([0x01020304])`
+read back as 4,3,2,1, while a `Float64Array` is native. That is upstream
+WebKit's deliberate choice for big-endian machines, because web content
+assumes it, and patch 0052 is what makes the JIT's own fast paths agree
+with the runtime. It is not something to fix.

@@ -1,0 +1,54 @@
+From 1076cd3143af3a7946d4af6631d2dd2cae315101 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Wed, 23 Sep 2026 03:49:54 -0400
+Subject: [PATCH 67/68] Engine: a DFG node's operand lives in the half this
+ machine keeps it in
+
+Every node stores its operand as a 64-bit field and nearly every reader
+asks for a pointer back out of a union. On a little-endian machine those
+are the same word. On PowerPC the bottom half is the second word, so the
+pointer read returns the zero above it, and the DFG stops in its own
+parser on the first function it tries to compile - a null constant where
+a frozen value should be.
+---
+ Source/JavaScriptCore/dfg/DFGNode.h | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/Source/JavaScriptCore/dfg/DFGNode.h b/Source/JavaScriptCore/dfg/DFGNode.h
+index e7921d1d..733f8fca 100644
+--- a/Source/JavaScriptCore/dfg/DFGNode.h
++++ b/Source/JavaScriptCore/dfg/DFGNode.h
+@@ -2633,11 +2633,29 @@ private:
+             return bitwise_cast<RegisteredStructure>(u.pointer);
+         }
+ 
++        // A 32-bit member of this union has to occupy the same bytes as the
++        // bottom half of int64. The node constructors store a 64-bit OpInfo
++        // and almost every reader asks for a pointer back out; on a
++        // little-endian machine those are the same word, which is why this
++        // has never needed saying. On a big-endian one the bottom half is
++        // the second word, and what a pointer read returns is the zero above
++        // it - which is the null that stops the DFG in its parser.
+         union {
++#if CPU(BIG_ENDIAN) && __SIZEOF_POINTER__ == 4
++            struct {
++                uint32_t unusedHighWord;
++                union {
++                    uint32_t int32;
++                    void* pointer;
++                    const void* constPointer;
++                };
++            };
++#else
+             uint32_t int32;
+-            uint64_t int64;
+             void* pointer;
+             const void* constPointer;
++#endif
++            uint64_t int64;
+         } u;
+     };
+     OpInfoWrapper m_opInfo;
+-- 
+2.54.0 (Apple Git-157)
+

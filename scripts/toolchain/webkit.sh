@@ -55,6 +55,10 @@ TIGER_FEATURES=
 # __text (see ppc-darwin.cmake), and better locality on small caches.
 CPU="$CPU -fno-reorder-blocks-and-partition -fno-reorder-functions"
 
+# The optimizing tier, off by default: DFG=ON webkit.sh configure ... turns
+# it on. It compiles for PowerPC; whether it earns its keep is measured,
+# not assumed.
+
 # An escape hatch for trying a compiler flag across a whole build without
 # committing to it: EXTRA_FLAGS=-fvisibility=hidden webkit.sh configure ...
 CPU="$CPU ${EXTRA_FLAGS:-}"
@@ -89,7 +93,7 @@ configure)
         -DCMAKE_OSX_DEPLOYMENT_TARGET=$TARGET -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_FLAGS="$CPU" -DCMAKE_CXX_FLAGS="$CPU -D_GLIBCXX_USE_C99_MATH_TR1=1" \
         $TIGER_FEATURES \
-        -DENABLE_JIT=$JIT -DENABLE_DFG_JIT=OFF -DENABLE_SAMPLING_PROFILER=OFF -DENABLE_FTL_JIT=OFF -DENABLE_API_TESTS=OFF \
+        -DENABLE_JIT=$JIT -DENABLE_DFG_JIT=${DFG:-OFF} -DENABLE_SAMPLING_PROFILER=OFF -DENABLE_FTL_JIT=OFF -DENABLE_API_TESTS=OFF \
         -DPOLLIWOG_ENABLE_WEBKIT2=OFF \
         -DICU_INCLUDE_DIR=/opt/ppc/icu/include \
         -DICU_LIBRARY=$ICU -DICU_I18N_LIBRARY=$ICU -DICU_DATA_LIBRARY=$ICU \

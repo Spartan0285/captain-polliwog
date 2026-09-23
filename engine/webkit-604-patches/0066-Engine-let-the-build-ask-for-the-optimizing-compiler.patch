@@ -1,0 +1,30 @@
+From cefa062363f560039ef4a98a4d2909dd4bd24bd8 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Wed, 23 Sep 2026 03:49:53 -0400
+Subject: [PATCH 66/68] Engine: let the build ask for the optimizing compiler
+ on PowerPC
+
+The PowerPC block turned the DFG off outright, so nothing above it could
+ask for it. It stays off by default - this only makes the switch
+reachable, for measuring what the tier is worth on these machines.
+---
+ Source/WTF/wtf/Platform.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Source/WTF/wtf/Platform.h b/Source/WTF/wtf/Platform.h
+index 4775ad1b..1781bd23 100644
+--- a/Source/WTF/wtf/Platform.h
++++ b/Source/WTF/wtf/Platform.h
+@@ -596,7 +596,9 @@
+ #if !defined(ENABLE_JIT)
+ #define ENABLE_JIT 0
+ #endif
++#if !defined(ENABLE_DFG_JIT)
+ #define ENABLE_DFG_JIT 0
++#endif
+ #define ENABLE_SAMPLING_PROFILER 0
+ #endif
+ #if CPU(PPC64)
+-- 
+2.54.0 (Apple Git-157)
+
