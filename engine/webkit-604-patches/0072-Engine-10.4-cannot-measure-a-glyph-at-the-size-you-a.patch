@@ -1,0 +1,77 @@
+From 28879b319742f7695f3529d1369b1b085f003580 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Wed, 23 Sep 2026 10:21:16 -0400
+Subject: [PATCH] Engine: 10.4 cannot measure a glyph at the size you asked for
+
+CoreGraphics on 10.4 ignores the text matrix it is handed for glyph
+advances and answers in em units whatever the size. Measured on a Pismo:
+the same 21-character string at 11, 22, 44 and 88 pixels all came back 22
+pixels wide, where CoreText answered 117, 234, 467 and 934. An advance of
+about one unit per character is every glyph drawn on top of the one
+before it, so a heading became a smear.
+
+Lucida Grande is the exception, which is why the system font - and only
+the system font - looked right. Apple's navigation bar was perfect above
+a headline nobody could read, and that is what made it look like a
+web-font problem rather than a measuring one.
+
+CoreText measures all of them correctly at every size, so under CP_TIGER
+it does the measuring. The answers are cached per glyph, so this costs
+one call per glyph per font.
+---
+ .../platform/graphics/cocoa/FontCocoa.mm      | 36 ++++++++++++++++---
+ 1 file changed, 32 insertions(+), 4 deletions(-)
+
+diff --git a/Source/WebCore/platform/graphics/cocoa/FontCocoa.mm b/Source/WebCore/platform/graphics/cocoa/FontCocoa.mm
+index e4e6996b..4c8b7f21 100644
+--- a/Source/WebCore/platform/graphics/cocoa/FontCocoa.mm
++++ b/Source/WebCore/platform/graphics/cocoa/FontCocoa.mm
+@@ -697,13 +697,41 @@ float Font::platformWidthForGlyph(Glyph glyph) const
+ 
+     bool populatedAdvance = false;
+     if ((horizontal || m_isBrokenIdeographFallback) && canUseFastGlyphAdvanceGetter(this->platformData(), glyph, advance, populatedAdvance)) {
++#if defined(CP_TIGER) && CP_TIGER
++        // 10.4's CoreGraphics ignores the text matrix it is handed here and
++        // answers in em units whatever the size: a line of any size comes
++        // out about one unit per character, which is every glyph drawn on
++        // top of the one before it. Measured on a Pismo, the same string at
++        // 11, 22, 44 and 88 pixels all came back 22 pixels wide, while
++        // CoreText answered 117, 234, 467 and 934.
++        //
++        // Lucida Grande is the exception, which is why the system font -
++        // and only the system font - looked right, and why this took a
++        // screenshot of apple.com to notice: the navigation bar was perfect
++        // above a headline that was a smear.
++        //
++        // CoreText measures every one of them correctly, so this system
++        // uses it for all of them. The answers are cached per glyph, so the
++        // cost is one call per glyph per font rather than per character.
++        if (platformData().size())
++            CTFontGetAdvancesForGlyphs(m_platformData.ctFont(), horizontal ? kCTFontOrientationHorizontal : kCTFontOrientationVertical, &glyph, &advance, 1);
++#else
+         float pointSize = platformData().size();
+         CGAffineTransform m = CGAffineTransformMakeScale(pointSize, pointSize);
+-        if (!CGFontGetGlyphAdvancesForStyle(platformData().cgFont(), &m, style, &glyph, 1, &advance)) {
+-            RetainPtr<CFStringRef> fullName = adoptCF(CGFontCopyFullName(platformData().cgFont()));
+-            LOG_ERROR("Unable to cache glyph widths for %@ %f", fullName.get(), pointSize);
+-            advance.width = 0;
++        // A font this call cannot measure is not a font of zero-width glyphs,
++        // and treating it as one puts every letter in the same place. Ask
++        // CoreText rather than give up.
++        if (!CGFontGetGlyphAdvancesForStyle(platformData().cgFont(), &m, style, &glyph, 1, &advance) || !advance.width) {
++            CGSize fromCoreText = CGSizeZero;
++            CTFontGetAdvancesForGlyphs(m_platformData.ctFont(), horizontal ? kCTFontOrientationHorizontal : kCTFontOrientationVertical, &glyph, &fromCoreText, 1);
++            if (fromCoreText.width)
++                advance = fromCoreText;
++            else if (!advance.width) {
++                RetainPtr<CFStringRef> fullName = adoptCF(CGFontCopyFullName(platformData().cgFont()));
++                LOG_ERROR("Unable to cache glyph widths for %@ %f", fullName.get(), pointSize);
++            }
+         }
++#endif
+     } else if (!populatedAdvance && platformData().size())
+         CTFontGetAdvancesForGlyphs(m_platformData.ctFont(), horizontal ? kCTFontOrientationHorizontal : kCTFontOrientationVertical, &glyph, &advance, 1);
+ #endif
+-- 
+2.54.0 (Apple Git-157)
+

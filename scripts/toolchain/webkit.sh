@@ -42,7 +42,10 @@ case $VARIANT in
     # rely on, and 10.4 as the floor. The toolchain already builds against
     # the 10.5 SDK with a 10.4 deployment target, so Leopard-only functions
     # are weakly linked and simply absent here.
-    tiger-g3|tiger-g3-jit) TARGET=10.4; CPU="-mcpu=750 -mtune=750"; TIGER_SHIM=1 ;;
+    # CP_TIGER marks the places where 10.4 needs different code rather than
+    # a missing function filled in - so far, that its CoreGraphics cannot
+    # measure a glyph at the size it is asked for (see FontCocoa.mm).
+    tiger-g3|tiger-g3-jit) TARGET=10.4; CPU="-mcpu=750 -mtune=750 -DCP_TIGER=1"; TIGER_SHIM=1 ;;
     *) echo "usage: $0 configure|build leopard-g4[-jit]|tiger-g3[-jit] [targets...]" >&2; exit 1 ;;
 esac
 JIT=OFF
