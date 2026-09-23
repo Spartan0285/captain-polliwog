@@ -1,0 +1,40 @@
+From 4d84a18344dc052224ad6afa51c6446d3eac8974 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Wed, 23 Sep 2026 05:29:42 -0400
+Subject: [PATCH] Engine: two more headers GCC 14 no longer includes for you
+
+<cstdint> for ANGLE's ShCompileOptions, and <utility> for the std::exchange
+in Ref::leakRef. The same thing as the last three: a newer compiler's
+standard headers stopped pulling these in by accident.
+---
+ Source/ThirdParty/ANGLE/include/GLSLANG/ShaderVars.h | 1 +
+ Source/WTF/wtf/Ref.h                                 | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/Source/ThirdParty/ANGLE/include/GLSLANG/ShaderVars.h b/Source/ThirdParty/ANGLE/include/GLSLANG/ShaderVars.h
+index f72b8c6f..4bbd36d6 100644
+--- a/Source/ThirdParty/ANGLE/include/GLSLANG/ShaderVars.h
++++ b/Source/ThirdParty/ANGLE/include/GLSLANG/ShaderVars.h
+@@ -11,6 +11,7 @@
+ #define GLSLANG_SHADERVARS_H_
+ 
+ #include <algorithm>
++#include <cstdint>   // uint64_t, which GCC 14 no longer supplies through another header
+ #include <string>
+ #include <vector>
+ 
+diff --git a/Source/WTF/wtf/Ref.h b/Source/WTF/wtf/Ref.h
+index 330bd5cc..b468d215 100644
+--- a/Source/WTF/wtf/Ref.h
++++ b/Source/WTF/wtf/Ref.h
+@@ -29,6 +29,7 @@
+ #include <wtf/Assertions.h>
+ #include <wtf/GetPtr.h>
+ #include <wtf/StdLibExtras.h>
++#include <utility>   // std::exchange, which GCC 14 no longer supplies through another header
+ #include <wtf/TypeCasts.h>
+ 
+ #if ASAN_ENABLED
+-- 
+2.54.0 (Apple Git-157)
+
