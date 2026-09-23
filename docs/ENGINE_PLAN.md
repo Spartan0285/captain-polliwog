@@ -1135,3 +1135,43 @@ PowerBook G4:
     en.wikipedia.org/wiki/PowerPC    7.3s   117MB
     apple.com                       31.3s   180MB
     cnn.com                     no load    285MB   3 script errors
+
+## 23 September: the optimizing tier is correct on one machine and not the other
+
+The remaining DFG fault has a reduced case now
+(`scripts/jit/dfg-array-length.js`): every array's length reads back as
+2.121995789e-314, a JSValue whose halves read as 1 and 0 taken for a
+double, while the elements of the same array read back perfectly. `length
+| 0` answers 0, so the register holds nothing useful before anything boxes
+it - this is not the boxing.
+
+Where it happens is the interesting part. On the **G3 running Tiger** the
+whole differential suite passes: twenty cases, no differences, with the
+tier on. On the **G4 running Leopard** every length is wrong. Ruled out by
+building and testing rather than by reading:
+
+- not a stale binary - rebuilt from the same source, same fault
+- not AltiVec - `-mno-altivec`, same fault
+- not the processor tuning - `-mcpu=750 -mtune=750` on the Leopard
+  variant, same fault
+- not the build at all - the Tiger build shows the fault when run on the
+  G4
+
+That last test is worth a warning: the Tiger build links libTigerShim,
+which deliberately answers CoreText and CoreAnimation the way 10.4 shapes
+them, and on 10.5 that is wrong. The objc runtime says so on startup, in
+half a dozen lines about classes implemented twice. So the result is
+suggestive and not clean, and the conclusion drawn from it here - that the
+processor rather than the build decides - is not yet proven.
+
+Processor and system cannot be separated with the machines here: there is
+a G3 on Tiger and a G4 on Leopard, and no G4 on Tiger or G3 on Leopard.
+The Tiger guest under PowerEmu is Tiger on a G4-class processor, which is
+exactly the missing corner, and would settle it in one run.
+
+What this does mean today: on Tiger and a G3 the tier is correct, and
+worth 3.5x on recursion and 1.5x on object churn there, against
+regressions on bit operations and strings that look like compile time
+costing more than the compiled code saves on a 500MHz machine. On the G4,
+where the tier was worth 6.9x on bit operations, it still computes wrong
+answers and stays off.

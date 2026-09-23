@@ -16,13 +16,13 @@ host=${1:?usage: keep-awake.sh host [stop]}
 action=${2:-start}
 
 if [ "$action" = "stop" ]; then
-    ssh -o ConnectTimeout=90 "$host" "pkill -f polliwog-keep-awake || true"
+    ssh -o ConnectTimeout=90 "$host" "ps -axo pid,command | awk '/[p]olliwog-keep-awake/ {print \$1}' | xargs -n1 kill 2>/dev/null; true"
     echo "==> $host: sleep prevention stopped"
     exit 0
 fi
 
 ssh -o ConnectTimeout=90 "$host" '
-    pkill -f polliwog-keep-awake 2>/dev/null
+    ps -axo pid,command | awk '/[p]olliwog-keep-awake/ {print $1}' | xargs -n1 kill 2>/dev/null
     cat > /tmp/polliwog-keep-awake.py <<PY
 # polliwog-keep-awake
 import ctypes, time
@@ -33,5 +33,5 @@ while True:
 PY
     nohup python /tmp/polliwog-keep-awake.py > /dev/null 2>&1 &
     sleep 1
-    pgrep -f polliwog-keep-awake > /dev/null && echo started'
+    ps -axo command | grep -q "[p]olliwog-keep-awake" && echo started'
 echo "==> $host: staying awake (scripts/keep-awake.sh $host stop to undo)"
