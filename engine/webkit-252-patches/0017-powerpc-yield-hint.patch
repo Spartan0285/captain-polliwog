@@ -1,0 +1,23 @@
+The PowerPC yield hint, spelled for Apple assembler.
+
+SIMDe writes the hint as "or 27,27,27". The assembler in cctools takes
+register names rather than bare numbers and stops with "Parameter syntax
+error"; the instruction is the same either way.
+
+--- a/Source/WTF/wtf/simde/arm/neon.h	2026-09-23 00:53:51
++++ b/Source/WTF/wtf/simde/arm/neon.h	2026-09-23 00:53:51
+@@ -105338,7 +105338,13 @@
+       __asm__ __volatile__("isb\n");
+     #endif
+   #elif defined(SIMDE_ARCH_POWER)
+-    __asm__ __volatile__ ("or 27,27,27" ::: "memory");
++    /* The "yield" hint. Apple's assembler of this vintage wants register
++       names, where the GNU one takes bare numbers. */
++    #if defined(__APPLE__)
++      __asm__ __volatile__ ("or r27,r27,r27" ::: "memory");
++    #else
++      __asm__ __volatile__ ("or 27,27,27" ::: "memory");
++    #endif
+   #elif defined(SIMDE_ARCH_WASM)
+     __asm__ __volatile__ ("nop");
+   #elif defined(HEDLEY_GCC_VERSION)

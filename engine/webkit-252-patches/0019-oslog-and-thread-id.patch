@@ -1,0 +1,64 @@
+os_log and the thread identifier.
+
+The log stream needs os_log, which is 2016: the option to log through it
+is simply absent here, and the data log goes where it goes on every other
+system. A thread identifier comes from its mach port instead of
+pthread_threadid_np, which is 10.6 - and the port is already the 32 bits
+this wants.
+
+--- a/Source/JavaScriptCore/runtime/Options.cpp	2026-09-23 01:04:29
++++ b/Source/JavaScriptCore/runtime/Options.cpp	2026-09-23 01:05:31
+@@ -49,7 +49,7 @@
+ #include <wtf/text/StringBuilder.h>
+ #include <wtf/threads/Signals.h>
+ 
+-#if OS(DARWIN)
++#if OS(DARWIN) && !CP_OLD_DARWIN
+ #include <wtf/darwin/OSLogPrintStream.h>
+ #endif
+ 
+@@ -317,7 +317,7 @@
+     return result;
+ }
+ 
+-#if OS(DARWIN)
++#if OS(DARWIN) && !CP_OLD_DARWIN
+ static os_log_type_t asDarwinOSLogType(OSLogType type)
+ {
+     switch (type) {
+@@ -347,7 +347,7 @@
+     // Make sure no one jumped here for nefarious reasons...
+     RELEASE_ASSERT(Options::useOSLog() != OSLogType::None);
+ }
+-#endif // OS(DARWIN)
++#endif // OS(DARWIN) && !CP_OLD_DARWIN
+ 
+ static ASCIILiteral asString(OSLogType type)
+ {
+@@ -957,7 +957,7 @@
+         FOR_EACH_JSC_EXPERIMENTAL_OPTION(DISABLE_TIERS);
+     }
+ 
+-#if OS(DARWIN)
++#if OS(DARWIN) && !CP_OLD_DARWIN
+     if (useOSLogOptionHasChanged) {
+         initializeDatafileToUseOSLog();
+         useOSLogOptionHasChanged = false;
+--- a/Source/JavaScriptCore/runtime/ProfilerSupport.cpp	2026-09-23 01:04:29
++++ b/Source/JavaScriptCore/runtime/ProfilerSupport.cpp	2026-09-23 01:04:29
+@@ -100,9 +100,15 @@
+ #elif OS(DARWIN)
+     // Ideally we would like to use pthread_threadid_np. But this is 64bit, while required one is 32bit.
+     // For now, as a workaround, we only report lower 32bit of thread ID.
++#if CP_OLD_DARWIN
++    // pthread_threadid_np is 10.6. The mach port of the thread is the same
++    // kind of identifier, and is already 32-bit.
++    return static_cast<uint32_t>(pthread_mach_thread_np(pthread_self()));
++#else
+     uint64_t thread = 0;
+     pthread_threadid_np(NULL, &thread);
+     return static_cast<uint32_t>(thread);
++#endif
+ #elif OS(WINDOWS)
+     return static_cast<uint32_t>(GetCurrentThreadId());
+ #else

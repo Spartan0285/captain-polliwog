@@ -1,0 +1,157 @@
+PowerPC registers in the machine context.
+
+2.52 knows the PowerPC stack pointer and nothing else about the processor.
+The frame pointer is r31, the faulting address srr0, arguments from r3.
+And the thread state is reached as ss rather than __ss before 10.5.
+
+Wasm and the LLInt program counter name a register only so that the file
+compiles: neither is in use on a processor that runs the C interpreter.
+
+--- a/Source/JavaScriptCore/runtime/MachineContext.h	2026-09-23 00:42:00
++++ b/Source/JavaScriptCore/runtime/MachineContext.h	2026-09-23 00:43:55
+@@ -36,6 +36,19 @@
+ 
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+ 
++// PowerPC Mac OS X. The thread state is reached as ss rather than __ss
++// before the UNIX 03 conformance of 10.5, and its registers have the plain
++// names. The registers are the PowerPC ABI's: r1 is the stack pointer, r31
++// the frame pointer, srr0 the address a fault happened at, r3 onwards the
++// arguments.
++#if CP_OLD_DARWIN
++#define CP_THREAD_STATE(context) ((context)->ss)
++#define CP_PPC(regs, name) ((regs).name)
++#else
++#define CP_THREAD_STATE(context) ((context)->__ss)
++#define CP_PPC(regs, name) ((regs).__##name)
++#endif
++
+ namespace JSC {
+ namespace MachineContext {
+ 
+@@ -92,7 +105,7 @@
+ #if CPU(X86_64)
+     return reinterpret_cast<void*&>(regs.__rsp);
+ #elif CPU(PPC) || CPU(PPC64)
+-    return reinterpret_cast<void*&>(regs.__r1);
++    return reinterpret_cast<void*&>(CP_PPC(regs, r1));
+ #elif CPU(ARM_THUMB2) || CPU(ARM)
+     return reinterpret_cast<void*&>(regs.__sp);
+ #else
+@@ -146,7 +159,7 @@
+ static inline void*& stackPointerImpl(mcontext_t& machineContext)
+ {
+ #if OS(DARWIN)
+-    return stackPointerImpl(machineContext->__ss);
++    return stackPointerImpl(CP_THREAD_STATE(machineContext));
+ #elif OS(HAIKU)
+ #if CPU(X86_64)
+     return reinterpret_cast<void*&>(machineContext.rsp);
+@@ -212,7 +225,7 @@
+     assertIsNotTagged(value);
+     return std::bit_cast<T>(value);
+ #elif USE(DARWIN_REGISTER_MACROS)
+-    return stackPointer(machineContext->__ss);
++    return stackPointer(CP_THREAD_STATE(machineContext));
+ #else
+     return std::bit_cast<T>(stackPointerImpl(const_cast<mcontext_t&>(machineContext)));
+ #endif
+@@ -231,6 +244,8 @@
+     return reinterpret_cast<void*&>(regs.__rbp);
+ #elif CPU(ARM64)
+     return reinterpret_cast<void*&>(regs.__x[29]);
++#elif CPU(PPC) || CPU(PPC64)
++    return reinterpret_cast<void*&>(CP_PPC(regs, r31));
+ #else
+ #error Unknown Architecture
+ #endif
+@@ -273,7 +288,7 @@
+ static inline void*& framePointerImpl(mcontext_t& machineContext)
+ {
+ #if OS(DARWIN)
+-    return framePointerImpl(machineContext->__ss);
++    return framePointerImpl(CP_THREAD_STATE(machineContext));
+ #elif OS(HAIKU)
+ #if CPU(X86_64)
+     return reinterpret_cast<void*&>(machineContext.rbp);
+@@ -359,6 +374,8 @@
+     return reinterpret_cast<void*&>(regs.__rip);
+ #elif CPU(ARM_THUMB2) || CPU(ARM)
+     return reinterpret_cast<void*&>(regs.__pc);
++#elif CPU(PPC) || CPU(PPC64)
++    return reinterpret_cast<void*&>(CP_PPC(regs, srr0));
+ #else
+ #error Unknown Architecture
+ #endif
+@@ -431,7 +448,7 @@
+ static inline void*& instructionPointerImpl(mcontext_t& machineContext)
+ {
+ #if OS(DARWIN)
+-    return instructionPointerImpl(machineContext->__ss);
++    return instructionPointerImpl(CP_THREAD_STATE(machineContext));
+ #elif OS(HAIKU)
+ #if CPU(X86_64)
+     return reinterpret_cast<void*&>((uintptr_t&) machineContext.rip);
+@@ -495,7 +512,7 @@
+ inline CodePtr<PlatformRegistersPCPtrTag> instructionPointer(const mcontext_t& machineContext)
+ {
+ #if USE(DARWIN_REGISTER_MACROS)
+-    return *instructionPointer(machineContext->__ss);
++    return *instructionPointer(CP_THREAD_STATE(machineContext));
+ #else
+ 
+ #if USE(PLATFORM_REGISTERS_WITH_PROFILE)
+@@ -540,6 +557,8 @@
+     return reinterpret_cast<void*&>(regs.__r[1]);
+ #elif CPU(ARM64)
+     return reinterpret_cast<void*&>(regs.__x[1]);
++#elif CPU(PPC) || CPU(PPC64)
++    return reinterpret_cast<void*&>(CP_PPC(regs, r4));
+ #else
+ #error Unknown Architecture
+ #endif
+@@ -569,6 +588,8 @@
+     return reinterpret_cast<void*>(regs.__rbx);
+ #elif CPU(ARM64)
+     return reinterpret_cast<void*>(regs.__x[19]);
++#elif CPU(PPC) || CPU(PPC64)
++    return reinterpret_cast<void*>(CP_PPC(regs, r14));
+ #else
+ #error Unknown Architecture
+ #endif
+@@ -603,7 +624,7 @@
+ inline void*& argumentPointer<1>(mcontext_t& machineContext)
+ {
+ #if OS(DARWIN)
+-    return argumentPointer<1>(machineContext->__ss);
++    return argumentPointer<1>(CP_THREAD_STATE(machineContext));
+ #elif OS(HAIKU)
+ #if CPU(X86_64)
+     return reinterpret_cast<void*&>((uintptr_t&) machineContext.rsi);
+@@ -666,7 +687,7 @@
+ inline void* wasmInstancePointer(const mcontext_t& machineContext)
+ {
+ #if OS(DARWIN)
+-    return wasmInstancePointer(machineContext->__ss);
++    return wasmInstancePointer(CP_THREAD_STATE(machineContext));
+ #elif OS(FREEBSD)
+ 
+ #if CPU(X86_64)
+@@ -741,6 +762,8 @@
+ #elif CPU(ARM64)
+     static_assert(LLInt::LLIntPC == ARM64Registers::x4, "Wrong LLInt PC.");
+     return reinterpret_cast<void*&>(regs.__x[4]);
++#elif CPU(PPC) || CPU(PPC64)
++    return reinterpret_cast<void*&>(CP_PPC(regs, r14));
+ #else
+ #error Unknown Architecture
+ #endif
+@@ -777,7 +800,7 @@
+ {
+     // LLInt uses regT4 as PC.
+ #if OS(DARWIN)
+-    return llintInstructionPointer(machineContext->__ss);
++    return llintInstructionPointer(CP_THREAD_STATE(machineContext));
+ #elif OS(HAIKU)
+ #if CPU(X86_64)
+     return reinterpret_cast<void*&>((uintptr_t&) machineContext.r8);

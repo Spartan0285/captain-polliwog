@@ -1,0 +1,46 @@
+The memory footprint of a process, and asking to be killed when memory runs out.
+
+proc_pid_rusage and its physical footprint are 10.9; the resident size,
+from the task own info, is what this system can say. proc_setpcontrol is
+newer still, and a Mac this old simply runs out of memory the old way.
+
+--- a/Source/JavaScriptCore/jsc.cpp	2026-09-23 01:39:32
++++ b/Source/JavaScriptCore/jsc.cpp	2026-09-23 01:40:08
+@@ -160,7 +160,27 @@
+ #endif
+ #endif
+ 
+-#if OS(DARWIN)
++#if OS(DARWIN) && CP_OLD_DARWIN
++// The footprint header reads proc_pid_rusage, which is 10.9. What a Mac
++// this old can say is the resident size, from the task's own info.
++#include <mach/mach.h>
++#include <mach/task.h>
++struct ProcessMemoryFootprint {
++    uint64_t current;
++    uint64_t peak;
++
++    static ProcessMemoryFootprint now()
++    {
++        task_basic_info_data_t info;
++        mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
++        if (task_info(mach_task_self(), TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS)
++            return { 0, 0 };
++        return { static_cast<uint64_t>(info.resident_size), 0 };
++    }
++
++    static void resetPeak() { }
++};
++#elif OS(DARWIN)
+ #include <wtf/spi/darwin/ProcessMemoryFootprint.h>
+ #elif OS(LINUX)
+ #include <wtf/linux/ProcessMemoryFootprint.h>
+@@ -3586,7 +3606,7 @@
+ 
+ int main(int argc, char** argv)
+ {
+-#if OS(DARWIN)
++#if OS(DARWIN) && !CP_OLD_DARWIN
+ #if __has_include(<libproc.h>)
+     // Let the kernel kill us when OOM
+     {

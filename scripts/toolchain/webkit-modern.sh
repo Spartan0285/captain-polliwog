@@ -46,6 +46,9 @@ fi
 case "$STEP" in
 configure)
     mkdir -p "$BUILD" && cd "$BUILD"
+    # The ICU libraries are named explicitly: left to itself, CMake finds
+    # the libicucore in the 10.5 SDK, which is ICU 3 from 2007, and the link
+    # fails on everything ICU has gained since.
     # ENABLE_STATIC_JSC puts the engine straight into the jsc program: one
     # file to copy to the old Mac, and one copy of the C++ runtime, which is
     # what emulated thread-local storage needs.
@@ -56,12 +59,14 @@ configure)
         -DENABLE_STATIC_JSC=ON -DENABLE_C_LOOP=ON -DENABLE_JIT=OFF \
         -DENABLE_REMOTE_INSPECTOR=OFF -DUSE_SYSTEM_MALLOC=ON \
         -DICU_INCLUDE_DIR=$PREFIX/icu/include \
-        -DICU_DATA_LIBRARY_RELEASE=$PREFIX/icu/lib/libicudata.a \
-        -DICU_I18N_LIBRARY_RELEASE=$PREFIX/icu/lib/libicui18n.a \
-        -DICU_UC_LIBRARY_RELEASE=$PREFIX/icu/lib/libicuuc.a \
+        -DICU_DATA_LIBRARY=$PREFIX/icu/lib/libicudata.a \
+        -DICU_I18N_LIBRARY=$PREFIX/icu/lib/libicui18n.a \
+        -DICU_UC_LIBRARY=$PREFIX/icu/lib/libicuuc.a \
         $ARGS ;;
 build)
-    cd "$BUILD" && $CMAKE --build . ${ARGS:---target jsc} ;;
+    # Four at a time, not ten: JavaScriptCore's unified sources are large
+    # enough that the VM runs out of memory and the compiler is killed.
+    cd "$BUILD" && $CMAKE --build . -j "${JOBS:-4}" ${ARGS:---target jsc} ;;
 shell)
     cd "$BUILD" 2>/dev/null || cd "$SRC"
     eval "$ARGS" ;;

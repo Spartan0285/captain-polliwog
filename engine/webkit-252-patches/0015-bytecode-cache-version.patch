@@ -1,0 +1,35 @@
+The bytecode cache version, without the dyld SPI.
+
+The cache is keyed on the engine framework UUID, read through a dyld call
+that this system has not got and a header the released source does not
+carry. A fixed version means a cache is never shared between two builds,
+which is what a changed UUID would have meant anyway.
+
+--- a/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.cpp	2026-09-23 00:37:58
++++ b/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.cpp	2026-09-23 00:37:58
+@@ -36,7 +36,9 @@
+ #if OS(DARWIN)
+ #include <mach-o/dyld.h>
+ #include <uuid/uuid.h>
++#if !CP_OLD_DARWIN
+ #include <wtf/spi/darwin/dyldSPI.h>
++#endif
+ #elif OS(QNX)
+ #include <sys/link.h>
+ #else
+@@ -57,7 +59,14 @@
+     static std::once_flag onceFlag;
+     std::call_once(onceFlag, [] {
+         void* jsFunctionAddr = std::bit_cast<void*>(&computeJSCBytecodeCacheVersion);
+-#if OS(DARWIN)
++#if CP_OLD_DARWIN
++        // The cache is keyed on the engine's own UUID, which needs a dyld
++        // call this system has not got. Every build of this engine is its
++        // own, so the version is fixed and the cache is simply never shared
++        // between two of them - which is what a changed UUID would mean.
++        UNUSED_PARAM(jsFunctionAddr);
++        cacheVersion.construct(0);
++#elif OS(DARWIN)
+         uuid_t uuid;
+         if (const mach_header* header = dyld_image_header_containing_address(jsFunctionAddr); header && _dyld_get_image_uuid(header, uuid)) {
+             uuid_string_t uuidString = { };

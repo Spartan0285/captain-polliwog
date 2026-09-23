@@ -1,0 +1,16 @@
+Naming a thread is 10.6.
+
+Without pthread_setname_np a thread simply has no name, which costs a
+label in a debugger and nothing else.
+
+--- a/Source/WTF/wtf/PlatformHave.h	2026-09-23 00:33:04
++++ b/Source/WTF/wtf/PlatformHave.h	2026-09-23 00:33:04
+@@ -233,7 +233,7 @@
+ #define HAVE_MADV_DONTNEED 1
+ #endif
+ 
+-#if OS(DARWIN)
++#if OS(DARWIN) && !CP_OLD_DARWIN
+ #define HAVE_PTHREAD_SETNAME_NP 1
+ #endif
+ 

@@ -69,7 +69,11 @@ if [ ! -f $PREFIX/icu/lib/libicuuc.a ]; then
     mkdir icu-modern-host && ( cd icu-modern-host && ../icu-modern/source/configure --disable-tests --disable-samples >/dev/null && make -j"$(nproc)" >/dev/null )
     mkdir icu-modern-ppc && cd icu-modern-ppc
     # 10.4 deployment as everywhere else, so one ICU serves Tiger and Leopard.
+    # Apple's ar and ranlib, not the host's: ld64 reads a GNU archive index
+    # only partly, and the link then fails on symbols that are in the
+    # archive all along (the same trap as OTS in the 604 toolchain).
     CC=$PREFIX/bin/$TARGET-gcc CXX=$PREFIX/bin/$TARGET-g++ \
+    AR=/opt/ppc/bin/$TARGET-ar RANLIB=/opt/ppc/bin/$TARGET-ranlib \
     CFLAGS="-O2 -mmacosx-version-min=10.4" CXXFLAGS="-O2 -std=c++17 -mmacosx-version-min=10.4" \
     LDFLAGS="-mmacosx-version-min=10.4" \
         ../icu-modern/source/configure --host=$TARGET --with-cross-build="$PWD/../icu-modern-host" \

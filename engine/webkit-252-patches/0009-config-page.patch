@@ -1,0 +1,20 @@
+The executable first page, on a Mac without RTLD_MAIN_ONLY.
+
+RTLD_MAIN_ONLY and getsegmentdata are later additions. Without them the
+lowest accessible address is one page, which is what every non-Darwin
+system uses here.
+
+--- a/Source/WTF/wtf/WTFConfig.cpp	2026-09-23 00:27:24
++++ b/Source/WTF/wtf/WTFConfig.cpp	2026-09-23 00:27:24
+@@ -157,7 +157,10 @@
+     // FIXME: We should do a placement new for Config so we can use default initializers.
+     []() -> void {
+         uintptr_t onePage = pageSize(); // At least, first one page must be unmapped.
+-#if OS(DARWIN)
++// Finding the executable's __PAGEZERO needs RTLD_MAIN_ONLY and
++// getsegmentdata, neither of which a Mac had this far back. One page is the
++// answer every other system gives, and is what this falls through to.
++#if OS(DARWIN) && !CP_OLD_DARWIN
+ #ifdef __LP64__
+         using Header = struct mach_header_64;
+ #else

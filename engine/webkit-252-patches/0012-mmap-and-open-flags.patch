@@ -1,0 +1,58 @@
+mmap and open flags that came later.
+
+MAP_JIT is 10.11 and marks the mapping a JIT writes into; there is no
+PowerPC JIT and no such flag. The madvise reuse advice is 10.6. O_CLOEXEC
+is 10.7, and setting the flag after opening is the same thing in two
+steps.
+
+--- a/Source/WTF/wtf/PlatformHave.h	2026-09-23 00:31:26
++++ b/Source/WTF/wtf/PlatformHave.h	2026-09-23 00:31:26
+@@ -225,7 +225,7 @@
+ #define HAVE_MADV_FREE 1
+ #endif
+ 
+-#if OS(DARWIN)
++#if OS(DARWIN) && !CP_OLD_DARWIN
+ #define HAVE_MADV_FREE_REUSE 1
+ #endif
+ 
+--- a/Source/WTF/wtf/posix/OSAllocatorPOSIX.cpp	2026-09-23 00:31:26
++++ b/Source/WTF/wtf/posix/OSAllocatorPOSIX.cpp	2026-09-23 00:31:26
+@@ -40,7 +40,7 @@
+ #if ENABLE(JIT_CAGE)
+ #include <WebKitAdditions/JITCageAdditions.h>
+ #else // ENABLE(JIT_CAGE)
+-#if OS(DARWIN)
++#if OS(DARWIN) && !CP_OLD_DARWIN
+ #define MAP_EXECUTABLE_FOR_JIT MAP_JIT
+ #define MAP_EXECUTABLE_FOR_JIT_WITH_JIT_CAGE MAP_JIT
+ #else // OS(DARWIN)
+--- a/Source/WTF/wtf/posix/FileSystemPOSIX.cpp	2026-09-23 00:31:26
++++ b/Source/WTF/wtf/posix/FileSystemPOSIX.cpp	2026-09-23 00:31:45
+@@ -66,7 +66,11 @@
+     if (fsRep.isNull())
+         return { };
+ 
++#if CP_OLD_DARWIN
++    int platformFlag = 0;   // set close-on-exec below; O_CLOEXEC is 10.7
++#else
+     int platformFlag = O_CLOEXEC;
++#endif
+     switch (mode) {
+     case FileOpenMode::Read:
+         platformFlag |= O_RDONLY;
+@@ -93,7 +97,14 @@
+     else if (permission == FileAccessPermission::All)
+         permissionFlag |= (S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+ 
++#if CP_OLD_DARWIN
++    int descriptor = open(fsRep.data(), platformFlag, permissionFlag);
++    if (descriptor >= 0)
++        fcntl(descriptor, F_SETFD, FD_CLOEXEC);
++    return FileHandle::adopt(descriptor, lockMode);
++#else
+     return FileHandle::adopt(open(fsRep.data(), platformFlag, permissionFlag), lockMode);
++#endif
+ }
+ 
+ std::optional<WallTime> fileCreationTime(const String& path)

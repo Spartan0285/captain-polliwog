@@ -1,0 +1,37 @@
+The last of os_log, and a crash reason Apple added.
+
+The integrity audit log goes to the data log, as on every system without
+os_log, and a security-sensitive assertion crashes the ordinary way.
+
+--- a/Source/WTF/wtf/Assertions.h	2026-09-23 01:06:33
++++ b/Source/WTF/wtf/Assertions.h	2026-09-23 01:06:59
+@@ -1050,7 +1050,7 @@
+ 
+ #endif /* __cplusplus */
+ 
+-#if OS(DARWIN)
++#if OS(DARWIN) && !CP_OLD_DARWIN
+ #define CRASH_WITH_EXTRA_SECURITY_IMPLICATION_AND_INFO(abortReason, abortMsg, ...) do { \
+         if (g_wtfConfig.useSpecialAbortForExtraSecurityImplications) \
+             abort_with_reason(OS_REASON_WEBKIT, abortReason, abortMsg, OS_REASON_FLAG_SECURITY_SENSITIVE); \
+--- a/Source/JavaScriptCore/tools/Integrity.cpp	2026-09-23 01:06:33
++++ b/Source/JavaScriptCore/tools/Integrity.cpp	2026-09-23 01:06:59
+@@ -37,7 +37,9 @@
+ #include <wtf/DataLog.h>
+ 
+ #if OS(DARWIN)
++#if !CP_OLD_DARWIN
+ #include <wtf/darwin/OSLogPrintStream.h>
++#endif
+ #endif
+ 
+ namespace JSC {
+@@ -49,7 +51,7 @@
+ 
+ PrintStream& logFile()
+ {
+-#if OS(DARWIN)
++#if OS(DARWIN) && !CP_OLD_DARWIN
+     static PrintStream* s_file;
+     static std::once_flag once;
+     std::call_once(once, [] {

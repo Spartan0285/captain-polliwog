@@ -1,0 +1,72 @@
+POSIX of 2005: no clock_gettime, no birth time, no mkostemp.
+
+Per-thread processor time comes from the thread own mach info, which has
+always carried it. A file creation time falls back to its change time,
+which is never later. And a temporary file is made with mkstemp and then
+told to close on exec, which is what mkostemp does in one step.
+
+--- a/Source/WTF/wtf/posix/CPUTimePOSIX.cpp	2026-09-23 00:30:39
++++ b/Source/WTF/wtf/posix/CPUTimePOSIX.cpp	2026-09-23 00:30:39
+@@ -30,6 +30,11 @@
+ #include <sys/time.h>
+ #include <time.h>
+ 
++#if CP_OLD_DARWIN
++#include <mach/mach.h>
++#include <mach/thread_act.h>
++#endif
++
+ namespace WTF {
+ 
+ static Seconds timevalToSeconds(const struct timeval& value)
+@@ -47,10 +52,19 @@
+ 
+ Seconds CPUTime::forCurrentThread()
+ {
++#if CP_OLD_DARWIN
++    thread_basic_info_data_t info;
++    mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
++    if (thread_info(mach_thread_self(), THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&info), &count) != KERN_SUCCESS)
++        return Seconds(0);
++    return Seconds(info.user_time.seconds + info.system_time.seconds)
++        + Seconds::fromMicroseconds(info.user_time.microseconds + info.system_time.microseconds);
++#else
+     struct timespec ts { };
+     int ret = clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+     RELEASE_ASSERT(!ret);
+     return Seconds(ts.tv_sec) + Seconds::fromNanoseconds(ts.tv_nsec);
++#endif
+ }
+ 
+ }
+--- a/Source/WTF/wtf/posix/FileSystemPOSIX.cpp	2026-09-23 00:30:39
++++ b/Source/WTF/wtf/posix/FileSystemPOSIX.cpp	2026-09-23 00:30:39
+@@ -116,9 +116,13 @@
+     if (stat(fsRep.data(), &fileInfo) == -1)
+         return std::nullopt;
+ 
++#if CP_OLD_DARWIN
++    return WallTime::fromRawSeconds(fileInfo.st_ctime);
++#else
+     return WallTime::fromRawSeconds(fileInfo.st_birthtime);
+ #endif
+ #endif
++#endif
+ 
+     UNUSED_PARAM(path);
+     return std::nullopt;
+@@ -181,7 +185,14 @@
+     snprintf(buffer.mutableSpan().data(), length, "%s/%s-XXXXXX", directory, prefixUTF8.data());
+     IGNORE_CLANG_WARNINGS_END
+ 
++#if CP_OLD_DARWIN
++    int temporary = mkstemp(buffer.mutableSpan().data());
++    if (temporary >= 0)
++        fcntl(temporary, F_SETFD, FD_CLOEXEC);
++    auto handle = FileHandle::adopt(temporary);
++#else
+     auto handle = FileHandle::adopt(mkostemp(buffer.mutableSpan().data(), O_CLOEXEC));
++#endif
+     if (!handle)
+         return { String(), FileHandle() };
+ 

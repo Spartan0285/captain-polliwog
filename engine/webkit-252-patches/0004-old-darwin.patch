@@ -1,0 +1,37 @@
+Darwin of 2005 is not the Darwin WebKit assumes.
+
+os_log, and the os/object.h it needs, arrived in 2016; the header was
+included for every Darwin although only Cocoa uses it. And the machine
+context spells its members with underscores only where the UNIX 03
+conformance of 10.5 applies.
+
+--- a/Source/WTF/wtf/Assertions.cpp	2026-09-23 00:19:10
++++ b/Source/WTF/wtf/Assertions.cpp	2026-09-23 00:19:10
+@@ -58,6 +58,11 @@
+ #if OS(DARWIN)
+ #include <sys/sysctl.h>
+ #include <unistd.h>
++#endif
++
++// OSObjectPtr is only used for os_log, which is Cocoa's and needs an
++// os/object.h that Darwin of 2005-07 has not got.
++#if PLATFORM(COCOA)
+ #include <wtf/OSObjectPtr.h>
+ #endif
+ 
+--- a/Source/WTF/wtf/PlatformRegisters.h	2026-09-23 00:19:10
++++ b/Source/WTF/wtf/PlatformRegisters.h	2026-09-23 00:19:10
+@@ -65,7 +65,13 @@
+ 
+ inline PlatformRegisters& registersFromUContext(ucontext_t* ucontext)
+ {
++    // The underscored member names arrived with the UNIX 03 conformance of
++    // 10.5; Tiger's machine context calls it ss.
++#if defined(__DARWIN_UNIX03) && __DARWIN_UNIX03
+     return ucontext->uc_mcontext->__ss;
++#else
++    return ucontext->uc_mcontext->ss;
++#endif
+ }
+ 
+ #elif OS(WINDOWS)

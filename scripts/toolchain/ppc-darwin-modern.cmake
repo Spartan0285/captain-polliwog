@@ -60,12 +60,31 @@ endforeach ()
 set(CMAKE_EXE_LINKER_FLAGS_INIT    "${PPC_LINK_FLAGS}")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "${PPC_LINK_FLAGS}")
 set(CMAKE_MODULE_LINKER_FLAGS_INIT "${PPC_LINK_FLAGS}")
-# libatomic: 32-bit PowerPC has no 64-bit atomic instruction, and WebKit's
-# 64-bit atomics become calls into it.
-set(CMAKE_C_STANDARD_LIBRARIES_INIT "${PPC_RUNTIME}/libatomic.1.dylib ${PPC_RUNTIME}/libgcc_s.1.dylib -lgcc -lSystem")
-set(CMAKE_CXX_STANDARD_LIBRARIES_INIT "${PPC_RUNTIME}/libstdc++.6.dylib ${PPC_RUNTIME}/libatomic.1.dylib ${PPC_RUNTIME}/libgcc_s.1.dylib -lgcc -lSystem")
+# One copy of the runtime, and it is the static one.
+#
+# Thread-local storage is emulated on PowerPC Darwin, and its state lives in
+# whichever copy of libgcc the code was linked with. With the executable
+# holding a static libgcc and libstdc++ arriving as a dylib with its own,
+# std::call_once wrote its callable into one copy and read it back from the
+# other: WTF::initialize crashed on a null function pointer, in
+# pthread_once, before a line of JavaScript ran. The 604 engine met the same
+# thing from the other direction (see ppc-darwin.cmake).
+#
+# libatomic is here because 32-bit PowerPC has no 64-bit atomic instruction
+# and WebKit's 64-bit atomics become calls into it.
+set(PPC_MODERN_LIBS /opt/ppc-modern/powerpc-apple-darwin9/lib)
+# -lgcc_eh is the unwinder, which the static libstdc++ calls into and the
+# shared libgcc would otherwise have carried.
+set(CMAKE_C_STANDARD_LIBRARIES_INIT "${PPC_MODERN_LIBS}/libatomic.a -lgcc -lgcc_eh -lSystem")
+set(CMAKE_CXX_STANDARD_LIBRARIES_INIT "${PPC_MODERN_LIBS}/libstdc++.a ${PPC_MODERN_LIBS}/libatomic.a -lgcc -lgcc_eh -lSystem")
 
 # WebKit 2.52 is C++23. GNU mode, as Apple's own build uses, since Leopard's
 # headers hide some C99 functions in strict mode.
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_EXTENSIONS ON)
+
+# A C++ bool is four bytes in Apple's PowerPC ABI, and one everywhere else.
+# JavaScriptCore asserts that it is one, because its interpreter and JIT
+# read bools from assembly. Nothing here shares a C++ interface with a
+# system library, so the engine uses the size every other platform has.
+set(CMAKE_CXX_FLAGS_INIT "-mone-byte-bool")

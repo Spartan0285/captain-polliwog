@@ -1,0 +1,23 @@
+roundeven is C23.
+
+A library this old has rint, which under the default rounding mode rounds
+halves to even: the same answer by another name.
+
+--- a/Source/JavaScriptCore/runtime/MathCommon.cpp	2026-09-23 01:01:01
++++ b/Source/JavaScriptCore/runtime/MathCommon.cpp	2026-09-23 01:01:01
+@@ -626,8 +626,15 @@
+ }
+ #endif
+ 
++// roundeven is C23; a library this old has rint, which rounds halves to
++// even under the default rounding mode - the same answer.
++#if CP_OLD_DARWIN
++JSC_DEFINE_NOEXCEPT_JIT_OPERATION(f32_roundeven, float, (float operand)) { return rintf(operand); }
++JSC_DEFINE_NOEXCEPT_JIT_OPERATION(f64_roundeven, double, (double operand)) { return rint(operand); }
++#else
+ JSC_DEFINE_NOEXCEPT_JIT_OPERATION(f32_roundeven, float, (float operand)) { return roundevenf(operand); }
+ JSC_DEFINE_NOEXCEPT_JIT_OPERATION(f64_roundeven, double, (double operand)) { return roundeven(operand); }
++#endif
+ JSC_DEFINE_NOEXCEPT_JIT_OPERATION(f32_trunc, float, (float operand)) { return std::trunc(operand); }
+ JSC_DEFINE_NOEXCEPT_JIT_OPERATION(f64_trunc, double, (double operand)) { return std::trunc(operand); }
+ 

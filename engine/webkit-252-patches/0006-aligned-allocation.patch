@@ -1,0 +1,84 @@
+Aligned allocation, and a type, on a Mac of 2005.
+
+aligned_alloc is C11 and reached a Mac in 10.15; posix_memalign arrived in
+10.6. Older than both, an aligned block is made by hand. And ino_t needs
+sys/types.h here, as it does on Linux.
+
+--- a/Source/WTF/wtf/FastMalloc.cpp	2026-09-23 00:22:11
++++ b/Source/WTF/wtf/FastMalloc.cpp	2026-09-23 00:22:59
+@@ -187,11 +187,43 @@
+ }
+ 
+ #else
++
++#if CP_OLD_DARWIN
++
++// Neither aligned_alloc (C11, and on a Mac only from 10.15) nor
++// posix_memalign (10.6) exists this far back. Over-allocate, align within
++// the block, and keep the address malloc gave in the word just before the
++// one handed out, so the free can find it again.
++static void* cpAlignedMalloc(size_t alignment, size_t size)
++{
++    if (alignment < sizeof(void*))
++        alignment = sizeof(void*);
++    void* block = malloc(size + alignment + sizeof(void*));
++    if (!block)
++        return nullptr;
++    void** aligned = reinterpret_cast<void**>(
++        (reinterpret_cast<uintptr_t>(block) + sizeof(void*) + alignment - 1)
++        & ~(static_cast<uintptr_t>(alignment) - 1));
++    aligned[-1] = block;
++    return aligned;
++}
++
++static void cpAlignedFree(void* p)
++{
++    if (p)
++        free(static_cast<void**>(p)[-1]);
++}
+ 
++#endif
++
+ void* fastAlignedMalloc(size_t alignment, size_t size) 
+ {
+     ASSERT_IS_WITHIN_LIMIT(size);
++#if CP_OLD_DARWIN
++    void* p = cpAlignedMalloc(alignment, size);
++#else
+     void* p = aligned_alloc(alignment, size);
++#endif
+     if (!p) [[unlikely]]
+         CRASH();
+     return p;
+@@ -200,12 +232,20 @@
+ void* tryFastAlignedMalloc(size_t alignment, size_t size) 
+ {
+     FAIL_IF_EXCEEDS_LIMIT(size);
++#if CP_OLD_DARWIN
++    return cpAlignedMalloc(alignment, size);
++#else
+     return aligned_alloc(alignment, size);
++#endif
+ }
+ 
+ void fastAlignedFree(void* p) 
+ {
++#if CP_OLD_DARWIN
++    cpAlignedFree(p);
++#else
+     free(p);
++#endif
+ }
+ 
+ #endif // OS(WINDOWS)
+--- a/Source/WTF/wtf/FileHandle.h	2026-09-23 00:22:11
++++ b/Source/WTF/wtf/FileHandle.h	2026-09-23 00:22:59
+@@ -33,7 +33,7 @@
+ 
+ #if OS(WINDOWS)
+ #include <wtf/win/Win32Handle.h>
+-#elif OS(LINUX)
++#elif OS(LINUX) || CP_OLD_DARWIN
+ #include <sys/types.h>
+ #endif
+ 

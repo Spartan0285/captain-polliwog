@@ -1,0 +1,27 @@
+Blocks are a Clang extension here too.
+
+The same as Function.h: CompletionHandler deletes a block constructor on
+__APPLE__, which GCC cannot parse.
+
+--- a/Source/WTF/wtf/CompletionHandler.h	2026-09-23 00:26:05
++++ b/Source/WTF/wtf/CompletionHandler.h	2026-09-23 00:26:31
+@@ -60,7 +60,9 @@
+     {
+     }
+ 
+-#if defined(__APPLE__)
++// Blocks are a Clang extension, not a Darwin one: the PowerPC compiler is
++// GCC, which has never had them. See Function.h, which says the same.
++#if defined(__APPLE__) && defined(__BLOCKS__)
+     // Always use C++ lambdas to create a WTF::CompletionHandler in Objective-C++.
+     // Always use Swift closures (implicitly as Objective-C blocks) to create a WTF::CompletionHandler in Swift.
+ #ifndef __swift__
+@@ -72,7 +74,7 @@
+     {
+     }
+ #endif
+-#endif // defined(__APPLE__)
++#endif // defined(__APPLE__) && defined(__BLOCKS__)
+ 
+     CompletionHandler(CompletionHandler&&) = default;
+     CompletionHandler& operator=(CompletionHandler&&) = default;

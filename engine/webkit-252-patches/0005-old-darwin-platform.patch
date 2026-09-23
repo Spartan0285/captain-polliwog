@@ -1,0 +1,118 @@
+Darwin without libdispatch, memmem or the 2016 clocks.
+
+CP_OLD_DARWIN says once what 10.4 and 10.5 have not got, and each use
+falls back: gettimeofday for the wall clock, the plain mach clock for the
+approximate and continuous ones, WTF own search in place of memmem, and no
+libdispatch header.
+
+--- a/Source/WTF/wtf/PlatformHave.h	2026-09-23 00:20:50
++++ b/Source/WTF/wtf/PlatformHave.h	2026-09-23 00:21:21
+@@ -27,6 +27,19 @@
+ 
+ #pragma once
+ 
++/* CP_OLD_DARWIN - Mac OS X 10.4 and 10.5.
++ *
++ * Darwin, but before most of what WebKit now takes as given on a Mac:
++ * libdispatch (10.6), os_log and clock_gettime (10.12), memmem (10.7) and
++ * the approximate and continuous mach clocks (10.12). Said once here
++ * rather than as a version comparison at each use.
++ */
++#if OS(DARWIN) && defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED < 1060
++#define CP_OLD_DARWIN 1
++#else
++#define CP_OLD_DARWIN 0
++#endif
++
+ #ifndef WTF_PLATFORM_GUARD_AGAINST_INDIRECT_INCLUSION
+ #error "Please #include <wtf/Platform.h> instead of this file directly."
+ #endif
+@@ -424,7 +437,7 @@
+ #define HAVE_STACK_BOUNDS_FOR_NEW_THREAD 1
+ #endif
+ 
+-#if !OS(WINDOWS) && !PLATFORM(PLAYSTATION)
++#if !OS(WINDOWS) && !PLATFORM(PLAYSTATION) && !CP_OLD_DARWIN
+ #define HAVE_MEMMEM 1
+ #endif
+ 
+--- a/Source/WTF/wtf/CurrentTime.cpp	2026-09-23 00:19:56
++++ b/Source/WTF/wtf/CurrentTime.cpp	2026-09-23 00:21:21
+@@ -216,16 +216,28 @@
+ 
+ Int128 currentTimeInNanoseconds()
+ {
++#if CP_OLD_DARWIN
++    struct timeval tv { };
++    gettimeofday(&tv, nullptr);
++    return (static_cast<Int128>(tv.tv_sec) * 1'000'000'000) + (static_cast<Int128>(tv.tv_usec) * 1000);
++#else
+     struct timespec ts { };
+     clock_gettime(CLOCK_REALTIME, &ts);
+     return (static_cast<Int128>(ts.tv_sec) * 1'000'000'000) + ts.tv_nsec;
++#endif
+ }
+ 
+ static inline double currentTime()
+ {
++#if CP_OLD_DARWIN
++    struct timeval tv { };
++    gettimeofday(&tv, nullptr);
++    return static_cast<double>(tv.tv_sec) + tv.tv_usec / 1'000'000.0;
++#else
+     struct timespec ts { };
+     clock_gettime(CLOCK_REALTIME, &ts);
+     return static_cast<double>(ts.tv_sec) + ts.tv_nsec / 1'000'000'000.0;
++#endif
+ }
+ 
+ #endif
+@@ -325,7 +337,11 @@
+ ApproximateTime ApproximateTime::now()
+ {
+ #if OS(DARWIN)
++#if CP_OLD_DARWIN
++    return fromMachApproximateTime(mach_absolute_time());
++#else
+     return fromMachApproximateTime(mach_approximate_time());
++#endif
+ #elif OS(LINUX)
+     struct timespec ts { };
+     clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
+@@ -344,7 +360,11 @@
+ ContinuousTime ContinuousTime::now()
+ {
+ #if OS(DARWIN)
++#if CP_OLD_DARWIN
++    return fromMachContinuousTime(mach_absolute_time());
++#else
+     return fromMachContinuousTime(mach_continuous_time());
++#endif
+ #elif OS(LINUX) || OS(OPENBSD)
+     struct timespec ts { };
+     clock_gettime(CLOCK_BOOTTIME, &ts);
+@@ -362,7 +382,11 @@
+ ContinuousApproximateTime ContinuousApproximateTime::now()
+ {
+ #if OS(DARWIN)
++#if CP_OLD_DARWIN
++    return fromMachContinuousApproximateTime(mach_absolute_time());
++#else
+     return fromMachContinuousApproximateTime(mach_continuous_approximate_time());
++#endif
+ #elif OS(LINUX) || OS(OPENBSD)
+     struct timespec ts { };
+     clock_gettime(CLOCK_BOOTTIME, &ts);
+--- a/Source/WTF/wtf/FastMalloc.cpp	2026-09-23 00:19:57
++++ b/Source/WTF/wtf/FastMalloc.cpp	2026-09-23 00:21:21
+@@ -31,8 +31,10 @@
+ 
+ #if OS(DARWIN)
+ #include <malloc/malloc.h>
++#if !CP_OLD_DARWIN
+ #include <wtf/darwin/DispatchExtras.h>
+ #endif
++#endif
+ 
+ #if OS(WINDOWS)
+ #include <windows.h>
