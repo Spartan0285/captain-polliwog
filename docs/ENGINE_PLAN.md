@@ -1730,3 +1730,30 @@ invest in speed instead of a newer engine" - is not needed.
 
 Which leaves spike C, first paint, as the next gate and the first one
 that is months rather than hours.
+
+### The reproducer, checked against the cell that is supposed to be correct
+
+The Tiger engine is rebuilt with items 2 and 4 - item 1 is deliberately
+inert there, because the optimizing tier is on for Tiger and a G3 and so
+ArithProfile has a real reader.
+
+Two things were verified on the Pismo before trusting it.
+
+**The inline cache sizes are the same on a G3 as on a G4.** They were
+measured on the PowerBook and set from that, which is how a wrong
+constant ships. POLLIWOG_dumpInlineCacheSizes on the 500MHz Pismo gives
+array length 32, inline offset 40, out of line offset 44, replace 40,
+replace out of line 44 - identical. The MacroAssembler sequences do not
+vary with -mcpu, as expected, and now that is checked rather than
+assumed.
+
+**The DFG reproducer passes on Tiger and a G3**, with the tier on:
+
+    function build(n){ var a=[]; for (var i=0;i<n;i++) a.push(i); return a.length; }
+    var t=0; for (var k=0;k<40;k++) t += build(50000);   // 2,000,000, correct
+
+The same three lines fail on the G4 under Leopard with 'a.push' reading
+as 2.121995789e-314. So the one-line reproducer distinguishes both cells
+we can already reach, which is what makes it worth pointing at the cell
+we cannot: a G4-class processor running Tiger, which exists here only
+under PowerEmu.
