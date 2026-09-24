@@ -1,4 +1,4 @@
-From 2056a78af28adb31abb8c38f8996cb644a386ba9 Mon Sep 17 00:00:00 2001
+From 38082fc80cd90da3246ae6f2b53b4816a0465727 Mon Sep 17 00:00:00 2001
 From: Adam Cipoletti <adam@amcreativecoach.com>
 Date: Wed, 23 Sep 2026 15:25:22 -0400
 Subject: [PATCH] Engine: what nine years of compiler does to a 2017 codebase
@@ -33,10 +33,10 @@ compilers is not quietly comparing one fewer optimization everywhere.
  .../network/cocoa/ResourceResponseCocoa.mm    | 21 ++++++++++++++++++-
  Source/WebCore/svg/SVGLengthContext.cpp       |  4 ++++
  Source/WebKitLegacy/CMakeLists.txt            |  4 ++--
- Source/WebKitLegacy/PlatformMac.cmake         | 11 ++++++++++
+ Source/WebKitLegacy/PlatformMac.cmake         | 17 +++++++++++++++
  .../mac/DOM/WebDOMOperationsPrivate.h         |  6 ++++++
  .../WebKitLegacy/mac/WebView/WebViewPrivate.h |  6 ++++++
- 12 files changed, 98 insertions(+), 19 deletions(-)
+ 12 files changed, 104 insertions(+), 19 deletions(-)
 
 diff --git a/Source/WebCore/CMakeLists.txt b/Source/WebCore/CMakeLists.txt
 index 9a4be46f..ae1081eb 100644
@@ -267,10 +267,10 @@ index f07a6dec..2e2c7e08 100644
  endif ()
  
 diff --git a/Source/WebKitLegacy/PlatformMac.cmake b/Source/WebKitLegacy/PlatformMac.cmake
-index 3becb741..e30c54c0 100644
+index 3becb741..eee592c3 100644
 --- a/Source/WebKitLegacy/PlatformMac.cmake
 +++ b/Source/WebKitLegacy/PlatformMac.cmake
-@@ -522,3 +522,14 @@ WEBKIT_CREATE_FORWARDING_HEADERS(WebKit DIRECTORIES ${FORWARDING_HEADERS_DIR}/We
+@@ -522,3 +522,20 @@ WEBKIT_CREATE_FORWARDING_HEADERS(WebKit DIRECTORIES ${FORWARDING_HEADERS_DIR}/We
  set(WebKit_OUTPUT_NAME WebKitLegacy)
  
  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -compatibility_version 1 -current_version ${WEBKIT_MAC_VERSION}")
@@ -283,7 +283,13 @@ index 3becb741..e30c54c0 100644
 +if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14)
 +    # -fno-tree-pre alone does not avoid it, so this file is built at -O1,
 +    # where the pass does not run at all. One file out of three thousand.
-+    set_source_files_properties(mac/WebView/WebHTMLView.mm PROPERTIES COMPILE_FLAGS "-O1 -fno-tree-pre")
++    # COMPILE_FLAGS is one string, and the loop above has already put this
++    # file's language and standard in it. Setting it again would drop them,
++    # and the file would build as GCC 14's default gnu++17 while the rest of
++    # the framework stayed gnu++14 - one translation unit disagreeing with
++    # every other about what a C++ type is.
++    set_source_files_properties(mac/WebView/WebHTMLView.mm PROPERTIES
++        COMPILE_FLAGS "${WEBKITLEGACY_OBJCXX_FLAGS} -O1 -fno-tree-pre")
 +endif ()
 diff --git a/Source/WebKitLegacy/mac/DOM/WebDOMOperationsPrivate.h b/Source/WebKitLegacy/mac/DOM/WebDOMOperationsPrivate.h
 index 7dc281c5..73c89b1a 100644
@@ -319,6 +325,3 @@ index 1b597294..d6a818f0 100644
  #import <WebKit/WebFramePrivate.h>
  #import <JavaScriptCore/JSBase.h>
  
--- 
-2.54.0 (Apple Git-157)
-
