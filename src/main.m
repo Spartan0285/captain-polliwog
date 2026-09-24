@@ -5,6 +5,7 @@
 // Captain Polliwog - a web browser for Mac OS X 10.4 Tiger and later.
 
 #import <Cocoa/Cocoa.h>
+#include <sys/sysctl.h>
 #import "CPAppDelegate.h"
 #include <mach-o/dyld.h>
 #include <sys/param.h>
@@ -39,6 +40,19 @@ static BOOL CPSystemIsAtLeast(NSString *minimum)
 // process, same arguments - the -psn_ LaunchServices passed goes through with
 // them - and this time the engine loads from wherever the app is.
 //
+// Does this Mac have AltiVec: a G4 or G5 rather than a G3. hw.vectorunit is
+// the one that answers on both systems - hw.optional.altivec does not exist
+// on Tiger at all, and asking for it there is an error rather than a no.
+static BOOL CPHasVectorUnit(void)
+{
+    int vector = 0;
+    size_t size = sizeof vector;
+
+    if (sysctlbyname("hw.vectorunit", &vector, &size, NULL, 0) != 0)
+        return NO;      // too old to be asked is too old to have one
+    return vector != 0;
+}
+
 // Only when the engine is one this system can run. Pointing Tiger at a
 // Leopard engine would stop the browser launching at all, which is worse
 // than the system WebKit it would otherwise fall back to; each engine says
@@ -74,12 +88,20 @@ static void CPUseBundledEngine(int argc, const char *argv[])
         NSDictionary *engineInfo = [NSDictionary dictionaryWithContentsOfFile:
             [frameworks stringByAppendingPathComponent:@"WebKit.framework/Resources/Info.plist"]];
         NSString *minimum = [engineInfo objectForKey:@"LSMinimumSystemVersion"];
+        id needsVector = [engineInfo objectForKey:@"CPRequiresVectorUnit"];
 
         if (engineInfo == nil)
             continue;
         if (minimum == nil)
             minimum = @"10.5";
         if (!CPSystemIsAtLeast(minimum))
+            continue;
+        // A G4 build uses instructions a G3 has not got, so on a G3 it does
+        // not run slowly, it does not run. The G3 build runs on both, and is
+        // what a Mac without a vector unit is given whatever system it has -
+        // which is also what a G3 running Leopard needs, and what it would
+        // not have been given before this.
+        if (needsVector != nil && [needsVector boolValue] && !CPHasVectorUnit())
             continue;
         if (current != nil && [current rangeOfString:frameworks].location != NSNotFound)
             break;      // already running with this one

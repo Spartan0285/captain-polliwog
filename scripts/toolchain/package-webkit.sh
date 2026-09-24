@@ -49,6 +49,15 @@ case $VARIANT in
     tiger-*) MINIMUM=10.4 ;;
     *)       MINIMUM=10.5 ;;
 esac
+# And the processor. A build for the G4 uses AltiVec and instructions a 750
+# has not got, so a G3 cannot run it at all - not slowly, at all. The G3
+# build runs on both, which is why it is the one a Mac without a vector unit
+# is given, whatever system it is on. Written here so that main.m can ask the
+# engine rather than guess from the folder it sits in.
+case $VARIANT in
+    tiger-*) NEEDS_VECTOR=false ;;
+    *)       NEEDS_VECTOR=true ;;
+esac
 # Apple's style: an OS digit, then WebKit's version - 4604 for 10.4, 5604 for
 # 10.5. The About window strips the first digit to show "WebKit 604.5.6".
 VERSION=${MINIMUM#10.}604.5.6
@@ -84,6 +93,8 @@ framework() {
 	<string>$VERSION</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$MINIMUM</string>
+	<key>CPRequiresVectorUnit</key>
+	<$NEEDS_VECTOR/>
 </dict>
 </plist>
 EOF

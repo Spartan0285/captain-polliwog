@@ -96,6 +96,23 @@ static CPWelcome *sharedWelcome = nil;
     [sharedWelcome build];
 }
 
+// What the Captain makes of the ship he finds himself on. hw.vectorunit is
+// the question that both Tiger and Leopard answer: a G4 or G5 has AltiVec -
+// Apple sold it as the Velocity Engine - and a G3 has not. The same answer
+// decides which engine the app loads (src/main.m), so what he says here is
+// what the browser actually did.
+static NSString *CPVesselGreeting(void)
+{
+    int vector = 0;
+    size_t size = sizeof vector;
+
+    if (sysctlbyname("hw.vectorunit", &vector, &size, NULL, 0) == 0 && vector != 0)
+        return @"Shiver me timbers. This vessel has a velocity engine. "
+                "We'll be cruising fast today!";
+    return @"Arg! You be sailing the seas in this classic hull. "
+            "You appreciate going slow and steady I see.";
+}
+
 + (void)showAtStep:(int)step
 {
     [self show];
@@ -210,11 +227,12 @@ static CPWelcome *sharedWelcome = nil;
     switch (page) {
     case 0:
         [heading setStringValue:@"Hello there, matey! I'm your Captain."];
-        [body setStringValue:
-            @"Together we are going to surf the high seas \xE2\x80\x94 the modern web, on a Mac "
+        [body setStringValue:[NSString stringWithFormat:
+            @"%@\n\n"
+             "Together we are going to surf the high seas \xE2\x80\x94 the modern web, on a Mac "
              "that was told some time ago it had seen enough of it.\n\n"
              "Would you like to bring your ports of call across? I can fetch the bookmarks "
-             "you already keep in Safari."];
+             "you already keep in Safari.", CPVesselGreeting()]];
         [action setTitle:@"Import Bookmarks from Safari"];
         break;
 
