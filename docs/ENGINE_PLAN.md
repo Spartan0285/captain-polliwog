@@ -1118,11 +1118,64 @@ carry an identical __image_info, so the runtime is not refusing the image.
 And the same harness runs the GCC 6 engine on the same machine, so it is
 not the test.
 
-What has not been ruled out: -fvisibility=hidden, which both builds are
-given and which means something different to GCC 14; the section renaming
-this port does to keep WebCore inside PowerPC's branch reach; and two
-copies of libstdc++ in one process, since the application links the
-system's and the bundle now carries GCC 14's.
+All three of those have since been ruled out too, by reading the
+binaries rather than by argument.
+
+The fault address says what kind of failure this is. In the fragile
+`struct objc_class` the fields run isa(0), super_class(4), name(8),
+version(0xc), info(0x10), and `_class_isInitialized` reads `info`. A
+protection fault at 0x10 is therefore a *null* class, not a corrupted
+one - a link that was never fixed up. An unresolved fragile-ABI
+super_class would still hold the address of the string "NSView" and
+would fault somewhere wild instead.
+
+-fvisibility=hidden is not it. Both builds are given it - confirmed in
+the CMake caches - and in the GCC 14 build it is demonstrably in effect:
+WebCore carries 71,383 private-external symbols. Yet of the 150
+`.objc_class_name_*` symbols in that binary, the number marked private
+external is zero, exactly as in GCC 6 (46 defined external, 104
+undefined external, in both). Neither compiler lets visibility reach an
+Objective-C class symbol. WebKitLegacy is exempt anyway, by patch 0060.
+
+The section renaming is not it, twice over. All four -rename_section
+options name __TEXT explicitly, and the fragile ABI's metadata lives
+entirely in __OBJC; and the flags are identical in the build that works.
+
+Two libstdc++ is not it either: nothing in libstdc++ takes part in class
+registration, which happens when dyld binds the image, before any C++
+static initializer runs. The split-runtime failure this port already
+knows has a different signature - emulated TLS state splitting, failing
+inside pthread_once, long before a WebView exists.
+
+The metadata itself is sound. Class, metaclass, category, protocol,
+module_info, symtab, cls_refs and message_refs records were compared
+entry by entry across both frameworks: identical, and in the same order.
+The three WebCoreView categories on NSView, NSClipView and NSScrollView
+emit their class field as a __cstring name pointer in both, which is the
+correct pre-fixup form, and the super-send in each loads from the same
+__cls_refs slot, holding the same name, in both.
+
+What is left is not Objective-C at all. The GCC 14 image orders its
+LC_LOAD_DYLIB commands differently: libSystem.B.dylib, which contains
+libobjc on 10.5, comes 14th, ahead of CoreFoundation and Cocoa, where
+GCC 6 puts CoreFoundation 4th, Cocoa 12th and libSystem last. That
+changes the order in which images are bound and their classes
+registered, and a class reference bound while its defining image is not
+yet registered resolves to null - which is the fault above. Against it:
+the application itself links -framework Cocoa before -framework WebKit,
+which ought to force AppKit first whatever WebKitLegacy asks for. So
+this is a suspect, not an answer, and the next step is a measurement and
+not another argument: DYLD_PRINT_LIBRARIES on both engines to get the
+real bind order, and DYLD_INSERT_LIBRARIES pointing at Cocoa to force
+AppKit ahead of everything. Neither needs a rebuild.
+
+Two smaller differences are worth keeping in view: GCC 14 adds a
+libemutls.1.dylib dependency and weakens ___emutls_get_address to a weak
+undefined symbol, which resolves to null rather than failing; and the
+GCC 6 build was configured with -mcpu=750 -mtune=750 appended through
+EXTRA_FLAGS, so the comparison between these two trees is not one
+compiler against another on the same target. That wants fixing before
+any A/B is trusted.
 
 So the measurement this was all for - what a modern compiler is worth on
 WebCore, where Speedometer actually spends its time - is still not taken.
@@ -1175,3 +1228,461 @@ regressions on bit operations and strings that look like compile time
 costing more than the compiled code saves on a 500MHz machine. On the G4,
 where the tier was worth 6.9x on bit operations, it still computes wrong
 answers and stays off.
+
+## 24 September: Speedometer 3.1 on the PowerBook G4, four runs
+
+The score varies enough between runs that one number would have been
+misleading. Four runs, each with caches cleared and nothing else running,
+about 1440MB free at the start of each:
+
+    0.474   0.411   0.450   0.437      median 0.444
+
+The spread is the engine's, not the harness's. Within a suite the slow
+iterations spike in all three sub-metrics at once - iteration 5 of
+TodoMVC-JavaScript-ES5 ran 2316ms against a 1023ms minimum, and its async
+and third metrics spiked by the same proportion in the same iteration.
+Three independent measurements moving together is a global pause, which
+on this engine means a full collection. The geomean absorbs them: run 4
+reported 2317.13 +- 206.36ms (8.9%) while its individual suites ranged
+from 9.6% to 28.3%.
+
+All twenty suites, from run 4, in milliseconds:
+
+| Suite | ms | Suite | ms |
+|---|---|---|---|
+| TodoMVC-Svelte-Complex-DOM | 523 | TodoMVC-Backbone | 2115 |
+| TodoMVC-Preact-Complex-DOM | 644 | Charts-observable-plot | 2129 |
+| Editor-CodeMirror | 814 | TodoMVC-JavaScript-ES5 | 2560 |
+| TodoMVC-WebComponents | 1104 | Editor-TipTap | 2631 |
+| TodoMVC-Vue | 1469 | TodoMVC-ES6-Webpack-Complex-DOM | 2875 |
+| TodoMVC-Lit-Complex-DOM | 1746 | TodoMVC-React-Complex-DOM | 3231 |
+| Perf-Dashboard | 3380 | TodoMVC-Angular-Complex-DOM | 3344 |
+| Charts-chartjs | 3602 | TodoMVC-React-Redux | 3716 |
+| React-Stockcharts-SVG | 4389 | NewsSite-Next | 5432 |
+| NewsSite-Nuxt | 6030 | TodoMVC-jQuery | 7195 |
+
+Charts-chartjs is 3602ms, which is mid-pack among our own suites. That
+was briefly read here as the Core Graphics work having landed, which it
+does not show: being mid-pack against our other suites says nothing
+about PowerFox. With PowerFox's own figures now in hand it is still the
+one suite we lose - see below.
+
+One measurement note for anyone repeating this. The debug script only
+runs when CPDebugSnapshotPath is set: the evaluation lives inside
+-writeDebugSnapshot, and that is only scheduled when the path is
+non-nil. Deleting the key disables the probe silently. And the score
+element stays empty for the whole run rather than showing a provisional
+value, while the hash never advances past #running, so completion has to
+be detected from the score appearing and not from the URL.
+
+The comparison against PowerFox is being re-taken. The earlier 0.198 was
+measured against a local copy of Speedometer served over the LAN, while
+these four ran against browserbench.org, and a number that is going to be
+published should not have that difference buried in it.
+
+## 24 September: 2.52's JavaScriptCore runs on PowerPC Mac OS X
+
+Milestone 1 of the modern-engine spike is answered. WebKitGTK 2.52.6's
+JSCOnly port, built with GCC 14 for powerpc-apple-darwin9, executes on
+Mac OS X 10.4.11:
+
+    $ ./jsc-252 -e 'print(1+1)'
+    2
+
+The binary is 59MB, cputype 18 / cpusubtype 9 (ppc750, so it runs on a G3
+as well as a G4), and links only libSystem and libedit. ENABLE_STATIC_JSC
+puts ICU and the C++ runtime inside it, which is why there is no
+libstdc++ in that list and no emulated-TLS problem to solve: one image,
+one runtime.
+
+Twenty-six checks, no failures.
+
+Fifteen of them are syntax that WebKit 604 cannot parse: class fields,
+private methods, static initialization blocks, Object.groupBy,
+Promise.withResolvers, RegExp /d match indices, BigInt, Array.toSorted,
+Array.findLast, Object.hasOwn, String.replaceAll, Array.at, optional
+chaining, nullish coalescing and logical assignment. The 604 engine has
+some of these only because this port backported them by hand.
+
+Eleven are big-endian correctness, which was the real risk: upstream
+removed big-endian support on 2026-08-01, so nothing tests these paths
+any more. DataView reading and writing in both byte orders, Float64 bit
+patterns (0x3FF0... for 1.0, most significant byte first), a Uint8Array
+aliasing an Int32Array over one buffer, integer overflow into double,
+JSON and Date round trips, Unicode string indexing. All correct. 2.52's
+big-endian paths still work, untested upstream or not.
+
+The timings were then taken again on real hardware, and the emulator
+turned out to be the slower of the two. On the PowerBook G4 (1.5GHz,
+10.5.9) the same set runs in 635ms against the guest's 821ms - fib(24)
+in 50ms rather than 70ms. The assumption that QEMU's translation would
+outrun a G4 was wrong by about 30% in the other direction. The guest is
+a reasonable stand-in for speed as well as correctness, though the real
+machine remains the one to quote.
+
+What this does settle is the part that could have stopped the whole
+modern-engine plan: 2.52 compiles for this target, runs on it, and is
+correct on big-endian. The objc_msgSendSuper crash that blocks the GCC 14
+build of the 604 engine does not block this, because JSCOnly has no
+Objective-C and creates no WebView.
+
+The guest is also Tiger on a G4-class processor with hw.vectorunit 1,
+which is the corner missing from the DFG question. Claiming that data
+point needs our own JIT build rather than this JSCOnly one.
+
+
+### What a JIT-less 2.52 costs, measured
+
+The same five microbenchmarks, on the PowerBook G4, through 2.52's C
+interpreter and through the 604 engine's baseline JIT (DFG off), in
+milliseconds:
+
+| | 2.52 CLoop | 604 baseline JIT | ratio |
+|---|---|---|---|
+| fib(24) | 50 | 11 | 4.5x |
+| 1e6 integer adds | 133 | 55 | 2.4x |
+| 1e5 string concat | 42 | 24 | 1.8x |
+| 1e5 object churn | 79 | 26 | 3.0x |
+| Array sort 50k | 331 | 314 | 1.05x |
+| **total** | **635** | **430** | **1.5x** |
+
+So the honest figure is two numbers, not one. Tight JavaScript loops
+cost 2.4x to 4.5x without a JIT, which is what the interpreter is. But
+anything dominated by the engine's own native code barely moves - the
+50,000-element sort is within 5%, because the comparator is the only
+part interpreted. A real page is much closer to the sort than to fib,
+which is why the overall figure here is 1.5x rather than 4x.
+
+On correctness the two engines are not comparable at all: on the same
+file 2.52 passes 26 of 26 and 604 passes 17 of 26, the nine failures
+being syntax from after 2017.
+
+### A one-line reproducer for the DFG fault on the G4
+
+Running that file through the 604 jsc on the PowerBook failed with
+
+    TypeError: a.push is not a function.
+      (In 'a.push(...)', 'a.push' is 2.121995789e-314)
+
+2.121995789e-314 is this port's signature for a JSValue whose halves
+have been read as a double - the (1, 0) pattern. `--useDFGJIT=false`
+makes it go away and all five benchmarks complete; `--useJIT=false`
+likewise. So the optimizing tier is corrupting a value on G4/Leopard,
+and it takes only a hot loop calling a method on an array to show it:
+
+    var a = []; for (var i = 0; i < 50000; i++) a.push(i);
+
+inside a function called often enough to tier up. Until now this needed
+a Speedometer run to provoke. It reproduces in seconds.
+
+The 2x2 that would separate processor from OS is now within reach: the
+mini's PowerEmu guest is Tiger on a G4-class processor with AltiVec, and
+the missing cell can be filled by running a Tiger JIT build of jsc there
+against this same loop.
+
+### A deeper probe, on the PowerBook
+
+The 26-check file was a smoke test. A second file of 78 checks, weighted
+toward where a 32-bit big-endian target actually breaks, runs clean on
+the PowerBook G4: **78 of 78**.
+
+What it covers, beyond the first file: NaN canonicalization and the
+0x7FF8 quiet-NaN bit pattern read back through a DataView, negative zero
+through typed arrays, every integer boundary where a 32-bit engine
+changes representation (2^31, 2^32, 2^53, and that 9007199254740992 ===
+9007199254740993), the full set of shift and bitwise operators at their
+edges, all nine typed-array types including Uint8ClampedArray saturation
+and BigInt64Array at INT64_MIN, DataView at unaligned offsets, subarray
+aliasing versus slice copying, BigInt.asIntN/asUintN round trips, number
+formatting in radix 2 through 36, toFixed/toPrecision/toExponential,
+surrogate pairs and normalize, property enumeration order with integer
+keys, Proxy and Reflect, destructuring, let-closures in loops, RegExp
+named groups and sticky and unicode flags, and Date across a negative
+epoch.
+
+One check reported a failure and it was the test's fault, not the
+engine's: it called [].slice.call on a generator object, which has no
+length and so yields an empty array. Generators were then checked
+directly - spread, Array.from, manual next(), and for-of all correct.
+
+So the value representation, the whole typed-array and DataView surface,
+and the integer/double boundary behaviour are sound on big-endian
+PowerPC in 2.52. That is the part that had to be true for the
+modern-engine plan to be worth pursuing at all.
+
+### What the emulated G4 can and cannot settle
+
+The PowerEmu Tiger guest is the only G4-class machine here that runs
+10.4, so it is the only way to fill the missing cell. But its G4 is
+emulated: hw.vectorunit reads 1 because the machine model advertises it,
+and AltiVec is implemented in software. That makes the experiment
+asymmetric, and the result has to be read accordingly.
+
+If the reproducer **fails there** - the bug appears - that is conclusive.
+The fault then happens on Tiger as well as Leopard and is not
+OS-specific, and emulation fidelity does not matter, because something
+that reproduced has reproduced.
+
+If it **passes**, that is ambiguous and settles nothing. It could mean
+the fault is OS-specific, or it could mean the emulated G4 does not
+reproduce what a real 7447A does. Nothing inside the guest can tell
+those apart. In that case the cell stays open rather than being filled
+with a result that might be an artifact, and closing it properly would
+need real G4 hardware running Tiger - which does not exist here, since
+Sorbet Leopard requires a G4 and the only Tiger machine is the G3.
+
+The fault does look like the kind an emulator should reproduce
+faithfully: a JSValue whose two 32-bit halves are read as a double,
+which is the optimizing tier mismatching tag and payload order on
+big-endian, not anything vector. But that is a reason to expect the
+failing case, not a licence to interpret the passing one.
+
+One build note, because it nearly cost the whole experiment: webkit.sh
+defaults DFG to OFF, so the first Tiger build came out with
+ENABLE_DFG_JIT 0. Running the reproducer against that would have
+produced a clean pass and looked exactly like "the bug is
+Leopard-specific", when it only meant the tier under test had not been
+built. Any build made for this comparison must assert ENABLE_DFG_JIT in
+the configured cmakeconfig.h before it is trusted.
+
+
+## 24 September: the PowerFox comparison, both sides on browserbench.org
+
+PowerFox scored **0.191 +- 0.0051**, against our median of **0.444** over
+four runs: **2.3x**. Both were run from https://browserbench.org/Speedometer3.1/
+on the same PowerBook G4, caches cleared, nothing else running. The
+earlier 0.198 and 0.189 figures were taken against a LAN-served copy of
+Speedometer and should not be mixed with these.
+
+Per suite, PowerFox against our run 4, in milliseconds:
+
+| Suite | PowerFox | Polliwog | |
+|---|---|---|---|
+| TodoMVC-Lit-Complex-DOM | 12834 | 1746 | 7.4x |
+| TodoMVC-jQuery | 33723 | 7195 | 4.7x |
+| TodoMVC-Preact-Complex-DOM | 2688 | 644 | 4.2x |
+| TodoMVC-Svelte-Complex-DOM | 1959 | 523 | 3.7x |
+| NewsSite-Next | 14361 | 5432 | 2.6x |
+| TodoMVC-WebComponents | 2847 | 1104 | 2.6x |
+| TodoMVC-ES6-Webpack-Complex-DOM | 7079 | 2875 | 2.5x |
+| TodoMVC-Vue | 3407 | 1469 | 2.3x |
+| NewsSite-Nuxt | 12551 | 6030 | 2.1x |
+| Perf-Dashboard | 7028 | 3380 | 2.1x |
+| TodoMVC-JavaScript-ES5 | 5228 | 2560 | 2.0x |
+| Editor-TipTap | 5231 | 2631 | 2.0x |
+| Charts-observable-plot | 4172 | 2129 | 2.0x |
+| React-Stockcharts-SVG | 8552 | 4389 | 1.9x |
+| TodoMVC-Backbone | 3929 | 2115 | 1.9x |
+| TodoMVC-React-Complex-DOM | 5728 | 3231 | 1.8x |
+| TodoMVC-Angular-Complex-DOM | 5787 | 3344 | 1.7x |
+| TodoMVC-React-Redux | 5765 | 3716 | 1.6x |
+| Editor-CodeMirror | 1241 | 814 | 1.5x |
+| **Charts-chartjs** | **1583** | **3602** | **0.44x** |
+
+**Nineteen of twenty.** The goal set on 2026-09-19 was to beat PowerFox on
+every test, and Charts-chartjs is the only one left: PowerFox is 2.3x
+faster there, and it is the suite this document has flagged as needing
+50% since the beginning. It is canvas rasterization through Core
+Graphics, and it is now the single remaining item between here and the
+goal.
+
+Worth noting where the wins concentrate. The largest margins - Lit 7.4x,
+Preact 4.2x, Svelte 3.7x - are the Complex-DOM suites, which is where
+the layout generation work of 20 September paid off. jQuery at 4.7x is
+the oldest-style code in the set and the most representative of what
+these machines actually browse.
+
+One asymmetry to keep in mind when quoting these: PowerFox's run was
+tight, +- 0.0051 on 0.191, about 2.7%. Ours moved from 0.411 to 0.474
+across four runs, about 15% run to run, because of collection pauses
+that land in individual iterations. The median is the honest figure, and
+2x is the figure no reviewer could dispute even against our worst run.
+
+## 24 September: Charts-chartjs is lost in JavaScript, not in the canvas
+
+### The instrument was wrong, and the conclusion survived it
+
+`canvas-paths.html` gave 48.2ms against PowerFox's 99.1 and was read here
+as "the rasteriser is not the problem". It does not draw what the suite
+draws. Speedometer 3.1's Charts-chartjs is Chart.js 4.2.1 rendering one
+**scatter** plot of **5,366 points**, at least twice, and Chart.js's
+PointElement.draw assigns strokeStyle, lineWidth and fillStyle from
+JavaScript strings on every point before filling and stroking a
+translucent circle of radius 3. That is ~43,000 canvas entry points per
+pass. canvas-paths.html draws 160 circles with the style hoisted out of
+the loop, in opaque colours, and spends most of its time on area fills
+and polylines a scatter plot never draws.
+
+`canvas-scatter.html` reproduces the real inner loop. On the PowerBook
+G4, milliseconds per pass:
+
+| | Polliwog | PowerFox |
+|---|---|---|
+| per-point style (the real loop) | **372** | 546 |
+| style hoisted out | 362 | 476 |
+| fill only, no stroke | 181 | 378 |
+| opaque instead of translucent | 357 | 473 |
+| style assignment, no drawing | **5** | 32 |
+
+So the conclusion holds on a correct instrument: we are 1.5x faster than
+PowerFox at the real loop, 2.1x on fill alone, and 6.4x on the style
+assignments themselves - the one-entry memo in setFillColor earning its
+keep. The old number was right by accident; this one is right on
+purpose.
+
+### Where the suite's time actually goes
+
+Two draw passes put ~744ms of our 3602 in the canvas, and ~1092ms of
+PowerFox's 1583. Everything else is **2858ms against 491ms, a 5.8x
+gap**, and all of it JavaScript. PowerFox spends most of its time in
+this suite drawing; we spend most of ours running Chart.js.
+
+`js-kernels.html`, whose results had never been recorded, agrees at
+3.6x overall. Milliseconds:
+
+| kernel | Polliwog | PowerFox | ratio |
+|---|---|---|---|
+| closure-callback | 81 | 4 | 20x |
+| object-literal-options | 108 | 6 | 18x |
+| array-numeric | 238 | 16 | 15x |
+| polymorphic-call | 77 | 16 | 4.8x |
+| array-higher-order | 840 | 220 | 3.8x |
+| monomorphic-property | 377 | 106 | 3.6x |
+| float-math | 684 | 258 | 2.7x |
+| string-build | 182 | 102 | 1.8x |
+| **total** | **2587** | **728** | **3.6x** |
+
+array-higher-order and float-math are 1046ms of the 1859ms gap between
+those totals.
+
+### Five findings in JavaScriptCore, none of which need an optimising tier
+
+A source audit found specific causes for exactly those kernels, which is
+the reason to believe it: it predicted the shape of the table above
+without seeing it.
+
+1. **Baseline code still updates ArithProfile.** `jit/JITMathIC.h:148`
+   sets `shouldEmitProfiling = !isOptimizingJIT(codeBlock->jitType())`,
+   which is true for baseline, and it is a different flag from the one
+   ENABLE_DFG_JIT=OFF compiles out. Every double multiply carries 20-25
+   instructions and two or three stores to one global - a load-hit-store
+   stall each time on the 7447. `emit_op_div` gates on
+   `JIT::shouldEmitProfiling()` instead and is clean, which is the proof.
+   Two edits.
+2. **The PPC inline caches are 72 bytes and the sequence is 32-36.**
+   Patch 0049 took MIPS's numbers verbatim. Every filled monomorphic
+   access runs its code and then falls through about ten nops, on a 32KB
+   I-cache. x86-64 uses 23 bytes, ARM64 40.
+   `InlineAccess::dumpCacheSizesAndCrash()` exists to measure it.
+3. **`i in array` is a C++ call per element.** ArrayPrototype.js runs it
+   in forEach, map, filter, every, some, reduce and find; `op_in` is
+   DEFINE_SLOW_OP with no fast path, and already carries an ArrayProfile
+   the baseline never reads. `emit_op_has_indexed_property` is a working
+   model for the fix, about 80 lines.
+4. **Six Math thunks are dead on PowerPC.** The fallback arm of
+   `defineUnaryDoubleOpWrapper` is 0 and there is no CPU(PPC) arm, so
+   Math.round, floor, ceil, exp, log and trunc take the full host-call
+   path. fpRegT0 is already argumentFPR0 and returnValueFPR on PPC, the
+   same condition that lets ARM64 define the wrapper as a tail branch.
+   min and max have no thunks at all.
+5. **Doubles round-trip through the red zone.** `moveDoubleToInts` is
+   stfd plus two lwz; `moveIntsToDouble` is two stw plus lfd. Both defeat
+   store-to-load forwarding on the 7447. One `fadd` costs eleven memory
+   operations and three stalls, when on big-endian a boxed double in a
+   frame slot *is* the IEEE double and lfd/stfd would do - which
+   `emitLoadDouble`/`emitStoreDouble` already know, and which
+   `emitBinaryDoubleOp` still does for the jless family.
+
+Order to attack: 1, 2 and 4 first - hours each, near-zero risk,
+independent of one another - then 3, then 5. None of them is the
+optimising tier, and all of them help every suite, not only this one.
+
+### Three of the five fixed, and what they were actually worth
+
+Items 1, 2 and 4 are done. Measured on the PowerBook G4 with jsc, the
+same binary configuration on both sides (ENABLE_DFG_JIT 0, which is what
+the G4 ships), five runs each, medians:
+
+| kernel | before | after | |
+|---|---|---|---|
+| float-math | 672 | 625 | -7.0% |
+| object-literal-options | 103 | 100 | -2.9% |
+| polymorphic-call | 84 | 82 | -2.4% |
+| monomorphic-property | 376 | 371 | -1.3% |
+| **total** | **2571** | **2501** | **-2.7%** |
+
+Correctness is unchanged: the 78-check probe gives 72 pass and 6 fail on
+both builds, the same six - five BigInt features 604 does not have
+(BigInt64Array, asIntN, asUintN, setBigUint64, and shifts beyond 64
+bits) and one bug in the test itself. No regression from any of the
+three.
+
+What each was worth, honestly:
+
+**Item 1, the ArithProfile flag, is the one that paid.** 7% on the
+kernel made of double arithmetic, reproducibly, with tight spreads on
+both sides (625-638 against 666-676). Two lines.
+
+**Item 2, the inline cache sizes, did not - on this instrument.** The
+measurement itself was worth having: `dumpCacheSizesAndCrash` on the G4
+reports array length 32, inline offset 40, out of line offset 44,
+replace 40, replace out of line 44. The constants were 72, 72 and 56,
+inherited from MIPS. They are now 44, 44 and 32, which is 28 bytes of
+nops removed from every property access site. That is 1.3% on
+monomorphic-property, far less than the framing suggested. The likely
+reason is that nops retire cheaply and a microbenchmark's code is
+resident anyway, so a kernel cannot see a footprint change. That is a
+testable claim rather than an excuse, and the test is a real page.
+
+**Item 4, the Math thunks, cannot be separated from item 1 here.** The
+float-math kernel exercises general double arithmetic as well as Math
+calls, and both changes land in it. Most of the 7% is likely item 1,
+which removes work from every double multiply, against thunks that help
+only round, floor, ceil, exp, log and trunc. Unproven either way.
+
+**The variance result may matter more than the medians.** Before: 2541
+to 2609. After: 2499 to 2510. The spread collapsed, which is what a
+smaller instruction footprint should do, and it is the one signal in
+these numbers that points at item 2 working as intended.
+
+One correctness hazard found on the way, which the source audit flagged
+and which would not have failed loudly: `callDoubleToDoublePreservingReturn`
+does not reserve a linkage area, and a Darwin PowerPC callee writes into
+the 56 bytes above sp before doing anything else. Enabling the Math
+thunks without fixing that would have put the callee's saved lr into our
+frame header on the first Math.floor of a double.
+
+### The A/B, on one machine, one morning
+
+The kernel numbers said three per cent and the first suite runs looked
+like a regression on the very suite the work was aimed at. Both readings
+were wrong, and for the same reason: they compared against a run taken
+the day before. Swapping the engine back and forth on the PowerBook
+within the hour, everything else held still, gives:
+
+| | old engine | fixed engine | |
+|---|---|---|---|
+| Speedometer 3.1 score | 0.436 | **0.464**, twice | +6.4% |
+| geomean | 2296ms | **2155 / 2157ms** | -6.1% |
+| geomean confidence | 3.7% | **1.7% / 2.5%** | |
+| Charts-chartjs | 3941ms | **3692 / 3820ms** | -4.7% |
+
+Charts-chartjs improved. The earlier reading of +2.5% came from
+comparing against 3602ms in run 4 of the day before, which was a fast
+outlier for that suite; the same-day baseline is 3941ms. A suite whose
+own confidence interval is 18% cannot be compared across days at all,
+and doing it produced a confident statement in the wrong direction.
+
+**The reproducibility is the better result.** Two consecutive runs
+scored 0.464 and 0.464, with geomeans of 2154.71 and 2157.08 - a tenth
+of a per cent apart - where the four runs before the fixes ranged from
+0.411 to 0.474. The engine did not only get faster, it stopped varying.
+That is what a smaller instruction footprint should do, it is the one
+thing the kernels also showed (2541-2609 before, 2499-2510 after), and
+it is worth more to someone using the browser than the six per cent is:
+a page that takes the same time every time feels different from one that
+takes anywhere in a 15% band.
+
+Charts-chartjs is still lost. 3756ms against PowerFox's 1583ms is 2.4x,
+where it was 2.3x before - the fixes moved our number and not the gap.
+What closes it is item 3 or item 5, or the optimising tier.

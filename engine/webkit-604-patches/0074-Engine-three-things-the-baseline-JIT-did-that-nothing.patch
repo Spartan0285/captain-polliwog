@@ -1,0 +1,260 @@
+From c828f07628e162dd8ea5525855c6f932fbd8650b Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Thu, 24 Sep 2026 11:42:20 -0400
+Subject: [PATCH] Engine: three things the baseline JIT did that nothing read
+
+All three are PowerPC-specific, all three were measured on the PowerBook
+G4, and together they are worth 6.4% on Speedometer 3.1 - but the number
+that matters more is that the engine stopped varying. Four runs before
+this ranged from 0.411 to 0.474; two runs after it both scored 0.464,
+with geomeans of 2154.71 and 2157.08ms, a tenth of a per cent apart.
+
+**ArithProfile was being kept up to date for a reader that is not
+there.** JITMathIC's shouldEmitProfiling is true whenever the code is not
+optimizing code, which in a build with ENABLE(DFG_JIT) off means always.
+It is a different flag from JIT::shouldEmitProfiling(), which that macro
+does compile out - so op_div, which gates on the latter, has been clean
+all along while add, subtract and multiply have not. The add and
+subtract snippets each ended with an or32 to a fixed global; the multiply
+snippet with a negative-zero check, a shift, a mask and two or three
+more. On the 7447 every one of those is a load and a store to the same
+address, which the load/store unit will not forward: a stall apiece, in
+the snippet every double add, subtract and multiply runs through. Worth
+7% on a kernel of double arithmetic, for two lines.
+
+**The inline caches were sized for MIPS.** Patch 0049 added PPC to that
+arm of InlineAccess and took its numbers with it: 72, 72 and 56 bytes.
+dumpCacheSizesAndCrash, run on the G4, says 40 and 44 for property
+access, 40 and 44 for replace, and 32 for array length. Every filled
+monomorphic cache was doing its work and then falling through seven
+words of nops, forever, on a 32KB instruction cache - the largest
+padding of any target, where x86-64 uses 23 bytes and ARM64 40. A
+microbenchmark barely notices, because its code is resident either way.
+The suite notices, and it shows up as consistency rather than speed.
+
+**Six Math thunks were dead on PowerPC**, so Math.round, floor, ceil,
+exp, log and trunc took the full host-call path - the 72-byte frame
+dance and the big-endian result swap - for want of a CPU(PPC) arm in
+defineUnaryDoubleOpWrapper. On Darwin PowerPC a double argument arrives
+in f1 and a double result is returned in f1, and FPRInfo maps fpRegT0,
+argumentFPR0 and returnValueFPR all to f1, so there is nothing for a
+thunk to move and the libm function is already its own wrapper.
+
+That last one could not be enabled as it stood. callDoubleToDouble does
+not reserve a linkage area, and a Darwin PowerPC callee writes into the
+56 bytes above sp - saving lr and the back chain - before it does
+anything else. Turning the thunks on without that would have put the
+callee's saved return address into this frame's header on the first
+Math.floor of a double: not a wrong answer, a corrupted one, later,
+somewhere else. It is bracketed now the way every other host call in
+this port is.
+
+jsc grows an opt-in POLLIWOG_dumpInlineCacheSizes, because the function
+that answers the second question had no callers and the answer has to be
+read off the hardware.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ Source/JavaScriptCore/bytecode/InlineAccess.h | 23 +++++++++++++++----
+ Source/JavaScriptCore/jit/JITMathIC.h         | 23 +++++++++++++++++--
+ .../JavaScriptCore/jit/SpecializedThunkJIT.h  | 15 ++++++++++++
+ Source/JavaScriptCore/jit/ThunkGenerators.cpp | 18 +++++++++++++++
+ Source/JavaScriptCore/jsc.cpp                 |  9 ++++++++
+ 5 files changed, 82 insertions(+), 6 deletions(-)
+
+diff --git a/Source/JavaScriptCore/bytecode/InlineAccess.h b/Source/JavaScriptCore/bytecode/InlineAccess.h
+index 15c8e4ec..495138bc 100644
+--- a/Source/JavaScriptCore/bytecode/InlineAccess.h
++++ b/Source/JavaScriptCore/bytecode/InlineAccess.h
+@@ -55,8 +55,15 @@ public:
+ #else
+         return 52;
+ #endif
+-#elif CPU(MIPS) || CPU(PPC)
++#elif CPU(MIPS)
+         return 72;
++#elif CPU(PPC)
++        // Measured on a 1.5GHz G4 with dumpCacheSizesAndCrash: the inline
++        // offset case assembles to 40 bytes and the out of line case to
++        // 44. This was 72, inherited from MIPS when patch 0049 added PPC
++        // to that arm, so every filled inline cache ran its code and then
++        // fell through seven words of nops - on a 32KB instruction cache.
++        return 44;
+ #else
+ #error "unsupported platform"
+ #endif
+@@ -77,8 +84,11 @@ public:
+ #else
+         return 48;
+ #endif
+-#elif CPU(MIPS) || CPU(PPC)
++#elif CPU(MIPS)
+         return 72;
++#elif CPU(PPC)
++        // Measured: replace is 40 bytes, replace out of line is 44.
++        return 44;
+ #else
+ #error "unsupported platform"
+ #endif
+@@ -102,8 +112,11 @@ public:
+ #else
+         size_t size = 32;
+ #endif
+-#elif CPU(MIPS) || CPU(PPC)
++#elif CPU(MIPS)
+         size_t size = 56;
++#elif CPU(PPC)
++        // Measured: array length access is 32 bytes.
++        size_t size = 32;
+ #else
+ #error "unsupported platform"
+ #endif
+@@ -121,7 +134,9 @@ public:
+     // various platforms. When adding a new type of IC, implement
+     // its placeholder code here, and log the size. That way we
+     // can intelligently choose sizes on various platforms.
+-    NO_RETURN_DUE_TO_CRASH static void dumpCacheSizesAndCrash();
++    // JS_EXPORT_PRIVATE because jsc calls it from outside the framework,
++    // and this port builds with -fvisibility=hidden.
++    NO_RETURN_DUE_TO_CRASH JS_EXPORT_PRIVATE static void dumpCacheSizesAndCrash();
+ };
+ 
+ } // namespace JSC
+diff --git a/Source/JavaScriptCore/jit/JITMathIC.h b/Source/JavaScriptCore/jit/JITMathIC.h
+index b885a669..07b9444b 100644
+--- a/Source/JavaScriptCore/jit/JITMathIC.h
++++ b/Source/JavaScriptCore/jit/JITMathIC.h
+@@ -41,6 +41,25 @@ namespace JSC {
+ 
+ class LinkBuffer;
+ 
++// Only an optimizing tier ever reads ArithProfile. With ENABLE(DFG_JIT)
++// off there is no reader, and keeping it up to date is pure cost: the
++// add and subtract snippets each end with an or32 to a fixed global, and
++// the multiply snippet with a negative-zero check, a shift, a mask and
++// two or three more of them. On the 7447 every one of those is a load
++// and a store to the same address, which the load/store unit cannot
++// forward - a stall per arithmetic operation, in the snippet every
++// double add, subtract and multiply runs through.
++//
++// op_div already gets this right: its arithProfile is gated on
++// JIT::shouldEmitProfiling(), which ENABLE(DFG_JIT)=0 compiles out, so
++// division has been clean all along while the other three have not.
++// This is a different flag, and it was never given the same treatment.
++#if ENABLE(DFG_JIT)
++static constexpr bool baselineEmitsArithProfiling = true;
++#else
++static constexpr bool baselineEmitsArithProfiling = false;
++#endif
++
+ struct MathICGenerationState {
+     MacroAssembler::Label fastPathStart;
+     MacroAssembler::Label fastPathEnd;
+@@ -64,7 +83,7 @@ public:
+     CodeLocationLabel slowPathStartLocation() { return m_inlineStart.labelAtOffset(m_deltaFromStartToSlowPathStart); }
+     CodeLocationCall slowPathCallLocation() { return m_inlineStart.callAtOffset(m_deltaFromStartToSlowPathCallLocation); }
+     
+-    bool generateInline(CCallHelpers& jit, MathICGenerationState& state, bool shouldEmitProfiling = true)
++    bool generateInline(CCallHelpers& jit, MathICGenerationState& state, bool shouldEmitProfiling = baselineEmitsArithProfiling)
+     {
+ #if CPU(ARM_TRADITIONAL)
+         // FIXME: Remove this workaround once the proper fixes are landed.
+@@ -145,7 +164,7 @@ public:
+             ftlThunkAwareRepatchCall(codeBlock, slowPathCallLocation(), callReplacement);
+         };
+ 
+-        bool shouldEmitProfiling = !JITCode::isOptimizingJIT(codeBlock->jitType());
++        bool shouldEmitProfiling = baselineEmitsArithProfiling && !JITCode::isOptimizingJIT(codeBlock->jitType());
+ 
+         if (m_generateFastPathOnRepatch) {
+ 
+diff --git a/Source/JavaScriptCore/jit/SpecializedThunkJIT.h b/Source/JavaScriptCore/jit/SpecializedThunkJIT.h
+index ebbbdceb..a1a80078 100644
+--- a/Source/JavaScriptCore/jit/SpecializedThunkJIT.h
++++ b/Source/JavaScriptCore/jit/SpecializedThunkJIT.h
+@@ -30,6 +30,7 @@
+ #include "JIT.h"
+ #include "JITInlines.h"
+ #include "JSInterfaceJIT.h"
++#include "MaxFrameExtentForSlowPathCall.h"
+ #include "LinkBuffer.h"
+ 
+ namespace JSC {
+@@ -177,7 +178,21 @@ namespace JSC {
+         // and return value. Like any sensible architecture would.
+         void callDoubleToDouble(FunctionPtr function)
+         {
++#if CPU(PPC)
++            // A Darwin PowerPC callee stores into the 56 bytes above its
++            // sp - the linkage area, where it saves lr and the back
++            // chain, and the parameter area - before it does anything
++            // else. That space must not be this thunk's own frame, so
++            // make room for it across the call, the way every other host
++            // call in this port is bracketed. Without this the callee's
++            // saved lr lands in our frame header, and the first
++            // Math.floor of a double corrupts the caller.
++            subPtr(TrustedImm32(maxFrameExtentForSlowPathCall), stackPointerRegister);
++#endif
+             m_calls.append(std::make_pair(call(), function));
++#if CPU(PPC)
++            addPtr(TrustedImm32(maxFrameExtentForSlowPathCall), stackPointerRegister);
++#endif
+         }
+         
+         void callDoubleToDoublePreservingReturn(FunctionPtr function)
+diff --git a/Source/JavaScriptCore/jit/ThunkGenerators.cpp b/Source/JavaScriptCore/jit/ThunkGenerators.cpp
+index 641bf6f5..884d176c 100644
+--- a/Source/JavaScriptCore/jit/ThunkGenerators.cpp
++++ b/Source/JavaScriptCore/jit/ThunkGenerators.cpp
+@@ -806,6 +806,24 @@ static double (_cdecl *jsRoundFunction)(double) = jsRound;
+     } \
+     static MathThunk UnaryDoubleOpWrapper(function) = &function##Thunk;
+ 
++#elif CPU(PPC) && OS(DARWIN) && COMPILER(GCC_OR_CLANG)
++
++// The thunk the other architectures define exists only to move a double
++// between the register the caller puts it in and the one the callee
++// wants. On Darwin PowerPC there is nothing to move: a double argument
++// arrives in f1 and a double result is returned in f1, and FPRInfo maps
++// fpRegT0, argumentFPR0 and returnValueFPR all to f1. So the libm
++// function is already its own wrapper, and taking its address avoids a
++// picsymbolstub as well. ARM64 collapses to a bare tail branch for the
++// same reason.
++//
++// The cast through double(*)(double) picks the right overload: <cmath>
++// declares float and long double forms too, and the asm arms above sidestep
++// that by naming the symbol rather than the function.
++#define defineUnaryDoubleOpWrapper(function) \
++    static MathThunk UnaryDoubleOpWrapper(function) = \
++        reinterpret_cast<MathThunk>(static_cast<double (*)(double)>(function))
++
+ #else
+ 
+ #define defineUnaryDoubleOpWrapper(function) \
+diff --git a/Source/JavaScriptCore/jsc.cpp b/Source/JavaScriptCore/jsc.cpp
+index d63ede36..2871d727 100644
+--- a/Source/JavaScriptCore/jsc.cpp
++++ b/Source/JavaScriptCore/jsc.cpp
+@@ -40,6 +40,7 @@
+ #include "HeapProfiler.h"
+ #include "HeapSnapshotBuilder.h"
+ #include "InitializeThreading.h"
++#include "InlineAccess.h"
+ #include "Interpreter.h"
+ #include "JIT.h"
+ #include "JSArray.h"
+@@ -3785,6 +3786,14 @@ int jscmain(int argc, char** argv)
+     WTF::initializeMainThread();
+     JSC::initializeThreading();
+     startTimeoutThreadIfNeeded();
++
++    // InlineAccess pads every inline cache site to a per-architecture
++    // constant, and the PowerPC numbers were taken from MIPS rather than
++    // measured. This prints what the sequences actually assemble to on
++    // the machine it runs on, and then crashes, which is what the
++    // function is for. Off unless asked for.
++    if (getenv("POLLIWOG_dumpInlineCacheSizes"))
++        InlineAccess::dumpCacheSizesAndCrash();
+ #if ENABLE(WEBASSEMBLY)
+     JSC::Wasm::enableFastMemory();
+ #endif

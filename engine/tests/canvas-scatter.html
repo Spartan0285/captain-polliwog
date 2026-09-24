@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Canvas scatter, the shape Charts-chartjs actually draws</title>
+<!--
+  canvas-paths.html draws the chart a charting library draws in general:
+  grid lines, an area fill, a polyline, a few circles with the style set
+  once outside the loop. Speedometer 3.1's Charts-chartjs draws none of
+  that. It is one scatter plot of 5,366 points, and Chart.js's
+  PointElement.draw assigns strokeStyle, lineWidth and fillStyle from
+  JavaScript strings on every single point before stroking and filling a
+  translucent circle of radius 3.
+
+  That is about 43,000 canvas entry points per pass and some 16,000 style
+  assignments that canvas-paths.html never makes, against 160 circles
+  whose cost is swamped by area fills the real suite does not draw. This
+  file reproduces the real inner loop and nothing else.
+-->
+<style>
+body { font: 13px/1.5 "Lucida Grande", sans-serif; margin: 2em; }
+td, th { padding: 2px 14px 2px 0; text-align: left; }
+td.n { text-align: right; font-family: Monaco, monospace; }
+canvas { border: 1px solid #ccc; }
+</style>
+<h1>Canvas scatter</h1>
+<table id="t"><tr><th>measurement<th>ms</table>
+<canvas id="c" width="800" height="400"></canvas>
+<script>
+var POINTS = 5366;          /* flights-airports.csv, minus its header */
+var PASSES = 4;
+var RADIUS = 3;
+var FILL = "rgba(0, 125, 255, .20)";     /* Chart.js default, translucent */
+var STROKE = "rgba(0, 0, 0, 0.1)";       /* and its default border */
+var TAU = Math.PI * 2;
+
+var results = {};
+var rows = document.getElementById("t");
+function report(name, ms) {
+    results[name] = ms;
+    var tr = rows.insertRow(-1);
+    tr.insertCell(-1).appendChild(document.createTextNode(name));
+    var cell = tr.insertCell(-1);
+    cell.className = "n";
+    cell.appendChild(document.createTextNode(ms + ""));
+}
+
+/* Fixed pseudo-random positions, so every browser draws the same picture
+   and the cost cannot depend on Math.random's speed. */
+var xs = new Array(POINTS), ys = new Array(POINTS);
+var seed = 12345;
+for (var i = 0; i < POINTS; i++) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    xs[i] = (seed % 780) + 10;
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    ys[i] = (seed % 380) + 10;
+}
+
+var ctx = document.getElementById("c").getContext("2d");
+
+/* The real loop: style assigned per point, as PointElement.draw does. */
+function drawPerPointStyle() {
+    ctx.clearRect(0, 0, 800, 400);
+    for (var i = 0; i < POINTS; i++) {
+        ctx.strokeStyle = STROKE;
+        ctx.lineWidth = 1;
+        ctx.fillStyle = FILL;
+        ctx.beginPath();
+        ctx.arc(xs[i], ys[i], RADIUS, 0, TAU);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+    }
+}
+
+/* The same picture with the style hoisted out, which is what
+   canvas-paths.html did. The difference between the two is the cost of
+   the 16,000 style assignments alone. */
+function drawHoistedStyle() {
+    ctx.clearRect(0, 0, 800, 400);
+    ctx.strokeStyle = STROKE;
+    ctx.lineWidth = 1;
+    ctx.fillStyle = FILL;
+    for (var i = 0; i < POINTS; i++) {
+        ctx.beginPath();
+        ctx.arc(xs[i], ys[i], RADIUS, 0, TAU);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+    }
+}
+
+/* Fill only, to separate the two rasterization passes. */
+function drawFillOnly() {
+    ctx.clearRect(0, 0, 800, 400);
+    ctx.fillStyle = FILL;
+    for (var i = 0; i < POINTS; i++) {
+        ctx.beginPath();
+        ctx.arc(xs[i], ys[i], RADIUS, 0, TAU);
+        ctx.closePath();
+        ctx.fill();
+    }
+}
+
+/* Opaque rather than translucent, to price the alpha blend. */
+function drawOpaque() {
+    ctx.clearRect(0, 0, 800, 400);
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 1;
+    ctx.fillStyle = "#7db";
+    for (var i = 0; i < POINTS; i++) {
+        ctx.beginPath();
+        ctx.arc(xs[i], ys[i], RADIUS, 0, TAU);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+    }
+}
+
+/* Style assignment with no drawing at all: pure WebCore entry-point and
+   colour-parsing cost. */
+function drawStyleOnly() {
+    for (var i = 0; i < POINTS; i++) {
+        ctx.strokeStyle = STROKE;
+        ctx.lineWidth = 1;
+        ctx.fillStyle = FILL;
+    }
+}
+
+function time(name, fn) {
+    fn();                                   /* warm */
+    var start = new Date().getTime();
+    for (var p = 0; p < PASSES; p++) fn();
+    report(name, Math.round((new Date().getTime() - start) / PASSES));
+}
+
+time("per-point-style", drawPerPointStyle);
+time("hoisted-style", drawHoistedStyle);
+time("fill-only", drawFillOnly);
+time("opaque", drawOpaque);
+time("style-only-no-draw", drawStyleOnly);
+
+results.label = location.search.replace(/^\?/, "") || "canvas-scatter";
+results.points = POINTS;
+try {
+    var request = new XMLHttpRequest();
+    request.open("POST", "/js-kernels", true);
+    request.setRequestHeader("Content-Type", "application/json");
+    request.send(JSON.stringify(results));
+} catch (e) { }
+</script>
