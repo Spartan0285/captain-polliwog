@@ -1686,3 +1686,47 @@ takes anywhere in a 15% band.
 Charts-chartjs is still lost. 3756ms against PowerFox's 1583ms is 2.4x,
 where it was 2.3x before - the fixes moved our number and not the gap.
 What closes it is item 3 or item 5, or the optimising tier.
+
+## 24 September: spike A closes, on both machines
+
+The toolchain question the plan put before everything else - can GCC 14
+build large C++23 code for powerpc-apple-darwin9 *and* darwin8, and does
+it run - is answered yes. `engine/tests/spike-a.cpp` uses the pieces
+WebCore-scale code actually needs and JSCOnly does not: exceptions
+thrown through eight frames with destructors that must run while the
+stack unwinds, std::format, four threads incrementing a std::atomic,
+std::call_once, a unique_ptr moved across a thread boundary,
+steady_clock, and an exception captured on one thread and rethrown on
+another.
+
+    Leopard 10.5.9, PowerBook G4      8 of 8, dynamic runtime
+    Tiger 10.4.11, Pismo G3 500MHz    8 of 8, static runtime
+
+std::call_once passing is the one to note. Emulated TLS has broken this
+port before through exactly that construct, and it is why the engine
+bundles one shared libstdc++ rather than a static copy per image.
+
+**Tiger will not load a bundled libstdc++ by @executable_path.** The
+dynamically linked build runs on Leopard and fails on Tiger, and
+DYLD_PRINT_LIBRARIES says why: dyld loads /usr/lib/libstdc++.6.dylib -
+the system's 2007 copy, which has no std::thread - rather than the one
+beside the executable, and DYLD_LIBRARY_PATH does not override it. The
+same binary with -static-libstdc++ -static-libgcc passes everything.
+
+That is a packaging constraint rather than a language one, and it is
+specific to plain dylibs: the engine reaches its own frameworks through
+DYLD_FRAMEWORK_PATH, which does work on Tiger, and that is how the
+shipped Tiger engine loads at all. Worth knowing before spike C, because
+an out-of-tree WebKitLegacy will want the same treatment, and because
+"static runtime per image" is the thing that breaks std::call_once once
+there is more than one image.
+
+Spike B is answered too: 2.52's JavaScriptCore builds, runs on both
+systems, and is correct on big-endian, 78 checks of 78 where 604 manages
+72. CLoop against 604's baseline JIT is 2.4x to 4.5x on tight loops but
+only 1.5x on a mixed set, because anything dominated by the engine's own
+native code barely moves. The plan's fallback - "if CLoop is unusable,
+invest in speed instead of a newer engine" - is not needed.
+
+Which leaves spike C, first paint, as the next gate and the first one
+that is months rather than hours.
