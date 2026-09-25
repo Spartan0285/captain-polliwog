@@ -1796,3 +1796,47 @@ The lesson generalises: a fast path that does not cover the shape the
 workload actually uses is worse than no fast path, because the checks
 are paid and never repaid. Check what shape the data is before deciding
 which ones to handle.
+
+## 25 September: why Google will not let you sign in
+
+Signing into Google fails on the 604 engine, in every site mode, on
+Tiger and on Leopard. Google's own error reporter says what happened -
+the sign-in page posts its JavaScript exceptions back to
+accounts.google.com/v3/signin/_/AccountsSignInUi/jserror, and the
+message is:
+
+    (0,_.cd) is not a function.
+      (In '(0,_.cd)(64,BigInt(a))', '(0,_.cd)' is undefined)
+
+A call taking (64, BigInt(a)) is BigInt.asIntN or asUintN. Neither
+exists here. Nor, it turns out, does anything else:
+
+| | 604 | correct |
+|---|---|---|
+| typeof BigInt | **undefined** | function |
+| 1n << 64n | **1** | 18446744073709551616 |
+| 1n << 100n | **16** | 1267650600228229401496703205376 |
+| 123456789n * 987654321n | **...635260** | ...635269 |
+
+Literals carrying the n suffix are tolerated and come back as doubles.
+Shifts past the double's mantissa wrap. Multiplication loses precision
+silently. There is no BigInt runtime in the tree - only BigInteger.h,
+which is an internal numeric helper and not the language type - and no
+option to turn one on.
+
+**This cannot be polyfilled honestly.** asIntN and asUintN could be
+written in JavaScript, but they would compute on a type that is already
+wrong, and a literal is parsed natively before any shim can see it. The
+result would be a sign-in that no longer throws and instead computes
+wrong values for something cryptographic. An error is better.
+
+It is not a regression and does not block 0.3.4: Google sign-in has
+never worked on this engine.
+
+What it is, is the plainest argument yet for the modern engine. 2.52's
+JavaScriptCore passes every one of those cases - 78 of 78 on the same
+probe, on this same hardware - because it has a real BigInt. Until now
+the case for Milestone 2 rested on correctness counts and a percentage
+on a benchmark. It now rests on a sentence anyone can judge: on a
+modern engine you can sign into your Google account, and on this one
+you cannot, and no amount of work on the 604 engine will change that.
