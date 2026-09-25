@@ -1,0 +1,20 @@
+--- a/src/sysutils.c
++++ b/src/sysutils.c
+@@ -181,8 +181,17 @@
+   {
+     if (!value && overwrite)
+       {
++#if defined(__APPLE__) && !__DARWIN_UNIX03
++        /* Mac OS X 10.4 declares unsetenv as returning void, and 10.5 as
++           returning int.  This port builds against the 10.5 SDK with
++           __DARWIN_UNIX03 = 0 so that the 10.4 variants are the ones
++           linked, which means the void form is what is declared here.
++           It reports nothing, so there is nothing to test.  */
++        unsetenv (name);
++#else
+         if (unsetenv (name))
+           return _gpg_err_code_from_syserror ();
++#endif
+       }
+     else
+       {

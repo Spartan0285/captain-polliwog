@@ -52,6 +52,8 @@ export STRIP=/opt/ppc-modern/bin/$HOST-strip
 export NM=/opt/ppc-modern/bin/$HOST-nm
 export CFLAGS="$FLAGS" CXXFLAGS="$FLAGS" LDFLAGS="$LINK"
 HASHES=$P/SOURCES.sha256
+# Patches live beside this script, which may be run from anywhere.
+PATCHES=$(cd "$(dirname "$0")" && pwd)
 sudo mkdir -p "$P/lib/pkgconfig"
 sudo touch "$HASHES" && sudo chown "$(id -un)" "$HASHES"
 mkdir -p ~/src/deps252 && cd ~/src/deps252
@@ -289,6 +291,10 @@ EOF
             echo "syscfg: wrote lock-obj-pub.$HOST.h by hand"
         fi
     fi
+    # Mac OS X 10.4's unsetenv returns void and 10.5's returns int, and
+    # this port sets __DARWIN_UNIX03=0 everywhere so that the 10.4
+    # variants are the ones linked. libgpg-error tests the return value.
+    patch -p1 --forward -i "$PATCHES/libgpg-error-darwin-unsetenv.patch"
     ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
         --disable-doc --disable-tests --disable-languages
     make -j4
@@ -309,8 +315,14 @@ if want libgcrypt; then
         --disable-drng-support --disable-avx-support --disable-avx2-support \
         --disable-ppc-crypto-support \
         --with-libgpg-error-prefix=$P
-    make -j4
-    sudo make install
+    # Only the library subdirectories. libgcrypt has no --disable-tests,
+    # and tests/bench-slope.c does not compile here: gettimeofday is not
+    # declared under this SDK with these feature macros. They are PowerPC
+    # binaries that could not have been run on this machine anyway; what
+    # the library needs to be correct is checked on the target.
+    LIBDIRS="compat mpi cipher random src"
+    make -j4 SUBDIRS="$LIBDIRS"
+    sudo make install SUBDIRS="$LIBDIRS"
 fi
 
 if want libtasn1; then
