@@ -15,8 +15,20 @@ static NSString * const CPWelcomeDoneKey = @"CPWelcomeCompleted";
 
 // The last PowerPC build VideoLAN made. 2.0.10 is old, and it is what there
 // is; nothing newer was ever built for these Macs.
+//
+// download.videolan.org and not get.videolan.org, which is the redirector:
+// it answers 302 to a mirror chosen by geography, and that mirror redirects
+// again. Our own downloads follow redirects -- CPNetworkTask sets
+// CURLOPT_FOLLOWLOCATION for them -- but an emulated guest reaches the web
+// through PowerEmu's forward proxy, which terminates the TLS a 2008 machine
+// cannot, and a proxy that does not follow the hop reports whatever it got
+// as a failure. The file was never missing; it was two redirects away.
+//
+// The master host answers 200 directly, with no redirect and no mirror
+// roulette, and honours range requests, which is what resuming a partial
+// download needs.
 static NSString * const CPVLCDownloadURL =
-    @"https://get.videolan.org/vlc/2.0.10/macosx/vlc-2.0.10-powerpc.dmg";
+    @"https://download.videolan.org/pub/videolan/vlc/2.0.10/macosx/vlc-2.0.10-powerpc.dmg";
 
 #define WELCOME_W 520.0
 #define WELCOME_H 460.0
