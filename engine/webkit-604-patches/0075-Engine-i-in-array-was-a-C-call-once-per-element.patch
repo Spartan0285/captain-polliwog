@@ -1,0 +1,193 @@
+From c4aa6182c560ce9e324ebfb84b3f8f44ad8f80ca Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Thu, 24 Sep 2026 22:24:46 -0400
+Subject: [PATCH] Engine: "i in array" was a C++ call, once per element
+
+Every array method that takes a callback runs it. ArrayPrototype.js has
+`if (!(i in array)) continue;` inside forEach, map, filter, every, some,
+reduce and find, and op_in was a DEFINE_SLOW_OP - no fast path on any
+architecture, a full call through slow_path_in with a throw scope, per
+element, to answer what is usually a bounds check and a tag compare.
+
+Worth 27% on a kernel of map and filter over 4,000 elements: 821ms to
+599ms on the PowerBook G4, and 9.2% off the whole kernel set.
+
+The fast path is narrower than emit_op_has_indexed_property, which it is
+modelled on. That opcode is emitted by for-in and may assume an integer
+index; "foo" in obj is legal, so a property that is not an int32 goes
+slow. It also does without the ByValInfo patching machinery, which
+exists so a get_by_val site can be repatched for a different array
+shape - here the shapes that matter are checked inline.
+
+Only a hit is answered inline. Out of bounds, or a hole, falls to the
+slow path: "absent from this object" is not the same question as
+"absent", and the prototype chain may still have it.
+
+**The double case is the one that pays, and the first version did not
+have it.** A first cut handled Int32Shape and ContiguousShape only, and
+measured 1.3% *slower* than no fast path at all - an array of
+measurements is double-shaped, so every `in` still went slow, now behind
+ten instructions of shape checks that could not match. That is also the
+shape a charting library plots, so the version that looked finished
+would have done nothing for the one Speedometer suite this was aimed at.
+DoubleShape marks a hole with NaN rather than an empty tag and needs its
+own bounds and hole check, which is the difference between -1.3% and
+-27%.
+
+Gated to JSVALUE32_64. Other value layouts keep the slow op.
+
+Correctness: 25 cases covering dense hits, out of bounds, negative and
+fractional indices, holes, string keys, prototype chain lookups,
+"length", an index spelled as a string, and double and typed arrays that
+must take the slow path and still answer correctly - each run 20,000
+times to force tier-up, since the fast path only exists in compiled
+code. The 78-check probe is unchanged at 72 pass, 6 fail, the same six
+BigInt features 604 does not have.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ Source/JavaScriptCore/jit/JIT.cpp             |  7 ++
+ Source/JavaScriptCore/jit/JIT.h               |  6 ++
+ Source/JavaScriptCore/jit/JITOpcodes32_64.cpp | 86 +++++++++++++++++++
+ 3 files changed, 99 insertions(+)
+
+diff --git a/Source/JavaScriptCore/jit/JIT.cpp b/Source/JavaScriptCore/jit/JIT.cpp
+index 162cdcf1..908682e0 100644
+--- a/Source/JavaScriptCore/jit/JIT.cpp
++++ b/Source/JavaScriptCore/jit/JIT.cpp
+@@ -267,7 +267,11 @@ void JIT::privateCompileMainPass()
+         unsigned bytecodeOffset = m_bytecodeOffset;
+ 
+         switch (opcodeID) {
++#if USE(JSVALUE32_64)
++        DEFINE_OP(op_in)
++#else
+         DEFINE_SLOW_OP(in)
++#endif
+         DEFINE_SLOW_OP(less)
+         DEFINE_SLOW_OP(lesseq)
+         DEFINE_SLOW_OP(greater)
+@@ -545,6 +549,9 @@ void JIT::privateCompileSlowCases()
+         DEFINE_SLOWCASE_OP(op_to_string)
+         DEFINE_SLOWCASE_OP(op_to_primitive)
+         DEFINE_SLOWCASE_OP(op_has_indexed_property)
++#if USE(JSVALUE32_64)
++        DEFINE_SLOWCASE_OP(op_in)
++#endif
+         DEFINE_SLOWCASE_OP(op_has_structure_property)
+         DEFINE_SLOWCASE_OP(op_get_direct_pname)
+ 
+diff --git a/Source/JavaScriptCore/jit/JIT.h b/Source/JavaScriptCore/jit/JIT.h
+index fba2236b..0394d1d4 100644
+--- a/Source/JavaScriptCore/jit/JIT.h
++++ b/Source/JavaScriptCore/jit/JIT.h
+@@ -507,6 +507,12 @@ namespace JSC {
+         void emit_op_get_argument_by_val(Instruction*);
+         void emit_op_init_lazy_reg(Instruction*);
+         void emit_op_overrides_has_instance(Instruction*);
++#if USE(JSVALUE32_64)
++        // "i in array" has a fast path only on the 32-bit value layout,
++        // which is the one this port uses. Elsewhere op_in stays a slow op.
++        void emit_op_in(Instruction*);
++        void emitSlow_op_in(Instruction*, Vector<SlowCaseEntry>::iterator&);
++#endif
+         void emit_op_instanceof(Instruction*);
+         void emit_op_instanceof_custom(Instruction*);
+         void emit_op_is_empty(Instruction*);
+diff --git a/Source/JavaScriptCore/jit/JITOpcodes32_64.cpp b/Source/JavaScriptCore/jit/JITOpcodes32_64.cpp
+index daf82447..144ff515 100644
+--- a/Source/JavaScriptCore/jit/JITOpcodes32_64.cpp
++++ b/Source/JavaScriptCore/jit/JITOpcodes32_64.cpp
+@@ -1096,6 +1096,92 @@ void JIT::privateCompileHasIndexedProperty(ByValInfo* byValInfo, ReturnAddressPt
+     MacroAssembler::repatchCall(CodeLocationCall(MacroAssemblerCodePtr(returnAddress)), FunctionPtr(operationHasIndexedPropertyGeneric));
+ }
+ 
++// "i in array" is the shape op_in almost always has in this engine.
++// ArrayPrototype.js runs it once per element inside forEach, map, filter,
++// every, some, reduce and find, and op_in was a DEFINE_SLOW_OP with no
++// fast path at all - a full C++ call through slow_path_in, per element,
++// with a throw scope, to answer a question that is usually a bounds check
++// and a tag compare.
++//
++// This is deliberately narrower than emit_op_has_indexed_property: that
++// opcode is emitted by for-in and may assume an integer index, while
++// "foo" in obj is perfectly legal, so a non-int32 property goes slow. It
++// also avoids the ByValInfo patching machinery, which exists so a
++// get_by_val site can be repatched for a different array shape; here the
++// two shapes that matter are checked inline and anything else takes the
++// slow path.
++//
++// Only a hit is answered inline. A miss - out of bounds, or a hole - is
++// left to the slow path, because "absent from this object" is not the
++// same question as "absent", and the prototype chain may still have it.
++void JIT::emit_op_in(Instruction* currentInstruction)
++{
++    int dst = currentInstruction[1].u.operand;
++    int base = currentInstruction[2].u.operand;
++    int property = currentInstruction[3].u.operand;
++    ArrayProfile* profile = currentInstruction[4].u.arrayProfile;
++
++    emitLoadPayload(base, regT0);
++    emitJumpSlowCaseIfNotJSCell(base);
++
++    emitLoadTag(property, regT1);
++    addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
++    emitLoadPayload(property, regT2);
++
++    emitArrayProfilingSiteWithCell(regT0, regT1, profile);
++    and32(TrustedImm32(IndexingShapeMask), regT1);
++
++    // Three shapes are worth handling inline. Int32Shape and
++    // ContiguousShape store JSValues and share one path; DoubleShape
++    // stores raw doubles and marks a hole with NaN, so it needs its own.
++    //
++    // Doubles are not an afterthought here - they are the case that pays.
++    // An array of measurements is double-shaped, which is what a charting
++    // library plots and what the array-numeric kernel builds, and a first
++    // version of this that handled only the two JSValue shapes left every
++    // one of those on the slow path while still paying for the checks.
++    // It measured slower than no fast path at all.
++    Jump isDouble = branch32(Equal, regT1, TrustedImm32(DoubleShape));
++    {
++        Jump isContiguous = branch32(Equal, regT1, TrustedImm32(ContiguousShape));
++        addSlowCase(branch32(NotEqual, regT1, TrustedImm32(Int32Shape)));
++        isContiguous.link(this);
++    }
++
++    loadPtr(Address(regT0, JSObject::butterflyOffset()), regT3);
++    addSlowCase(branch32(AboveOrEqual, regT2, Address(regT3, Butterfly::offsetOfPublicLength())));
++    load32(BaseIndex(regT3, regT2, TimesEight, OBJECT_OFFSETOF(JSValue, u.asBits.tag)), regT1);
++    addSlowCase(branch32(Equal, regT1, TrustedImm32(JSValue::EmptyValueTag)));
++    Jump found = jump();
++
++    isDouble.link(this);
++    loadPtr(Address(regT0, JSObject::butterflyOffset()), regT3);
++    addSlowCase(branch32(AboveOrEqual, regT2, Address(regT3, Butterfly::offsetOfPublicLength())));
++    loadDouble(BaseIndex(regT3, regT2, TimesEight), fpRegT0);
++    // A hole in a double butterfly is NaN, and NaN is the one value not
++    // equal to itself. DoubleNotEqualOrUnordered takes the unordered
++    // comparison, which is what a NaN gives.
++    addSlowCase(branchDouble(DoubleNotEqualOrUnordered, fpRegT0, fpRegT0));
++
++    found.link(this);
++    move(TrustedImm32(1), regT0);
++    emitStoreBool(dst, regT0);
++}
++
++void JIT::emitSlow_op_in(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
++{
++    linkSlowCaseIfNotJSCell(iter, currentInstruction[2].u.operand); // base is a cell
++    linkSlowCase(iter); // property is an int32
++    linkSlowCase(iter); // shape is int32, contiguous or double
++    linkSlowCase(iter); // JSValue case: index within the public length
++    linkSlowCase(iter); // JSValue case: the element is not a hole
++    linkSlowCase(iter); // double case: index within the public length
++    linkSlowCase(iter); // double case: the element is not NaN
++
++    JITSlowPathCall slowPathCall(this, currentInstruction, slow_path_in);
++    slowPathCall.call();
++}
++
+ void JIT::emit_op_has_indexed_property(Instruction* currentInstruction)
+ {
+     int dst = currentInstruction[1].u.operand;

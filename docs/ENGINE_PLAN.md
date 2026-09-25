@@ -1757,3 +1757,42 @@ as 2.121995789e-314. So the one-line reproducer distinguishes both cells
 we can already reach, which is what makes it worth pointing at the cell
 we cannot: a G4-class processor running Tiger, which exists here only
 under PowerEmu.
+
+### Item 3, and the shape that made the difference
+
+`op_in` had no fast path on any architecture - DEFINE_SLOW_OP, a call
+through slow_path_in with a throw scope. ArrayPrototype.js runs
+`if (!(i in array)) continue;` inside forEach, map, filter, every, some,
+reduce and find, so that call happened once per element of every array
+method that takes a callback.
+
+On the PowerBook G4, five runs each, medians:
+
+| | items 1/2/4 | + item 3 |
+|---|---|---|
+| array-higher-order | 821 | **599** (-27%) |
+| whole kernel set | 2466 | **2239** (-9.2%) |
+| array-numeric | 226 | 227 |
+
+**The first version of it was a 1.3% regression**, and the reason is
+worth recording. It handled Int32Shape and ContiguousShape - the two
+that store JSValues - and left DoubleShape out. An array of measurements
+is double-shaped: `(i * 37 % 1000) / 1000` is a division, so the kernel's
+array holds doubles, every `i in array` still went to the slow path, and
+now did so behind ten instructions of shape checks that could never
+match. It measured slower than having no fast path at all.
+
+That is also the shape a charting library plots. The version that looked
+finished, and that a less careful measurement would have accepted, would
+have done nothing whatever for Charts-chartjs - the suite the work was
+aimed at - while making the engine marginally slower everywhere else.
+
+A hole in a double butterfly is NaN rather than an empty tag, so it
+needs its own bounds and hole check, using the unordered comparison,
+since NaN is the one value not equal to itself. Adding that path is the
+whole distance between -1.3% and -27%.
+
+The lesson generalises: a fast path that does not cover the shape the
+workload actually uses is worse than no fast path, because the checks
+are paid and never repaid. Check what shape the data is before deciding
+which ones to handle.
