@@ -69,6 +69,35 @@ CPU="$CPU -fno-reorder-blocks-and-partition -fno-reorder-functions"
 # it on. It compiles for PowerPC; whether it earns its keep is measured,
 # not assumed.
 
+# Profile-guided optimization, in two passes over one build directory:
+#
+#   PGO=generate webkit.sh configure leopard-g4-jit && webkit.sh build ...
+#   ... run the instrumented engine on a real Mac, collect the profiles ...
+#   PGO=use      webkit.sh configure leopard-g4-jit && webkit.sh build ...
+#
+# One directory for both passes, and that is not a convenience. GCC records
+# the absolute path of each object at compile time and looks for the .gcda
+# beside it; a second build directory finds nothing, says nothing, and
+# produces an unoptimized binary that looks exactly like an optimized one.
+# The baseline to compare against is the ordinary build, which is a
+# different variant and untouched.
+#
+# The profiles are written on the target, where our build paths do not
+# exist, so the run needs GCOV_PREFIX and GCOV_PREFIX_STRIP to redirect
+# them; scripts/jit/collect-profiles.sh does that and puts them back here.
+#
+# -Wno-coverage-mismatch downgrades to a warning the error GCC raises when a
+# function's control flow no longer matches its profile. That happens
+# whenever the source is edited between the two passes, and it should be
+# rare; if it is not, the profile is stale and should be collected again.
+case ${PGO:-} in
+    generate) CPU="$CPU -fprofile-generate"; BUILD=$BUILD-pgo ;;
+    use)      CPU="$CPU -fprofile-use -fprofile-correction -Wno-coverage-mismatch"
+              BUILD=$BUILD-pgo ;;
+    "")       ;;
+    *)        echo "PGO must be 'generate' or 'use', not '$PGO'" >&2; exit 1 ;;
+esac
+
 # An escape hatch for trying a compiler flag across a whole build without
 # committing to it: EXTRA_FLAGS=-fvisibility=hidden webkit.sh configure ...
 CPU="$CPU ${EXTRA_FLAGS:-}"
