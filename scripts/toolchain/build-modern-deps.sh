@@ -81,6 +81,17 @@ if [ ! -f $PREFIX/icu/lib/libicuuc.a ]; then
         --disable-tests --disable-samples --disable-extras --disable-tools --disable-renaming
     make -j"$(nproc)"
     sudo env PATH=$PREFIX/bin:/opt/ppc/bin:$PATH make install
+    # --disable-renaming above builds a library whose symbols carry no _74
+    # suffix, but it does not write that fact into the installed headers:
+    # uconfig.h still defaults U_DISABLE_RENAMING to 0, so anything compiled
+    # against these headers asks for u_foo_74 and the link fails on symbols
+    # the archive does hold under their plain names. WebKit never notices,
+    # because WTF/wtf/Platform.h defines U_DISABLE_RENAMING 1 itself; every
+    # other consumer does - HarfBuzz did. The installed header is corrected
+    # to describe the library that was actually built.
+    sudo sed -i 's/^#define U_DISABLE_RENAMING 0$/#define U_DISABLE_RENAMING 1/' \
+        $PREFIX/icu/include/unicode/uconfig.h
+    grep -n "define U_DISABLE_RENAMING" $PREFIX/icu/include/unicode/uconfig.h
     python3 "$REPO/scripts/toolchain/icu-data-asm.py" data/out/icudt74b.dat icudt74 > /tmp/icudt74b_dat.S
     $PREFIX/bin/$TARGET-gcc -c /tmp/icudt74b_dat.S -o /tmp/icudt74b_dat.o
     rm -f /tmp/libicudata.a && /opt/ppc/bin/$TARGET-ar rcs /tmp/libicudata.a /tmp/icudt74b_dat.o

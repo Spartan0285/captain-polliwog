@@ -211,6 +211,16 @@ if want harfbuzz; then
     # decision as everywhere else and the reason HarfBuzz is not a way
     # GLib comes back in through the side door. CoreText is off: this is a
     # cross build and the shaper is HarfBuzz's own.
+    #
+    # harfbuzz-icu needs our ICU's headers to admit that it was built
+    # --disable-renaming, which build-modern-deps.sh now writes into the
+    # installed uconfig.h. Without that this archive links against
+    # unorm2_getNFCInstance_74 and friends, which do not exist, and the
+    # failure appears only when something finally tries to link it.
+    grep -q "define U_DISABLE_RENAMING 1" $P/icu/include/unicode/uconfig.h || {
+        echo "ICU headers still rename symbols; see build-modern-deps.sh" >&2
+        exit 1
+    }
     mkdir -p b && cd b
     /opt/cmake/bin/cmake -S .. -B . -G "Unix Makefiles" \
         -DCMAKE_TOOLCHAIN_FILE=$P/share/ppc-darwin-modern.cmake \
