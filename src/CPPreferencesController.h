@@ -19,6 +19,7 @@
     NSTextField   *downloadsField;
     NSPopUpButton *siteModePopUp;
     NSButton      *acceleratorBox;
+    NSButton      *topSitesBox;
     NSButton      *updatesBox;
     NSButton      *defaultBrowserButton;
     NSTextField   *defaultBrowserStatus;

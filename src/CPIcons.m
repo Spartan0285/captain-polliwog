@@ -16,6 +16,7 @@ typedef enum {
     CPIconPlus,
     CPIconGlobe,
     CPIconPageSettings,
+    CPIconReader,
     CPIconCount
 } CPIconKind;
 
@@ -163,6 +164,20 @@ static NSImage *CPDrawIcon(CPIconKind kind)
         break;
     }
 
+    case CPIconReader: {
+        // Safari's Reader mark: lines of text with the first indented,
+        // which reads as a paragraph at sixteen pixels where anything
+        // more detailed turns to mush.
+        int line;
+        [[NSColor colorWithCalibratedWhite:0.25f alpha:1.0f] set];
+        for (line = 0; line < 4; line++) {
+            float y = 12.5f - line * 3.0f;
+            float inset = (line == 0) ? 4.0f : 0.0f;
+            NSRectFill(NSMakeRect(2.0f + inset, y, 12.0f - inset, 1.0f));
+        }
+        break;
+    }
+
     default:
         break;
     }
@@ -219,5 +234,6 @@ static NSImage *CPIcon(CPIconKind kind)
 + (NSImage *)plusImage { return CPIcon(CPIconPlus); }
 + (NSImage *)globeImage { return CPIcon(CPIconGlobe); }
 + (NSImage *)pageSettingsImage { return CPIcon(CPIconPageSettings); }
++ (NSImage *)readerImage { return CPIcon(CPIconReader); }
 
 @end

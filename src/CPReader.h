@@ -22,6 +22,8 @@
 
 // The reader page for a document that has already loaded, or nil when no
 // article stands out.
+// Cheap enough to ask on every page load; readerHTMLForDocument: is not.
++ (BOOL)documentIsReadable:(DOMDocument *)document;
 + (NSString *)readerHTMLForDocument:(DOMDocument *)document URL:(NSURL *)url;
 
 - (id)initWithDelegate:(id)aDelegate;

@@ -27,6 +27,7 @@ static NSString * const CPAutoplayKey          = @"CPAutoplaysVideo";
 static NSString * const CPPlayButtonKey        = @"CPShowsVideoPlayButton";
 static NSString * const CPPageActivityKey      = @"CPShowsPageActivity";
 static NSString * const CPTabSidebarKey        = @"CPShowsTabSidebar";
+static NSString * const CPTopSitesKey          = @"CPShowsTopSites";
 static NSString * const CPAnimatedImagesKey    = @"CPAnimatedImages";
 static NSString * const CPWebGLKey             = @"CPWebGL";
 static NSString * const CPStopsLongScriptsKey  = @"CPStopsLongScripts";
@@ -209,6 +210,20 @@ CPBooleanSetting(autoplaysVideo, setAutoplaysVideo, CPAutoplayKey)
 CPBooleanSetting(showsVideoPlayButton, setShowsVideoPlayButton, CPPlayButtonKey)
 CPBooleanSetting(showsPageActivity, setShowsPageActivity, CPPageActivityKey)
 CPBooleanSetting(showsTabSidebar, setShowsTabSidebar, CPTabSidebarKey)
+
+// On unless turned off. boolForKey: answers NO for a key that was never
+// written, so the stored value is "hidden" and the accessor inverts it -
+// otherwise a fresh profile would start with no top sites at all.
+- (BOOL)showsTopSites
+{
+    return ![[NSUserDefaults standardUserDefaults] boolForKey:CPTopSitesKey];
+}
+
+- (void)setShowsTopSites:(BOOL)flag
+{
+    [[NSUserDefaults standardUserDefaults] setBool:!flag forKey:CPTopSitesKey];
+    [self apply];
+}
 CPBooleanSetting(showsAnimatedImages, setShowsAnimatedImages, CPAnimatedImagesKey)
 CPBooleanSetting(webGLEnabled, setWebGLEnabled, CPWebGLKey)
 CPBooleanSetting(stopsLongScripts, setStopsLongScripts, CPStopsLongScriptsKey)

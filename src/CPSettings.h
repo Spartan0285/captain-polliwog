@@ -75,6 +75,9 @@ typedef enum {
 // last one was left.
 - (BOOL)showsTabSidebar;
 - (void)setShowsTabSidebar:(BOOL)flag;
+// Top Sites on the start page. On unless turned off.
+- (BOOL)showsTopSites;
+- (void)setShowsTopSites:(BOOL)flag;
 - (void)setShowsPageActivity:(BOOL)flag;
 - (void)setAutoplaysVideo:(BOOL)flag;
 - (BOOL)showsAnimatedImages;

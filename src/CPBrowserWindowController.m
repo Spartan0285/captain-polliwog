@@ -9,6 +9,7 @@
 #import "CPTab.h"
 #import "CPSiteModes.h"
 #import "CPTabBarView.h"
+#import "CPReader.h"
 #import "CPTabSidebar.h"
 #import "CPTabOverview.h"
 #import "CPIcons.h"
@@ -157,6 +158,8 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [[addressBar favoriteButton] setAction:@selector(toggleFavorite:)];
     [[addressBar pageButton] setTarget:self];
     [[addressBar pageButton] setAction:@selector(showPageMenu:)];
+    [[addressBar readerButton] setTarget:self];
+    [[addressBar readerButton] setAction:@selector(toggleReader:)];
 
     tabBar = [[CPTabBarView alloc] initWithFrame:NSMakeRect(0.0f, tabBarTop - CPTabBarHeight,
                                                             width, CPTabBarHeight)];
@@ -528,8 +531,26 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 
     if (index == NSNotFound)
         return;
+    // Closing the last tab leaves the window open on the start page -
+    // favorites and top sites - rather than taking the window with it.
+    // Command-W on the only tab used to shut the browser, which is a
+    // surprising amount of destruction for one keystroke. The window is
+    // still closed by closing the window.
     if ([tabs count] == 1) {
-        [[self window] performClose:self];
+        if ([[tab URL] isEqual:[CPAppDelegate startPageURL]]) {
+            // Already the start page: the second Command-W does close it,
+            // so there is still a way out with the keyboard.
+            [[self window] performClose:self];
+            return;
+        }
+        [[tab retain] autorelease];
+        if ([tab URL] != nil)
+            [closedTabURLs addObject:[tab URL]];
+        [self addTabWithURL:[CPAppDelegate startPageURL] select:YES];
+        [tabs removeObject:tab];
+        [tab close];
+        [tabBar setNeedsDisplay:YES];
+        [self refreshTabSidebar];
         return;
     }
 
@@ -583,6 +604,17 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     if (tab != selectedTab)
         return;
     [self updateChromeForSelectedTab];
+
+    // Offer Reader once the page is in. Asked here rather than in
+    // updateChromeForSelectedTab, which runs on every progress tick: the
+    // check walks the document's paragraphs, which is cheap compared with
+    // extracting the article but not cheap enough to do sixty times a page.
+    if (![tab isLoading]) {
+        DOMDocument *document = [[[tab webView] mainFrame] DOMDocument];
+        [addressBar setReaderAvailable:(document != nil && !
+                                        [tab isShowingReader] &&
+                                        [CPReader documentIsReadable:document])];
+    }
 
     // The test scripts photograph the window once the selected page is in.
     if (selectedWasLoading && ![tab isLoading] && ![tab isDiscarded] && ![[tab URL] isEqual:[CPAppDelegate startPageURL]]) {
@@ -732,6 +764,63 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 - (IBAction)autoFillForm:(id)sender
 {
     [CPAutoFill fillFormInTab:[self selectedTab]];
+}
+
+// Command-J. WebKit will scroll a DOM range into view; the selection is
+// one.
+- (IBAction)jumpToSelection:(id)sender
+{
+    WebView *page = [selectedTab webView];
+    DOMRange *selection = [page selectedDOMRange];
+
+    if (selection != nil)
+        [page scrollDOMRangeToVisible:selection];
+}
+
+// Option-Command-U. The bytes as they arrived, not a re-serialised DOM,
+// which is what "source" is supposed to mean - pageData already keeps
+// them for Save As.
+- (IBAction)showPageSource:(id)sender
+{
+    NSData *data = [selectedTab pageData];
+    NSString *source;
+    NSWindow *window;
+    NSTextView *text;
+    NSScrollView *scroll;
+    NSRect frame = NSMakeRect(0.0f, 0.0f, 700.0f, 560.0f);
+
+    if (data == nil)
+        return;
+    source = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
+    if (source == nil)
+        source = [[[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding] autorelease];
+    if (source == nil)
+        return;
+
+    window = [[NSWindow alloc] initWithContentRect:frame
+                                         styleMask:(NSTitledWindowMask | NSClosableWindowMask |
+                                                    NSMiniaturizableWindowMask | NSResizableWindowMask)
+                                           backing:NSBackingStoreBuffered
+                                             defer:YES];
+    [window setTitle:[NSString stringWithFormat:@"Source of %@", [selectedTab displayTitle]]];
+    [window setReleasedWhenClosed:YES];
+
+    scroll = [[[NSScrollView alloc] initWithFrame:frame] autorelease];
+    [scroll setHasVerticalScroller:YES];
+    [scroll setHasHorizontalScroller:NO];
+    [scroll setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+
+    text = [[[NSTextView alloc] initWithFrame:frame] autorelease];
+    [text setEditable:NO];
+    [text setRichText:NO];
+    [text setFont:[NSFont userFixedPitchFontOfSize:11.0f]];
+    [text setString:source];
+    [text setAutoresizingMask:NSViewWidthSizable];
+    [[text textContainer] setWidthTracksTextView:YES];
+    [scroll setDocumentView:text];
+    [window setContentView:scroll];
+    [window center];
+    [window makeKeyAndOrderFront:self];
 }
 
 - (IBAction)toggleReader:(id)sender

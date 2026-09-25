@@ -85,6 +85,8 @@
 // Shift-Command-L, which is Safari's Show Sidebar.
 - (IBAction)toggleTabSidebar:(id)sender;
 - (void)refreshTabSidebar;
+- (IBAction)jumpToSelection:(id)sender;
+- (IBAction)showPageSource:(id)sender;
 - (IBAction)showFindBar:(id)sender;
 - (IBAction)hideFindBar:(id)sender;
 - (IBAction)findNext:(id)sender;

@@ -15,6 +15,8 @@
 #import "CPTab.h"
 #import "CPMemoryWatcher.h"
 #import "CPBookmarksController.h"
+#import "CPHTTPCache.h"
+#import "CPHistoryWindow.h"
 #import "CPHistory.h"
 #import "CPDownloadsController.h"
 #import "CPPrivateBrowsing.h"
@@ -130,6 +132,7 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     menu = CPAddSubmenu(mainMenu, @"File");
     CPAddItem(menu, @"New Window", @selector(newWindow:), @"n");
     CPAddItem(menu, @"New Tab", @selector(newTab:), @"t");
+    CPAddItem(menu, @"Open File...", @selector(openFile:), @"o");
     CPAddItem(menu, @"Open Location...", @selector(openLocation:), @"l");
     // Safari's Option-Command-F focuses the search field. Here the address
     // bar is the search field - anything that is not a URL is handed to
@@ -162,6 +165,7 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
         CPAddItem(findMenu, @"Hide Find Banner", @selector(hideFindBar:), nil);
         [findMenu addItem:[NSMenuItem separatorItem]];
         CPAddItem(findMenu, @"Use Selection for Find", @selector(useSelectionForFind:), @"e");
+        CPAddItem(findMenu, @"Jump to Selection", @selector(jumpToSelection:), @"j");
         [menu setSubmenu:findMenu forItem:findItem];
     }
     [menu addItem:[NSMenuItem separatorItem]];
@@ -203,6 +207,8 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     }
 
     menu = CPAddSubmenu(mainMenu, @"History");
+    CPAddItem(menu, @"Show History", @selector(showHistory:), @"y");
+    [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Back", @selector(goBack:), @"[");
     CPAddItem(menu, @"Forward", @selector(goForward:), @"]");
     CPAddItem(menu, @"Home", @selector(goHome:), @"H");
@@ -220,6 +226,13 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     [item setTarget:[CPBookmarksController sharedController]];
     [menu addItem:[NSMenuItem separatorItem]];
     [[CPBookmarksController sharedController] attachBookmarksMenu:menu historyMenu:historyMenu];
+
+    menu = CPAddSubmenu(mainMenu, @"Develop");
+    item = CPAddItem(menu, @"Show Page Source", @selector(showPageSource:), @"u");
+    [item setKeyEquivalentModifierMask:(NSCommandKeyMask | NSAlternateKeyMask)];
+    [menu addItem:[NSMenuItem separatorItem]];
+    item = CPAddItem(menu, @"Empty Caches", @selector(emptyCaches:), @"e");
+    [item setKeyEquivalentModifierMask:(NSCommandKeyMask | NSAlternateKeyMask)];
 
     menu = CPAddSubmenu(mainMenu, @"Window");
     CPAddItem(menu, @"Minimize", @selector(performMiniaturize:), @"m");
@@ -527,6 +540,34 @@ static size_t CPStatisticCount(Class statistics, NSString *name)
     if ([address length] == 0)
         return;
     [self openAddress:address];
+}
+
+// Command-O. The panel does the choosing; opening a path is already
+// handled, because the Finder can hand the app a file the same way.
+// Command-Y. Safari's title is "Show History", not "Show All History" -
+// that is Chrome's wording.
+- (IBAction)showHistory:(id)sender
+{
+    [[CPHistoryWindow sharedWindow] show];
+}
+
+- (IBAction)openFile:(id)sender
+{
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+
+    [panel setAllowsMultipleSelection:NO];
+    [panel setCanChooseDirectories:NO];
+    if ([panel runModalForDirectory:nil file:nil types:nil] != NSOKButton)
+        return;
+    if ([[panel filenames] count] > 0)
+        [self application:NSApp openFile:[[panel filenames] objectAtIndex:0]];
+}
+
+// Option-Command-E, the Develop menu's. The engine keeps its own file
+// cache because NSURLCache is unusable on Leopard for our responses.
+- (IBAction)emptyCaches:(id)sender
+{
+    [CPHTTPCache removeAllCachedResponses];
 }
 
 - (BOOL)application:(NSApplication *)application openFile:(NSString *)path

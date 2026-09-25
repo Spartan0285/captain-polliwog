@@ -125,7 +125,18 @@ static struct {
     [view addSubview:newTabPopUp];
     [newTabPopUp release];
 
-    top -= 42.0f;
+    top -= 34.0f;
+    topSitesBox = [[NSButton alloc] initWithFrame:NSMakeRect(18.0f, top, 440.0f, 18.0f)];
+    [topSitesBox setButtonType:NSSwitchButton];
+    [topSitesBox setTitle:@"Show Top Sites on the start page"];
+    [topSitesBox setTarget:self];
+    [topSitesBox setAction:@selector(topSitesChanged:)];
+    [view addSubview:topSitesBox];
+    [topSitesBox release];
+    CPLabel(view, NSMakeRect(36.0f, top - 18.0f, 430.0f, 14.0f),
+            @"The sites you visit most. Favorites are always shown.", YES, NO);
+
+    top -= 50.0f;
     CPLabel(view, NSMakeRect(10.0f, top, 120.0f, 17.0f), @"Show websites as:", NO, YES);
     siteModePopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(136.0f, top - 4.0f, 200.0f, 26.0f)];
     [siteModePopUp addItemWithTitle:@"Desktop"];
@@ -549,6 +560,7 @@ static struct {
     }
     [homePageField setStringValue:[settings homePage]];
     [newTabPopUp selectItemAtIndex:(int)[settings newTabPage]];
+    [topSitesBox setState:([settings showsTopSites] ? NSOnState : NSOffState)];
     [downloadsField setStringValue:[[settings downloadsFolder] stringByAbbreviatingWithTildeInPath]];
     [updatesBox setState:[[NSUserDefaults standardUserDefaults] boolForKey:@"CPChecksForUpdates"]
         ? NSOnState : NSOffState];
@@ -747,6 +759,11 @@ static struct {
     if ([[url scheme] hasPrefix:@"http"])
         [[CPSettings sharedSettings] setHomePage:[url absoluteString]];
     [self refresh];
+}
+
+- (IBAction)topSitesChanged:(id)sender
+{
+    [[CPSettings sharedSettings] setShowsTopSites:([topSitesBox state] == NSOnState)];
 }
 
 - (IBAction)newTabPageChanged:(id)sender

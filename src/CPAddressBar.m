@@ -66,6 +66,10 @@ static NSButton *CPInlineButton(NSView *parent, NSRect frame, NSImage *image, NS
     [self addSubview:textField];
     [textField release];
 
+    readerButton = CPInlineButton(self, NSMakeRect(30.0f, buttonY, CPButtonSize, CPButtonSize),
+                                  [CPIcons readerImage], @"Show Reader");
+    [readerButton setHidden:YES];
+
     favoriteButton = CPInlineButton(self, NSMakeRect(width - 3.0f * CPButtonSize - 8.0f, buttonY, CPButtonSize, CPButtonSize),
                                     [CPIcons starImage], @"Add to Favorites");
     pageButton = CPInlineButton(self, NSMakeRect(width - 2.0f * CPButtonSize - 6.0f, buttonY, CPButtonSize, CPButtonSize),
@@ -111,6 +115,28 @@ static void CPSetFieldEditorDrawsBackground(NSNotification *notification, BOOL d
     id editor = [[notification userInfo] objectForKey:@"NSFieldEditor"];
     if ([editor isKindOfClass:[NSTextView class]])
         [(NSTextView *)editor setDrawsBackground:draws];
+}
+
+- (NSButton *)readerButton
+{
+    return readerButton;
+}
+
+// The button appears at the left of the field, where Safari puts it, and
+// the text starts after it. Hiding it gives the width back rather than
+// leaving a gap, which is visible on a narrow window.
+- (void)setReaderAvailable:(BOOL)available
+{
+    NSRect frame = [textField frame];
+    float textLeft = available ? (30.0f + CPButtonSize + 4.0f) : 30.0f;
+
+    if (available == readerAvailable)
+        return;
+    readerAvailable = available;
+    [readerButton setHidden:!available];
+    [textField setFrame:NSMakeRect(textLeft, NSMinY(frame),
+                                   NSMaxX(frame) - textLeft, NSHeight(frame))];
+    [self setNeedsDisplay:YES];
 }
 
 - (void)controlTextDidBeginEditing:(NSNotification *)notification

@@ -3,7 +3,7 @@
 
 APP_NAME = Captain Polliwog
 EXEC     = CaptainPolliwog
-VERSION  = 0.3.3
+VERSION  = 0.3.4
 # What an updater compares, and what a feedback report carries: it goes up on
 # every build anyone else might have, where VERSION goes up when the release
 # does. Never put the stage in VERSION - the version string ends up in file

@@ -21,5 +21,6 @@
 + (NSImage *)plusImage;
 + (NSImage *)globeImage;
 + (NSImage *)pageSettingsImage;
++ (NSImage *)readerImage;
 
 @end

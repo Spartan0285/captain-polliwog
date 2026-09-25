@@ -818,9 +818,22 @@ decisionListener:(id<WebPolicyDecisionListener>)listener
         }
     }
 
+    // Option-click downloads the link rather than following it, as Safari
+    // does. Checked before the Command cases, since Option-Command-click is
+    // a download and not a tab.
+    if (type == WebNavigationTypeLinkClicked && (modifiers & NSAlternateKeyMask)) {
+        [self downloadURL:[request URL]];
+        [listener ignore];
+        return;
+    }
+
+    // Command-click opens a tab behind the page; adding Shift brings it
+    // forward, which is Safari's arrangement and what the Shift modifier
+    // means everywhere else in this browser.
     if (type == WebNavigationTypeLinkClicked && (modifiers & NSCommandKeyMask) &&
         [owner respondsToSelector:@selector(tab:openTabWithRequest:inBackground:)]) {
-        [owner tab:self openTabWithRequest:request inBackground:YES];
+        [owner tab:self openTabWithRequest:request
+                          inBackground:((modifiers & NSShiftKeyMask) == 0)];
         [listener ignore];
         return;
     }
@@ -853,7 +866,10 @@ decisionListener:(id<WebPolicyDecisionListener>)listener
     unsigned int modifiers = [[action objectForKey:WebActionModifierFlagsKey] unsignedIntValue];
 
     if ([owner respondsToSelector:@selector(tab:openTabWithRequest:inBackground:)]) {
-        [owner tab:self openTabWithRequest:request inBackground:((modifiers & NSCommandKeyMask) != 0)];
+        // Shift brings it forward, as on an ordinary Command-click.
+        [owner tab:self openTabWithRequest:request
+                          inBackground:((modifiers & NSCommandKeyMask) != 0
+                                        && (modifiers & NSShiftKeyMask) == 0)];
         [listener ignore];
         return;
     }

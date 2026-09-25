@@ -486,6 +486,48 @@ static void CPAppendNode(NSMutableString *out, DOMNode *node, CPWriteState *stat
 
 @implementation CPReader
 
+// Whether the address bar should offer Reader for this page.
+//
+// This cannot work the way readerHTMLForDocument: works, and finding out
+// why was the whole difficulty. Reader does not read the document on
+// screen: CPReader fetches the page again into its own WebView with
+// scripts off, so it sees the server's HTML - plain paragraphs in a plain
+// structure. This runs against the live DOM, which the page's own
+// JavaScript has since rebuilt. On Wikipedia the two are so different that
+// paragraph collection finds seven paragraphs here, six of them too short,
+// while the extractor turns the fetched copy into forty thousand
+// characters of article.
+//
+// So this asks the one question that survives both shapes: how much of the
+// body is prose rather than links. An article is mostly text; a search
+// page, a portal or a menu is mostly anchors. It is approximate by
+// nature - the exact answer needs the fetch, which is far too much to do
+// on every page load - and it errs toward offering Reader, because a
+// Reader that opens on a thin page is a smaller annoyance than a button
+// that never appears on a real article.
++ (BOOL)documentIsReadable:(DOMDocument *)document
+{
+    DOMHTMLElement *body;
+    NSString *text;
+    unsigned length;
+    float density;
+
+    if (![document isKindOfClass:[DOMHTMLDocument class]])
+        return NO;
+    body = [(DOMHTMLDocument *)document body];
+    if (body == nil)
+        return NO;
+
+    text = CPTextOf(body);
+    length = CPTextLength(text);
+    // Roughly a screen of reading. Below this there is nothing Reader
+    // would improve.
+    if (length < 1200)
+        return NO;
+    density = CPLinkDensity(body);
+    return density < 0.5f;
+}
+
 + (NSString *)readerHTMLForDocument:(DOMDocument *)document URL:(NSURL *)url
 {
     DOMHTMLElement *body;

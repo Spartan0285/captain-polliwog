@@ -3,6 +3,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #import "CPStartPage.h"
+
+#import "CPSettings.h"
 #import "CPBookmarks.h"
 #import "CPHistory.h"
 #import "CPFavicons.h"
@@ -95,7 +97,7 @@ static void CPAppendTile(NSMutableString *html, NSString *title, NSString *URLSt
         }
     }
     ranked = [visits keysSortedByValueUsingSelector:@selector(compare:)];
-    if ([ranked count]) {
+    if ([ranked count] && [[CPSettings sharedSettings] showsTopSites]) {
         [html appendString:@"<h2>Top Sites</h2><div class=\"cp-tiles\">"];
         for (i = [ranked count], shown = 0; i > 0 && shown < CPTopSiteCount; i--, shown++) {
             NSArray *example = [examples objectForKey:[ranked objectAtIndex:i - 1]];

@@ -11,6 +11,8 @@
 {
     NSImageView *iconView;
     NSTextField *textField;
+    NSButton    *readerButton;
+    BOOL         readerAvailable;
     NSButton    *favoriteButton;
     NSButton    *pageButton;
     NSButton    *reloadButton;
@@ -18,6 +20,9 @@
 }
 
 - (NSTextField *)textField;
+- (NSButton *)readerButton;
+// Shown only when the page has an article in it, as Safari does.
+- (void)setReaderAvailable:(BOOL)available;
 - (NSButton *)favoriteButton;
 - (NSButton *)pageButton;
 - (NSButton *)reloadButton;
