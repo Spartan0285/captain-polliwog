@@ -1,0 +1,82 @@
+From 3541c7657420fdabb72fb5233641d70eac5685f7 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 25 Sep 2026 03:54:52 -0400
+Subject: [PATCH] Engine: a cookie accessor Tiger has never had
+
+-[NSHTTPCookie isHTTPOnly] is 10.5. CookieJarMac asked for it in two
+places, and on Tiger the selector does not exist, so the call raised and
+the filtering loop stopped partway through. WebKit catches that exception
+and discards it, which made the fault look like nothing: in practice
+whether a cookie reached JavaScript depended on where in the list it
+happened to sit.
+
+It is guarded now - ask the system where it can answer, look in the
+cookie's own properties where it cannot, since some stores keep the key
+without the accessor, and otherwise report what the stored cookie is.
+
+What this does not do is restore the protection on Tiger, and the comment
+in the source says so. That system's NSHTTPCookie cannot represent
+HttpOnly at all: the flag is dropped when the Set-Cookie header is parsed,
+long before this code could honour it. The exception was concealing an
+absent feature rather than providing one, and a guard cannot conjure it
+back. Tiger users get consistent cookie handling, not HttpOnly.
+
+Verified on the PowerBook G4: document.cookie returns its 104 characters,
+the page renders, and the exception that used to be logged on every page
+carrying cookies is gone.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ .../platform/network/mac/CookieJarMac.mm      | 25 +++++++++++++++++--
+ 1 file changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/Source/WebCore/platform/network/mac/CookieJarMac.mm b/Source/WebCore/platform/network/mac/CookieJarMac.mm
+index 100b1a78..39dc7beb 100644
+--- a/Source/WebCore/platform/network/mac/CookieJarMac.mm
++++ b/Source/WebCore/platform/network/mac/CookieJarMac.mm
+@@ -60,6 +60,27 @@ static NSArray *httpCookiesForURL(CFHTTPCookieStorageRef cookieStorage, NSURL *f
+ }
+ 
+     
++// -[NSHTTPCookie isHTTPOnly] is 10.5. On Tiger the selector does not
++// exist, so asking raises, and the loop below stops partway through -
++// WebKit catches the exception and discards it, which made this look
++// harmless. It was not: whether a given cookie reached JavaScript
++// depended on where in the list it happened to sit.
++//
++// The protection it is meant to provide is not available on Tiger in any
++// case. That system's NSHTTPCookie cannot represent HttpOnly, so the flag
++// is dropped when the Set-Cookie header is parsed, long before anything
++// here could honour it. Ask the system where it can answer; look in the
++// cookie's own properties where it cannot, since some stores keep the key
++// even without the accessor; otherwise report what the stored cookie
++// actually is, which is one carrying no such mark.
++static bool cookieIsHTTPOnly(NSHTTPCookie *cookie)
++{
++    if ([cookie respondsToSelector:@selector(isHTTPOnly)])
++        return [cookie isHTTPOnly];
++    id httpOnly = [[cookie properties] objectForKey:@"HttpOnly"];
++    return httpOnly != nil && [httpOnly boolValue];
++}
++
+ static RetainPtr<NSArray> filterCookies(NSArray *unfilteredCookies)
+ {
+     NSUInteger count = [unfilteredCookies count];
+@@ -75,7 +96,7 @@ static RetainPtr<NSArray> filterCookies(NSArray *unfilteredCookies)
+         if (![[cookie name] length])
+             continue;
+ 
+-        if ([cookie isHTTPOnly])
++        if (cookieIsHTTPOnly(cookie))
+             continue;
+ 
+         [filteredCookies.get() addObject:cookie];
+@@ -152,7 +173,7 @@ static String cookiesForSession(const NetworkStorageSession& session, const URL&
+         if (![[cookie name] length])
+             continue;
+ 
+-        if (!includeHTTPOnly && [cookie isHTTPOnly])
++        if (!includeHTTPOnly && cookieIsHTTPOnly(cookie))
+             continue;
+ 
+         if (!cookiesBuilder.isEmpty())
