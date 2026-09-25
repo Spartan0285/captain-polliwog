@@ -71,6 +71,10 @@ typedef enum {
 // connecting, how many of its pieces have arrived, which site it is still
 // waiting on, and when its scripts held everything up. Off by default.
 - (BOOL)showsPageActivity;
+// Whether the tab sidebar is open, so a window opens the way the
+// last one was left.
+- (BOOL)showsTabSidebar;
+- (void)setShowsTabSidebar:(BOOL)flag;
 - (void)setShowsPageActivity:(BOOL)flag;
 - (void)setAutoplaysVideo:(BOOL)flag;
 - (BOOL)showsAnimatedImages;

@@ -172,6 +172,10 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
         // Safari's key for the same thing.
         NSMenuItem *overview = CPAddItem(menu, @"Show All Tabs", @selector(toggleTabOverview:), @"\\");
         [overview setKeyEquivalentModifierMask:(NSCommandKeyMask | NSShiftKeyMask)];
+        // Safari's Show Sidebar. Control-Command-1 and -2 are its
+        // Bookmarks and Reading List sidebars, so neither is free here.
+        item = CPAddItem(menu, @"Show Sidebar", @selector(toggleTabSidebar:), @"l");
+        [item setKeyEquivalentModifierMask:(NSCommandKeyMask | NSShiftKeyMask)];
     }
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Reload Page", @selector(reload:), @"r");

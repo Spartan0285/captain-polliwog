@@ -6,6 +6,7 @@
 
 @class CPTab;
 @class CPTabBarView;
+@class CPTabSidebar;
 @class CPAddressBar;
 @class CPFindBar;
 
@@ -19,6 +20,9 @@
     NSMutableArray      *tabs;
     CPTab               *selectedTab;
     CPTabBarView        *tabBar;
+    CPTabSidebar        *tabSidebar;
+    NSScrollView        *tabSidebarScroll;
+    BOOL                 tabSidebarVisible;
     NSView              *pageArea;
     NSButton            *backButton;
     NSButton            *forwardButton;
@@ -78,6 +82,9 @@
 - (IBAction)selectPreviousTab:(id)sender;
 // Command-1..8 by position; Command-9, tagged -1, is the last tab.
 - (IBAction)selectTabAtIndex:(id)sender;
+// Shift-Command-L, which is Safari's Show Sidebar.
+- (IBAction)toggleTabSidebar:(id)sender;
+- (void)refreshTabSidebar;
 - (IBAction)showFindBar:(id)sender;
 - (IBAction)hideFindBar:(id)sender;
 - (IBAction)findNext:(id)sender;

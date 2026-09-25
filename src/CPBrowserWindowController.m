@@ -9,6 +9,7 @@
 #import "CPTab.h"
 #import "CPSiteModes.h"
 #import "CPTabBarView.h"
+#import "CPTabSidebar.h"
 #import "CPTabOverview.h"
 #import "CPIcons.h"
 #import "CPAddressBar.h"
@@ -164,11 +165,33 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [content addSubview:tabBar];
     [tabBar release];
 
-    pageArea = [[NSView alloc] initWithFrame:NSMakeRect(0.0f, CPStatusHeight + 1.0f, width,
-                                                        tabBarTop - CPTabBarHeight - CPStatusHeight - 1.0f)];
-    [pageArea setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-    [content addSubview:pageArea];
-    [pageArea release];
+    {
+        NSRect band = NSMakeRect(0.0f, CPStatusHeight + 1.0f, width,
+                                 tabBarTop - CPTabBarHeight - CPStatusHeight - 1.0f);
+
+        // The sidebar sits at the left of the band the page occupies, and
+        // the page gives up that width when it is shown. It is built now
+        // and left out of the view tree until asked for, so that a window
+        // that never shows it costs nothing but the allocation.
+        tabSidebarScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(NSMinX(band), NSMinY(band),
+                                                                          CPTabSidebarWidth, NSHeight(band))];
+        [tabSidebarScroll setAutoresizingMask:(NSViewHeightSizable | NSViewMaxXMargin)];
+        [tabSidebarScroll setHasVerticalScroller:YES];
+        [tabSidebarScroll setHasHorizontalScroller:NO];
+        [tabSidebarScroll setAutohidesScrollers:YES];
+        [tabSidebarScroll setBorderType:NSNoBorder];
+        [tabSidebarScroll setDrawsBackground:NO];
+
+        tabSidebar = [[CPTabSidebar alloc] initWithFrame:NSMakeRect(0.0f, 0.0f, CPTabSidebarWidth, NSHeight(band))];
+        [tabSidebar setController:self];
+        [tabSidebarScroll setDocumentView:tabSidebar];
+        [tabSidebar release];
+
+        pageArea = [[NSView alloc] initWithFrame:band];
+        [pageArea setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+        [content addSubview:pageArea];
+        [pageArea release];
+    }
 
     [self addSeparatorWithFrame:NSMakeRect(0.0f, CPStatusHeight, width, 1.0f)
                autoresizingMask:(NSViewWidthSizable | NSViewMaxYMargin)];
@@ -195,6 +218,11 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [progressBar setHidden:YES];
     [content addSubview:progressBar];
     [progressBar release];
+
+    // Open the way the last window was left. toggleTabSidebar: flips the
+    // flag, which starts off, so calling it once is what "on" means here.
+    if ([[CPSettings sharedSettings] showsTabSidebar])
+        [self toggleTabSidebar:nil];
 }
 
 // Swaps the selected tab's page into view. The other tabs' WebViews stay
@@ -218,6 +246,7 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         [findBar refreshMatches];
     [self updateChromeForSelectedTab];
     [tabBar setNeedsDisplay:YES];
+    [self refreshTabSidebar];
 }
 
 - (void)updateChromeForSelectedTab
@@ -474,6 +503,7 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         [self selectTab:tab];
     else
         [tabBar setNeedsDisplay:YES];
+    [self refreshTabSidebar];
 
     [(CPAppDelegate *)[NSApp delegate] enforceLiveTabLimit];
     return tab;
@@ -516,6 +546,7 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         [self selectTab:[tabs objectAtIndex:(index < [tabs count] ? index : [tabs count] - 1)]];
     } else {
         [tabBar setNeedsDisplay:YES];
+    [self refreshTabSidebar];
     }
 }
 
@@ -544,6 +575,7 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 - (void)tabDidChange:(CPTab *)tab
 {
     [tabBar setNeedsDisplay:YES];
+    [self refreshTabSidebar];
     // A background tab that has just finished loading becomes eligible to be
     // discarded. Deferred: its WebView is still on the stack right now.
     if (![tab isLoading] && ![tab isDiscarded])
@@ -1018,6 +1050,51 @@ static NSMenuItem *CPMenuItem(NSMenu *menu, NSString *title, SEL action, id targ
 // Command-1 through Command-8 by position, and Command-9 for the last tab
 // whatever its number, which is Safari's arrangement. The item's tag holds
 // the index, or -1 for "the last one".
+// Safari puts the sidebar on Shift-Command-L. Control-Command-1 is its
+// Bookmarks sidebar and Control-Command-2 its Reading List, so neither is
+// free for this even though both look tempting.
+- (IBAction)toggleTabSidebar:(id)sender
+{
+    NSView *content = [[self window] contentView];
+    NSRect band = [pageArea frame];
+
+    tabSidebarVisible = !tabSidebarVisible;
+    [[CPSettings sharedSettings] setShowsTabSidebar:tabSidebarVisible];
+    if (tabSidebarVisible) {
+        NSRect sidebarFrame = NSMakeRect(NSMinX(band), NSMinY(band), CPTabSidebarWidth, NSHeight(band));
+        [tabSidebarScroll setFrame:sidebarFrame];
+        [content addSubview:tabSidebarScroll];
+        [pageArea setFrame:NSMakeRect(NSMinX(band) + CPTabSidebarWidth, NSMinY(band),
+                                      NSWidth(band) - CPTabSidebarWidth, NSHeight(band))];
+    } else {
+        [tabSidebarScroll removeFromSuperview];
+        [pageArea setFrame:NSMakeRect(0.0f, NSMinY(band), NSWidth(band) + CPTabSidebarWidth, NSHeight(band))];
+    }
+    // The page is sized to its container rather than autoresized, because
+    // a WebView that is handed a new frame mid-layout redraws twice.
+    {
+        NSArray *shown = [pageArea subviews];
+        unsigned i;
+        for (i = 0; i < [shown count]; i++)
+            [[shown objectAtIndex:i] setFrame:[pageArea bounds]];
+    }
+    [self refreshTabSidebar];
+    [content setNeedsDisplay:YES];
+}
+
+// The list is as tall as its rows, so the scroll view has something to
+// scroll once there are more tabs than fit.
+- (void)refreshTabSidebar
+{
+    float height;
+    if (tabSidebar == nil)
+        return;
+    height = MAX([tabSidebar heightForTabCount:[tabs count]],
+                 NSHeight([[tabSidebarScroll contentView] bounds]));
+    [tabSidebar setFrame:NSMakeRect(0.0f, 0.0f, CPTabSidebarWidth, height)];
+    [tabSidebar setNeedsDisplay:YES];
+}
+
 - (IBAction)selectTabAtIndex:(id)sender
 {
     int tag = [sender tag];
@@ -1225,6 +1302,10 @@ static NSMenuItem *CPMenuItem(NSMenu *menu, NSString *title, SEL action, id targ
         return (page != nil && [page canMakeTextSmaller]);
     if (action == @selector(selectNextTab:) || action == @selector(selectPreviousTab:))
         return ([tabs count] > 1);
+    if (action == @selector(toggleTabSidebar:)) {
+        [item setTitle:(tabSidebarVisible ? @"Hide Sidebar" : @"Show Sidebar")];
+        return YES;
+    }
     if (action == @selector(selectTabAtIndex:)) {
         int tag = [item tag];
         // Command-9 is live whenever there is a tab at all; the numbered
