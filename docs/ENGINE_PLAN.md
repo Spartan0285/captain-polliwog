@@ -1968,3 +1968,159 @@ font cache is `FontCacheFreeType.cpp` and is Fc-shaped throughout, and a
 Core Text backend is the 604 port's amount of work, not a first
 milestone's. Native text is a thing to earn later, after something
 renders at all.
+
+## 25 September: the text stack runs, and was Leopard-only
+
+Spike C.1 (`engine/tests/spike-c-text.c`) walks the path WebCore's font
+code takes and does it on the machine rather than on the build host:
+fontconfig finds a face, FreeType opens it, HarfBuzz shapes with ICU's
+Unicode functions, Cairo renders the glyphs and writes a PNG. It counts
+inked pixels at the end, because every call in that chain can return
+success and draw nothing, and no status code reports that.
+
+On the PowerBook G4, 10.5.9, every stage passed:
+
+    freetype 2.13.2  cairo 1.16.0  harfbuzz 8.3.0  icu 74.2
+    fontconfig sees fonts          194 fonts
+    hb_shape                       13 glyphs, 16981/64 px wide, 0 notdef
+    shaper used font tables        13 glyphs for 14 characters
+    glyphs reached the surface     2430 of 25200 pixels
+
+Thirteen glyphs for fourteen characters is the interesting line: a
+ligature was formed, so HarfBuzz read the font's tables rather than
+mapping characters one to one. The PNG says AWAV fi ½ Wave.
+
+### Then the same binary was checked against Tiger
+
+`nm -u` on the spike, against the 10.4 SDK's libSystem, found five
+symbols this system has never exported. Scanning every archive in the
+prefix found four libraries and three separate causes:
+
+| Library | Imports |
+|---|---|
+| `libicuuc.a` | `open$UNIX2003`, `close$UNIX2003`, `mmap$UNIX2003` and five more |
+| `libfontconfig.a` | `realpath$DARWIN_EXTSN` |
+| `libgcrypt.a` | `select$DARWIN_EXTSN` |
+| `libcairo.a` | `__memcpy_chk`, `__strcpy_chk`, `__stpcpy_chk`, `__strcat_chk` |
+
+None of these fails at build time, at link time, or at launch. They bind
+lazily, so the first call reaches them minutes or months later. From the
+outside that is "it crashes on some pages", which is the same sentence
+`scripts/tiger-symbol-check.sh` was written for after the last time.
+
+**ICU** is a plain regression. `build-icu.sh` has carried
+`-D__DARWIN_UNIX03=0` since the 604 engine shipped;
+`build-modern-deps.sh` was written later and never got it. Without it
+the 10.5 SDK declares the UNIX03 conformance variants of every file
+operation ICU performs on its data.
+
+**`_DARWIN_C_SOURCE`** is subtler. Autoconf's `AC_USE_SYSTEM_EXTENSIONS`
+defines it, quietly, in a great many configure scripts, and the 10.5
+SDK's `stdlib.h` reads:
+
+```c
+#if (__DARWIN_UNIX03 && !defined(_POSIX_C_SOURCE)) || defined(_DARWIN_C_SOURCE) ...
+char *realpath(const char * __restrict, char * __restrict) __DARWIN_EXTSN(realpath);
+```
+
+`__DARWIN_UNIX03=0` closes the first clause and `_DARWIN_C_SOURCE` opens
+the second. It is written into `config.h`, not passed on a command line,
+so no `CFLAGS` can undo it - it has to come out of the generated header.
+
+**`_FORTIFY_SOURCE`** turns `memcpy` into `__memcpy_chk`, which is
+Leopard's. Cairo adds `-Wp,-D_FORTIFY_SOURCE=2` to its own warning flags
+after ours, so it is stripped from the generated makefiles instead.
+
+`no_leopard_extensions()` in `build-252-deps.sh` now does both after every
+configure. Two attempts were needed, and both failures are the same
+shape: an edit to a generated file is easy to get almost right.
+
+The first version did not preserve modification times, and fontconfig
+went off to regenerate `Makefile.in` with an automake its own
+`configure.ac` rejects. A configured autotools tree keeps its whole
+dependency graph in timestamps, and we are only editing flags inside
+generated files, so each edit now puts the mtime back.
+
+The second version matched `^#define _DARWIN_C_SOURCE`, and autoconf
+writes `# define _DARWIN_C_SOURCE 1`, indented inside an `#ifndef`
+guard. ICU and Cairo came back clean and fontconfig and libgcrypt did
+not, which is the only reason it was noticed: the scan is run again
+after every change, and a fix is not a fix until it says so.
+
+With both corrected, the scan over every archive in the prefix returns
+nothing, and the spike's 184 imports all exist in the 10.4 SDK's
+libSystem.
+
+### Three smaller things, each of which cost real time
+
+**A freetype from 2005.** `find_package(Freetype)` returned
+`/usr/X11R6/lib/libfreetype.dylib` from inside the 10.5 SDK - version
+2.3.5, a shared library that need not even be installed on the target -
+because the SDK was first in `CMAKE_FIND_ROOT_PATH` and the SDK ships
+X11. Our prefix comes first now.
+
+**An ICU whose headers disagreed with its library.** `--disable-renaming`
+builds symbols without the `_74` suffix but does not write that into the
+installed `uconfig.h`, which still defaults `U_DISABLE_RENAMING` to 0.
+WebKit never trips on this because `WTF/wtf/Platform.h` defines it to 1
+itself; HarfBuzz was the first thing here that did not, and produced an
+archive referencing `unorm2_getNFCInstance_74`, which exists nowhere.
+Fixed in the installed header, with a guard in the dependency script.
+
+**`-x c` applies to everything after it.** The spike's link named the
+runtime archives as files rather than with `-l`, so GCC compiled
+`libstdc++.a` as C source. Not an error - several minutes of `cc1`
+reading a static library one line at a time. `-x none` after the source.
+
+And one that is nobody's bug: `build-modern-deps.sh` installs the cmake
+toolchain file from whichever checkout it runs out of, and the build
+machine has its own. An ICU rebuild quietly reinstalled a copy without
+the `-lSystem` fix, and the next cmake build failed at libjpeg-turbo's
+`math cannot parse the expression: " * 8"` again. The script now refuses
+to start on a stale toolchain file and says why.
+
+### Fontconfig picks a Japanese font for "serif"
+
+Not a bug, and worth writing down before it becomes one. Fontconfig's
+`60-latin.conf` prefers DejaVu, Bitstream Vera and Liberation, and a Mac
+has none of them. When every name in the list is missing it falls through
+to whatever the scan found first, which on a stock system with Japanese
+fonts installed is Hiragino Maru Gothic ProN - returned for "serif", to a
+reader who asked for nothing at all.
+
+It is worse than one bad default. Asked for all three generics, a stock
+10.5 install answers:
+
+    serif       -> Hiragino Maru Gothic ProN
+    sans-serif  -> Hiragino Maru Gothic ProN
+    monospace   -> Hiragino Maru Gothic ProN
+
+Every page, including monospaced code, in the same Japanese face.
+
+`engine/fontconfig/45-osx-generic-families.conf` maps the five generic
+families to fonts a Mac actually ships, numbered below 60 so that its
+preferences are consulted first. On the PowerBook:
+
+    serif       -> Times New Roman
+    sans-serif  -> Helvetica Neue
+    monospace   -> Menlo
+    cursive     -> Apple Chancery
+    fantasy     -> Papyrus
+
+The first version of that file changed nothing at all, because its
+comment contained a double hyphen. XML forbids one inside a comment,
+fontconfig rejects the entire file when it finds one, and the only sign
+is a single error line on stderr before it carries on with the defaults.
+`fc-match` found it in a second; reading the file again would not have.
+
+The spike now reports what each generic resolves to, because "it matched
+something" was never the question.
+
+One check in it had to be withdrawn. It asserted that shaping produced
+fewer glyphs than characters, on the grounds that a ligature proves
+HarfBuzz read the font's GSUB table. It does - but Hiragino Maru Gothic
+has an fi ligature and Times New Roman does not, so the assertion
+started failing the moment the fonts were fixed. It was testing the
+font, not the stack. Ligatures are now reported and not required, and
+the check that replaced it is that advances vary between glyphs, which
+is false only for a shaper handing back a default width.

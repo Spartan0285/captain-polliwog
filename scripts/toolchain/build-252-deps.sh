@@ -65,15 +65,51 @@ export CFLAGS="$FLAGS" CXXFLAGS="$FLAGS" LDFLAGS="$LINK"
 # _FORTIFY_SOURCE turns memcpy and friends into __memcpy_chk, __strcpy_chk
 # and so on, which are also Leopard's. Cairo adds it to its own warning
 # flags after ours, so it is removed from the generated makefiles.
+# Edited in place, with the modification time put back afterwards. These
+# files are generated, and a configured autotools tree keeps its whole
+# dependency graph in timestamps: making a Makefile newer than the
+# Makefile.in it came from sends make off to regenerate it with whatever
+# automake the build machine has, which for fontconfig is a version its
+# configure.ac refuses. We are changing flags inside generated files and
+# have no business touching make's idea of what is out of date.
+sed_in_place_keeping_mtime() {
+    local f=$1 expr=$2 ref
+    [ -f "$f" ] || return 0
+    ref=$(mktemp)
+    touch -r "$f" "$ref"
+    sed -i "$expr" "$f"
+    touch -r "$ref" "$f"
+    rm -f "$ref"
+}
+
 no_leopard_extensions() {
     local f
     for f in config.h src/config.h config/config.h; do
-        [ -f "$f" ] && sed -i \
-            's|^#define _DARWIN_C_SOURCE .*|/* _DARWIN_C_SOURCE: removed, see build-252-deps.sh */|' "$f"
+        # Autoconf writes it as "# define _DARWIN_C_SOURCE 1", indented
+        # inside an #ifndef guard, not as "#define" at the margin. Both
+        # spellings are matched; leaving the guard in place around a
+        # comment is fine.
+        sed_in_place_keeping_mtime "$f" \
+            's|^[[:space:]]*#[[:space:]]*define[[:space:]][[:space:]]*_DARWIN_C_SOURCE.*|/* _DARWIN_C_SOURCE: removed, see build-252-deps.sh */|'
     done
-    find . -name Makefile -o -name "*.mk" | xargs -r sed -i \
-        's|-Wp,-D_FORTIFY_SOURCE=[0-9]*||g; s|-D_FORTIFY_SOURCE=[0-9]*||g' 2>/dev/null
+    while IFS= read -r f; do
+        sed_in_place_keeping_mtime "$f" \
+            's|-Wp,-D_FORTIFY_SOURCE=[0-9]*||g; s|-D_FORTIFY_SOURCE=[0-9]*||g'
+    done < <(find . \( -name Makefile -o -name "*.mk" \) -type f 2>/dev/null)
     return 0
+}
+
+# build-modern-deps.sh installs the cmake toolchain file from whichever
+# checkout it was run out of, and the build machine has its own. An
+# installed copy without -lSystem is the stale one, and the way that
+# announces itself is CMake's ABI probe failing silently and libjpeg-turbo
+# reporting "math cannot parse the expression: ' * 8'" ten minutes later.
+TC=$P/share/ppc-darwin-modern.cmake
+grep -q -- "-lSystem" "$TC" || {
+    echo "$TC is stale: no -lSystem in the link flags, so CMake's ABI" >&2
+    echo "probe will fail and CMAKE_SIZEOF_VOID_P will be empty. Copy" >&2
+    echo "scripts/toolchain/ppc-darwin-modern.cmake over it." >&2
+    exit 1
 }
 
 HASHES=$P/SOURCES.sha256

@@ -152,12 +152,30 @@ int main(void)
     snprintf(detail, sizeof detail, "%u glyphs, %d/64 px wide, %d notdef",
              n, advance, notdef);
     check("hb_shape", n > 0 && advance > 0, detail);
-    // Shaping fewer glyphs than input characters means a ligature was formed,
-    // which is the one thing here that proves the shaper read the font's
-    // tables rather than mapping characters one to one.
-    snprintf(detail, sizeof detail, "%u glyphs for %u characters",
-             n, (unsigned)strlen(kText) - 1 /* the fraction is two bytes */);
-    check("shaper used font tables", n < (unsigned)strlen(kText) - 1, detail);
+    // Whether a ligature was formed is reported, not required. Fewer glyphs
+    // than characters means the shaper read the font's GSUB table, which is
+    // good evidence that it is working -- but a font is entitled to have no
+    // fi ligature, and Times New Roman here has none where Hiragino Maru
+    // Gothic did. Failing on that would be testing the font, not the stack.
+    //
+    // The load-bearing checks are the ones above: glyphs came back, they
+    // have advances, none of them is notdef, and pixels reached the surface.
+    {
+        unsigned int chars = (unsigned)strlen(kText) - 1; /* the fraction is two bytes */
+        printf("  %-30s %-4s %u glyphs for %u characters%s\n",
+               "ligatures", "--", n, chars,
+               n < chars ? " (ligature formed)" : " (none in this font)");
+    }
+    // A proportional font gives different advances to different letters. If
+    // every advance were identical the shaper would be returning a default
+    // width per glyph, which is what a font it could not read looks like.
+    {
+        int varied = 0;
+        for (i = 1; i < n; i++)
+            if (pos[i].x_advance != pos[0].x_advance)
+                varied = 1;
+        check("advances vary per glyph", n < 2 || varied, NULL);
+    }
 
     // 4. Cairo renders them, through the same FT_Face. This is where a
     //    mismatched freetype would show up: cairo-ft holds the face itself.
