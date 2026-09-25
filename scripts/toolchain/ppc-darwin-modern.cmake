@@ -25,7 +25,18 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET 10.4 CACHE STRING "")  # override with -D for Le
 # FSF GCC has no -arch flag; the CPU comes from -mcpu instead.
 set(CMAKE_OSX_ARCHITECTURES "" CACHE STRING "" FORCE)
 
-set(CMAKE_FIND_ROOT_PATH /opt/ppc/SDKs/MacOSX10.5.sdk /opt/ppc-modern/icu)
+# /opt/ppc-modern is where the 2.52 dependencies are installed, and with
+# the LIBRARY and INCLUDE modes set to ONLY below, a root that is not
+# listed here cannot be searched at all: find_package(Freetype) would look
+# only inside the SDK and report the library missing while it sits in
+# /opt/ppc-modern/lib.
+# Our own prefix comes first, ahead of the SDK. The 10.5 SDK ships X11,
+# and X11 ships a freetype: find_package(Freetype) with the SDK first
+# returned /usr/X11R6/lib/libfreetype.dylib, version 2.3.5, from 2005 -
+# a shared library that need not even be installed on the target, in
+# place of the 2.13.2 built for this prefix an hour earlier. It compiled
+# far enough to look like it was working.
+set(CMAKE_FIND_ROOT_PATH /opt/ppc-modern /opt/ppc-modern/icu /opt/ppc/SDKs/MacOSX10.5.sdk)
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
