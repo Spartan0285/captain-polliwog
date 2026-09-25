@@ -66,15 +66,34 @@ int main(void)
     snprintf(detail, sizeof detail, "%d fonts", all ? all->nfont : 0);
     check("fontconfig sees fonts", all && all->nfont > 0, detail);
 
-    // Ask for a serif face by generic name rather than by a family that may
-    // not be installed. Fontconfig is meant to substitute; if it cannot, the
-    // whole font cache is no use to WebCore either.
-    FcPattern *pat = FcNameParse((const FcChar8 *)"serif");
-    FcConfigSubstitute(fc, pat, FcMatchPattern);
-    FcDefaultSubstitute(pat);
-    FcResult res;
-    FcPattern *matched = FcFontMatch(fc, pat, &res);
-    check("FcFontMatch(serif)", matched != NULL && res == FcResultMatch, NULL);
+    // The three generic families WebCore resolves for every page that does
+    // not name a font. Mac OS X ships no fontconfig aliases for them, so
+    // what comes back is whatever the scan happened to find first, which on
+    // a stock system is a Japanese face. Each is reported by name, because
+    // "it matched something" is not the question - the question is whether
+    // it matched something a reader would recognise as that kind of type.
+    static const char *kGenerics[] = { "serif", "sans-serif", "monospace" };
+    FcPattern *matched = NULL;
+    unsigned int g;
+    for (g = 0; g < sizeof kGenerics / sizeof kGenerics[0]; g++) {
+        FcPattern *p = FcNameParse((const FcChar8 *)kGenerics[g]);
+        FcConfigSubstitute(fc, p, FcMatchPattern);
+        FcDefaultSubstitute(p);
+        FcResult r;
+        FcPattern *m = FcFontMatch(fc, p, &r);
+        FcChar8 *fam = NULL;
+        if (m)
+            FcPatternGetString(m, FC_FAMILY, 0, &fam);
+        snprintf(detail, sizeof detail, "%-11s -> %s",
+                 kGenerics[g], fam ? (const char *)fam : "(none)");
+        check("generic family resolves", m != NULL && r == FcResultMatch, detail);
+        // The serif match is the one carried forward and rendered.
+        if (g == 0)
+            matched = m;
+        else if (m)
+            FcPatternDestroy(m);
+        FcPatternDestroy(p);
+    }
     if (!matched)
         return failures;
 
@@ -197,7 +216,6 @@ int main(void)
     FT_Done_Face(face);
     FT_Done_FreeType(ft);
     FcPatternDestroy(matched);
-    FcPatternDestroy(pat);
 
     printf("  %s\n", failures ? "FAILURES" : "all stages passed");
     return failures;

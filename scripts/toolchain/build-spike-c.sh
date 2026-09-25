@@ -21,11 +21,15 @@ SRC=${1:-$(cd "$(dirname "$0")/../../engine/tests" && pwd)/spike-c-text.c}
 OUT=${2:-$HOME/spike-c-text}
 RT=$P/powerpc-apple-darwin9/lib
 
+# -x none after the source: -x c applies to every input that follows it,
+# and the runtime archives are named as files rather than with -l. Without
+# it, GCC compiles libstdc++.a as if it were C, which is not an error, only
+# several minutes of cc1 reading a static library one line at a time.
 $HOST-g++ -x c -std=gnu99 -O2 -mcpu=750 \
     -isysroot $SDK -mmacosx-version-min=10.4 -D__DARWIN_UNIX03=0 \
     -I$P/include -I$P/include/cairo -I$P/include/freetype2 \
     -I$P/include/harfbuzz -I$P/icu/include \
-    "$SRC" -o "$OUT" \
+    "$SRC" -x none -o "$OUT" \
     -nodefaultlibs -static-libgcc \
     -Wl,-syslibroot,$SDK \
     -Wl,-no_function_starts,-no_data_in_code_info,-no_version_load_command,-no_source_version \

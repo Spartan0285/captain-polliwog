@@ -69,12 +69,21 @@ if [ ! -f $PREFIX/icu/lib/libicuuc.a ]; then
     mkdir icu-modern-host && ( cd icu-modern-host && ../icu-modern/source/configure --disable-tests --disable-samples >/dev/null && make -j"$(nproc)" >/dev/null )
     mkdir icu-modern-ppc && cd icu-modern-ppc
     # 10.4 deployment as everywhere else, so one ICU serves Tiger and Leopard.
+    #
+    # __DARWIN_UNIX03=0 is the important one, and was missing here while the
+    # 604 script (build-icu.sh) has always had it. Without it the 10.5 SDK
+    # declares the UNIX03 conformance variants, and ICU records references to
+    # open$UNIX2003, close$UNIX2003, mmap$UNIX2003 and five more. Tiger has
+    # none of those symbols. Nothing notices at build time or at launch,
+    # because the references bind lazily: the program runs until the first
+    # call reaches one, which for ICU is the first time it opens its data.
+    ICUFLAGS="-O2 -mmacosx-version-min=10.4 -D__DARWIN_UNIX03=0"
     # Apple's ar and ranlib, not the host's: ld64 reads a GNU archive index
     # only partly, and the link then fails on symbols that are in the
     # archive all along (the same trap as OTS in the 604 toolchain).
     CC=$PREFIX/bin/$TARGET-gcc CXX=$PREFIX/bin/$TARGET-g++ \
     AR=/opt/ppc/bin/$TARGET-ar RANLIB=/opt/ppc/bin/$TARGET-ranlib \
-    CFLAGS="-O2 -mmacosx-version-min=10.4" CXXFLAGS="-O2 -std=c++17 -mmacosx-version-min=10.4" \
+    CFLAGS="$ICUFLAGS" CXXFLAGS="$ICUFLAGS -std=c++17" \
     LDFLAGS="-mmacosx-version-min=10.4" \
         ../icu-modern/source/configure --host=$TARGET --with-cross-build="$PWD/../icu-modern-host" \
         --prefix=$PREFIX/icu --enable-static --disable-shared --with-data-packaging=static \

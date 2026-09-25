@@ -31,7 +31,7 @@ SDK=/opt/ppc/SDKs/MacOSX10.5.sdk
 HOST=powerpc-apple-darwin9
 F=@executable_path/../Frameworks
 INT=$HOST-install_name_tool
-FLAGS="-O2 -mcpu=750 -isysroot $SDK -mmacosx-version-min=10.4 -D__DARWIN_UNIX03=0"
+FLAGS="-O2 -mcpu=750 -isysroot $SDK -mmacosx-version-min=10.4 -D__DARWIN_UNIX03=0 -U_FORTIFY_SOURCE"
 LINK="-mmacosx-version-min=10.4 -isysroot $SDK -Wl,-syslibroot,$SDK -static-libgcc \
  -Wl,-no_function_starts,-no_data_in_code_info,-no_version_load_command,-no_source_version"
 # ICU is installed apart from the rest, from the toolchain scripts, and
@@ -51,6 +51,31 @@ export LIBTOOL=/opt/ppc/bin/$HOST-libtool
 export STRIP=/opt/ppc-modern/bin/$HOST-strip
 export NM=/opt/ppc-modern/bin/$HOST-nm
 export CFLAGS="$FLAGS" CXXFLAGS="$FLAGS" LDFLAGS="$LINK"
+# Two things the 10.5 SDK will hand a Tiger build if nobody stops it, both
+# of which record a symbol that does not exist on 10.4 and bind lazily, so
+# that the failure arrives at the first call rather than at launch.
+#
+# _DARWIN_C_SOURCE is defined by autoconf's AC_USE_SYSTEM_EXTENSIONS, which
+# a great many configure scripts run without saying so. It selects the
+# extended variants of realpath and select - realpath$DARWIN_EXTSN,
+# select$DARWIN_EXTSN - which Leopard added. Removing it from the generated
+# config.h is the only place it can be caught: it is written into the header
+# and not passed on a command line, so no CFLAGS can undo it.
+#
+# _FORTIFY_SOURCE turns memcpy and friends into __memcpy_chk, __strcpy_chk
+# and so on, which are also Leopard's. Cairo adds it to its own warning
+# flags after ours, so it is removed from the generated makefiles.
+no_leopard_extensions() {
+    local f
+    for f in config.h src/config.h config/config.h; do
+        [ -f "$f" ] && sed -i \
+            's|^#define _DARWIN_C_SOURCE .*|/* _DARWIN_C_SOURCE: removed, see build-252-deps.sh */|' "$f"
+    done
+    find . -name Makefile -o -name "*.mk" | xargs -r sed -i \
+        's|-Wp,-D_FORTIFY_SOURCE=[0-9]*||g; s|-D_FORTIFY_SOURCE=[0-9]*||g' 2>/dev/null
+    return 0
+}
+
 HASHES=$P/SOURCES.sha256
 # Patches live beside this script, which may be run from anywhere.
 PATCHES=$(cd "$(dirname "$0")" && pwd)
@@ -90,6 +115,7 @@ if want zlib; then
     # zlib's configure writes the Darwin archiver into the Makefile by name
     # and ignores AR from the environment, so it is overridden on the make
     # command line, where a variable beats the Makefile's own assignment.
+    no_leopard_extensions
     make -j4 AR="$LIBTOOL" ARFLAGS="-o" RANLIB="$RANLIB"
     sudo make install AR="$LIBTOOL" ARFLAGS="-o" RANLIB="$RANLIB"
 fi
@@ -99,6 +125,7 @@ if want libpng; then
     rm -rf libpng-1.6.43 && tar xf libpng-1.6.43.tar.gz && cd libpng-1.6.43
     ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
         --with-zlib-prefix=$P CPPFLAGS="-I$P/include" LDFLAGS="$LINK -L$P/lib"
+    no_leopard_extensions
     make -j4
     sudo make install
 fi
@@ -109,6 +136,7 @@ if want pixman; then
     # No AltiVec: the G3 has none, and the engine picks its build by processor.
     ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
         --disable-vmx --disable-arm-simd --disable-gtk --disable-libpng
+    no_leopard_extensions
     make -j4
     sudo make install
 fi
@@ -119,6 +147,7 @@ if want freetype; then
     ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
         --with-zlib=yes --with-png=yes --with-harfbuzz=no --with-brotli=no --with-bzip2=no \
         CPPFLAGS="-I$P/include" LDFLAGS="$LINK -L$P/lib"
+    no_leopard_extensions
     make -j4
     sudo make install
 fi
@@ -133,6 +162,7 @@ if want libjpeg-turbo; then
         -DCMAKE_TOOLCHAIN_FILE=/opt/ppc-modern/share/ppc-darwin-modern.cmake \
         -DCMAKE_INSTALL_PREFIX=$P -DENABLE_SHARED=OFF -DENABLE_STATIC=ON \
         -DWITH_SIMD=OFF -DCMAKE_BUILD_TYPE=Release
+    no_leopard_extensions
     make -j4
     sudo make install
 fi
@@ -142,6 +172,7 @@ if want sqlite; then
     rm -rf sqlite-autoconf-3450100 && tar xf sqlite-autoconf-3450100.tar.gz && cd sqlite-autoconf-3450100
     ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
         --disable-readline --disable-editline
+    no_leopard_extensions
     make -j4
     sudo make install
 fi
@@ -151,6 +182,7 @@ if want libxml2; then
     rm -rf libxml2-2.12.5 && tar xf libxml2-2.12.5.tar.xz && cd libxml2-2.12.5
     ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
         --without-python --without-lzma --with-zlib=$P --without-iconv
+    no_leopard_extensions
     make -j4
     sudo make install
 fi
@@ -182,6 +214,7 @@ if want fontconfig; then
         --with-default-fonts=/System/Library/Fonts \
         --with-add-fonts=/Library/Fonts,/System/Library/Fonts/Cache \
         CC_FOR_BUILD=gcc CPPFLAGS="-I$P/include" LDFLAGS="$LINK -L$P/lib"
+    no_leopard_extensions
     make -j4
     sudo make install
 fi
@@ -195,6 +228,7 @@ if want libwebp; then
     ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
         --enable-libwebpdemux --enable-libwebpmux \
         --disable-png --disable-jpeg --disable-tiff --disable-gif --disable-wic
+    no_leopard_extensions
     make -j4
     sudo make install
 fi
@@ -231,6 +265,7 @@ if want harfbuzz; then
         -DHB_HAVE_CORETEXT=OFF -DHB_BUILD_UTILS=OFF -DHB_BUILD_TESTS=OFF \
         -DFREETYPE_INCLUDE_DIRS="$P/include/freetype2;$P/include" \
         -DFREETYPE_LIBRARY=$P/lib/libfreetype.a
+    no_leopard_extensions
     make -j4
     sudo make install
 fi
@@ -259,6 +294,7 @@ if want cairo; then
         --disable-egl --disable-glx --disable-script --disable-interpreter \
         --disable-trace --disable-gtk-doc --disable-valgrind --disable-lto \
         CPPFLAGS="-I$P/include" LDFLAGS="$LINK -L$P/lib"
+    no_leopard_extensions
     make -j4
     sudo make install
 fi
@@ -307,6 +343,7 @@ EOF
     patch -p1 --forward -i "$PATCHES/libgpg-error-darwin-unsetenv.patch"
     ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
         --disable-doc --disable-tests --disable-languages
+    no_leopard_extensions
     make -j4
     sudo make install
 fi
@@ -331,6 +368,7 @@ if want libgcrypt; then
     # binaries that could not have been run on this machine anyway; what
     # the library needs to be correct is checked on the target.
     LIBDIRS="compat mpi cipher random src"
+    no_leopard_extensions
     make -j4 SUBDIRS="$LIBDIRS"
     sudo make install SUBDIRS="$LIBDIRS"
 fi
@@ -340,6 +378,7 @@ if want libtasn1; then
     rm -rf libtasn1-4.19.0 && tar xf libtasn1-4.19.0.tar.gz && cd libtasn1-4.19.0
     ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
         --disable-doc --disable-gcc-warnings
+    no_leopard_extensions
     make -j4
     sudo make install
 fi
