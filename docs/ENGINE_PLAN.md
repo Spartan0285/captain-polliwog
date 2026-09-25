@@ -2146,3 +2146,61 @@ ours to write, not GTK's to borrow, and that was always the shape of
 spike C - what has changed is that everything underneath it now exists,
 for this processor, for this operating system, in one C++ runtime, and
 draws text on a PowerBook.
+
+## 25 September: profile-guided optimization, pass one
+
+The engine that ships gets its profile from a real G4. Measured against a
+baseline built from the same source on the same day, medians of five
+interleaved repetitions on the PowerBook:
+
+    arrays                 1784 -> 1660   -7.0%
+    strings                 337 ->  320   -5.0%
+    closures                151 ->  145   -4.0%
+    switch and branches      68 ->   74   +8.8%
+    total                  3041 -> 2899   -4.7%
+
+with everything else inside the noise. The noise is not assumed: running
+the baseline kit against a copy of itself puts the floor at 0.5% on the
+total and about 3% on the smallest tests, so -4.7% is real and so is the
+switch regression.
+
+The framework is also 19.5% smaller, 9.66MB against 7.78MB, which is the
+first sign that the profile is being used at all.
+
+### The first profile made two tests a third slower
+
+Before the training workload was broadened it read:
+
+    switch and branches     +36.8%
+    try/catch               +27.2%
+    total                    -2.7%
+
+Those are exactly the two constructs `pgo-train.js` contained none of.
+`grep -c switch` and `grep -c catch` both returned zero.
+
+This is the part of PGO that is easy to get wrong. `-fprofile-use` does
+not merely leave an unprofiled function alone: it treats it as cold and
+optimizes it for size. A gap in the training workload is not a missed
+opportunity, it is a regression, and it lands on whatever the workload
+failed to mention. Adding switch, try/catch/finally, accessors and Math
+took try/catch to -1.4% and switch from +36.8% to +8.8%.
+
+It is also the argument for training and measuring on different code.
+Training on `llint-bench.js` would have made every row green and shipped
+an engine that is a third slower through any `switch` a page contains.
+
+What is left of the switch regression looks like coverage intensity
+rather than coverage. The benchmark runs one `switch (i & 7)` a million
+times in a single loop; the training runs 120,000 across six calls. The
+lesson for the next pass is that a construct has to be not merely
+present in the training workload but hot in it.
+
+### What this pass does not answer
+
+The profile came from `jsc` running JavaScript, so it says nothing about
+WebCore, and Speedometer is not only JavaScript. -4.7% on a JS
+microbenchmark set is a pipeline working, not a browser getting faster.
+
+The next pass trains on Speedometer itself, in the browser, which
+removes the whole class of coverage mismatch by construction: the
+training workload and the target workload become the same thing.

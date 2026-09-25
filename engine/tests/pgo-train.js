@@ -118,6 +118,101 @@ function closureWork(n) {
     return total;
 }
 
+// --- Control flow the first version of this file left out entirely, and
+// --- which cost 37% and 27% on the two benchmarks that use it.
+//
+// Functions with no profile data are not merely left alone by
+// -fprofile-use: GCC treats them as cold and optimises them for size. So a
+// gap in the training workload is not a missed opportunity, it is a
+// regression. switch and try/catch are in every real program and were in
+// none of the above.
+//
+// This is not the benchmark's code -- it is the constructs the benchmark
+// exercises, which is the difference between fixing coverage and training
+// on the test. The honest check of that distinction is Speedometer, where
+// the training and the measurement are genuinely independent.
+function switchWork(n) {
+    var total = 0, i;
+    // Dense integer switch: a jump table.
+    for (i = 0; i < n; i++) {
+        switch (i % 8) {
+        case 0: total += 1; break;
+        case 1: total += 2; break;
+        case 2: total += 3; break;
+        case 3: total += 5; break;
+        case 4: total += 8; break;
+        case 5: total += 13; break;
+        case 6: total += 21; break;
+        default: total += 34; break;
+        }
+    }
+    // Sparse and string switches, which compile to comparison chains
+    // rather than a table and are the shape a dispatcher usually has.
+    var kinds = ["insert", "remove", "update", "noop"];
+    for (i = 0; i < n; i++) {
+        switch (kinds[i % kinds.length]) {
+        case "insert": total += 2; break;
+        case "remove": total -= 1; break;
+        case "update": total += 3; break;
+        default: break;
+        }
+        switch (i % 1000) {
+        case 0: total += 7; break;
+        case 499: total += 11; break;
+        case 999: total += 13; break;
+        }
+    }
+    return total;
+}
+
+function exceptionWork(n) {
+    var total = 0, i;
+    for (i = 0; i < n; i++) {
+        // The common case: a try block that does not throw. This is what
+        // most real try/catch costs, and it has to be fast.
+        try {
+            total += i % 5;
+        } catch (e) {
+            total -= 1;
+        }
+        // And the throwing path, less often, as in real code.
+        if (i % 16 === 0) {
+            try {
+                throw new Error("e" + i);
+            } catch (e) {
+                total += e.message.length;
+            }
+        }
+        if (i % 64 === 0) {
+            try {
+                total += 1;
+            } finally {
+                total += 1;
+            }
+        }
+    }
+    return total;
+}
+
+// --- Accessors and Math, both everywhere in real code and in nothing above.
+function accessorWork(n) {
+    var o = { _v: 0 };
+    Object.defineProperty(o, "v", {
+        get: function () { return this._v; },
+        set: function (x) { this._v = x | 0; }
+    });
+    var total = 0, i;
+    for (i = 0; i < n; i++) { o.v = i; total += o.v; }
+    return total;
+}
+
+function mathWork(n) {
+    var total = 0, i;
+    for (i = 0; i < n; i++)
+        total += Math.floor(Math.sqrt(i) + Math.abs(Math.sin(i % 90))) | 0;
+    return total;
+}
+
 // Several passes, so that functions get hot enough to be worth a profile
 // and tier up the way they would in a real page.
 var PASSES = 6;
@@ -129,6 +224,10 @@ for (var pass = 0; pass < PASSES; pass++) {
     sink += jsonWork(1500);
     sink += regexpWork(8000);
     sink += closureWork(6000);
+    sink += switchWork(20000);
+    sink += exceptionWork(20000);
+    sink += accessorWork(20000);
+    sink += mathWork(20000);
 }
 
 print("pgo-train done, checksum " + sink);
