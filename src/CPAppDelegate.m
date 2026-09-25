@@ -131,11 +131,16 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     CPAddItem(menu, @"New Window", @selector(newWindow:), @"n");
     CPAddItem(menu, @"New Tab", @selector(newTab:), @"t");
     CPAddItem(menu, @"Open Location...", @selector(openLocation:), @"l");
+    // Safari's Option-Command-F focuses the search field. Here the address
+    // bar is the search field - anything that is not a URL is handed to
+    // DuckDuckGo - so it is the same destination.
+    item = CPAddItem(menu, @"Search the Web", @selector(openLocation:), @"f");
+    [item setKeyEquivalentModifierMask:(NSCommandKeyMask | NSAlternateKeyMask)];
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Close Tab", @selector(closeCurrentTab:), @"w");
     CPAddItem(menu, @"Close Window", @selector(performClose:), @"W");
     [menu addItem:[NSMenuItem separatorItem]];
-    CPAddItem(menu, @"Save As...", @selector(savePageAs:), @"S");
+    CPAddItem(menu, @"Save As...", @selector(savePageAs:), @"s");
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Print...", @selector(printPage:), @"p");
 
@@ -174,6 +179,7 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Make Text Bigger", @selector(makeTextLarger:), @"+");
     CPAddItem(menu, @"Make Text Smaller", @selector(makeTextSmaller:), @"-");
+    CPAddItem(menu, @"Actual Size", @selector(actualSize:), @"0");
     [menu addItem:[NSMenuItem separatorItem]];
     CPAddItem(menu, @"Show Page Activity", @selector(togglePageActivity:), nil);
     [menu addItem:[NSMenuItem separatorItem]];
@@ -215,9 +221,30 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
     CPAddItem(menu, @"Minimize", @selector(performMiniaturize:), @"m");
     CPAddItem(menu, @"Zoom", @selector(performZoom:), nil);
     [menu addItem:[NSMenuItem separatorItem]];
-    // Command-Shift-] and [, as in Safari.
-    CPAddItem(menu, @"Select Next Tab", @selector(selectNextTab:), @"}");
-    CPAddItem(menu, @"Select Previous Tab", @selector(selectPreviousTab:), @"{");
+    // Command-Shift-] and [, as in Safari. Both halves were wrong before:
+    // the key equivalents were the shifted characters } and {, and the
+    // mask was left at the CPAddItem default of Command alone, so the menu
+    // drew Command-} and Command-{. The unshifted character with Shift
+    // named in the mask is the form that works, and is what Show All Tabs
+    // above already does for Command-Shift-backslash.
+    item = CPAddItem(menu, @"Select Next Tab", @selector(selectNextTab:), @"]");
+    [item setKeyEquivalentModifierMask:(NSCommandKeyMask | NSShiftKeyMask)];
+    item = CPAddItem(menu, @"Select Previous Tab", @selector(selectPreviousTab:), @"[");
+    [item setKeyEquivalentModifierMask:(NSCommandKeyMask | NSShiftKeyMask)];
+    [menu addItem:[NSMenuItem separatorItem]];
+    // Command-1 through Command-8 pick a tab; Command-9 is the last one,
+    // however many there are, which is what Safari does and is more
+    // useful than a ninth tab nobody has.
+    {
+        int i;
+        for (i = 1; i <= 9; i++) {
+            NSString *title = (i == 9) ? @"Show Last Tab"
+                                       : [NSString stringWithFormat:@"Show Tab %d", i];
+            item = CPAddItem(menu, title, @selector(selectTabAtIndex:),
+                             [NSString stringWithFormat:@"%d", i]);
+            [item setTag:(i == 9) ? -1 : (i - 1)];
+        }
+    }
     [menu addItem:[NSMenuItem separatorItem]];
     item = CPAddItem(menu, @"Downloads", @selector(showDownloads:), @"l");
     [item setKeyEquivalentModifierMask:(NSCommandKeyMask | NSAlternateKeyMask)];

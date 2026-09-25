@@ -207,6 +207,34 @@ static const NSWindowButton CPWindowButtons[] = {
 
 @implementation CPUnifiedContentView
 
+// Control-Tab and Shift-Control-Tab cycle tabs, as in Safari. This cannot
+// be a menu key equivalent: a Tab key equivalent draws as a stray glyph in
+// the menu and fights the key view loop. It belongs on the content view
+// rather than the window controller, which AppKit never asks - a window
+// hands performKeyEquivalent: to its content view and down the subviews,
+// and stops at the window itself.
+//
+// Taken before super so that a focused WebView does not spend it on its
+// own focus navigation first.
+- (BOOL)performKeyEquivalent:(NSEvent *)event
+{
+    NSString *characters = [event charactersIgnoringModifiers];
+    unsigned modifiers = [event modifierFlags];
+
+    if ([characters length] == 1 && [characters characterAtIndex:0] == '\t'
+        && (modifiers & NSControlKeyMask) != 0
+        && (modifiers & (NSCommandKeyMask | NSAlternateKeyMask)) == 0) {
+        id controller = [[self window] windowController];
+        SEL action = ((modifiers & NSShiftKeyMask) != 0) ? @selector(selectPreviousTab:)
+                                                         : @selector(selectNextTab:);
+        if ([controller respondsToSelector:action]) {
+            [controller performSelector:action withObject:self];
+            return YES;
+        }
+    }
+    return [super performKeyEquivalent:event];
+}
+
 - (void)setOverlap:(float)height
 {
     overlap = height;

@@ -76,6 +76,8 @@
 - (IBAction)closeCurrentTab:(id)sender;
 - (IBAction)selectNextTab:(id)sender;
 - (IBAction)selectPreviousTab:(id)sender;
+// Command-1..8 by position; Command-9, tagged -1, is the last tab.
+- (IBAction)selectTabAtIndex:(id)sender;
 - (IBAction)showFindBar:(id)sender;
 - (IBAction)hideFindBar:(id)sender;
 - (IBAction)findNext:(id)sender;

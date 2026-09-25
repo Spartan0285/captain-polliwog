@@ -1015,6 +1015,24 @@ static NSMenuItem *CPMenuItem(NSMenu *menu, NSString *title, SEL action, id targ
         [self selectTab:[tabs objectAtIndex:(index + [tabs count] - 1) % [tabs count]]];
 }
 
+// Command-1 through Command-8 by position, and Command-9 for the last tab
+// whatever its number, which is Safari's arrangement. The item's tag holds
+// the index, or -1 for "the last one".
+- (IBAction)selectTabAtIndex:(id)sender
+{
+    int tag = [sender tag];
+    unsigned count = [tabs count];
+    unsigned index;
+
+    if (count == 0)
+        return;
+    index = (tag < 0) ? (count - 1) : (unsigned)tag;
+    if (index >= count)
+        return;
+    [self selectTab:[tabs objectAtIndex:index]];
+}
+
+
 #pragma mark Find, print, save
 
 - (void)setFindBarVisible:(BOOL)visible
@@ -1207,6 +1225,12 @@ static NSMenuItem *CPMenuItem(NSMenu *menu, NSString *title, SEL action, id targ
         return (page != nil && [page canMakeTextSmaller]);
     if (action == @selector(selectNextTab:) || action == @selector(selectPreviousTab:))
         return ([tabs count] > 1);
+    if (action == @selector(selectTabAtIndex:)) {
+        int tag = [item tag];
+        // Command-9 is live whenever there is a tab at all; the numbered
+        // ones only when that many tabs exist.
+        return (tag < 0) ? ([tabs count] > 0) : ((unsigned)tag < [tabs count]);
+    }
     if (action == @selector(autoFillForm:) || action == @selector(printPage:) || action == @selector(savePageAs:) ||
         action == @selector(showFindBar:) || action == @selector(useSelectionForFind:))
         return page != nil;
