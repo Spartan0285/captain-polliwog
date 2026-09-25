@@ -60,6 +60,9 @@ static NSButton *CPInlineButton(NSView *parent, NSRect frame, NSImage *image, NS
     [textField setAutoresizingMask:NSViewWidthSizable];
     [[textField cell] setScrollable:YES];
     [[textField cell] setSendsActionOnEndEditing:NO];
+    // For the field editor's background and for repainting on focus:
+    // nothing else is this field's delegate.
+    [textField setDelegate:self];
     [self addSubview:textField];
     [textField release];
 
@@ -90,13 +93,48 @@ static NSButton *CPInlineButton(NSView *parent, NSRect frame, NSImage *image, NS
     [self setNeedsDisplayInRect:NSMakeRect(0.0f, 0.0f, NSWidth([self bounds]), 4.0f)];
 }
 
+// The text field is set not to draw a background, but the field editor
+// AppKit swaps in when the field is being typed into is a separate view
+// with a background of its own, and it draws white. The bar paints its
+// own rounded field underneath, so that white lands as a rectangle the
+// width of the text, a different shade from the bar around it.
+//
+// Nothing repainted the bar on a focus change either, so the fill chosen
+// in drawRect - pale when idle, white while editing - was whatever had
+// been drawn last. The two faults together are why the patch behind the
+// text did not match the field on either system.
+//
+// The editor is shared by every text field in the window, so it is
+// handed back the way it was found.
+static void CPSetFieldEditorDrawsBackground(NSNotification *notification, BOOL draws)
+{
+    id editor = [[notification userInfo] objectForKey:@"NSFieldEditor"];
+    if ([editor isKindOfClass:[NSTextView class]])
+        [(NSTextView *)editor setDrawsBackground:draws];
+}
+
+- (void)controlTextDidBeginEditing:(NSNotification *)notification
+{
+    CPSetFieldEditorDrawsBackground(notification, NO);
+    [self setNeedsDisplay:YES];
+}
+
+- (void)controlTextDidEndEditing:(NSNotification *)notification
+{
+    CPSetFieldEditorDrawsBackground(notification, YES);
+    [self setNeedsDisplay:YES];
+}
+
 - (void)drawRect:(NSRect)dirtyRect
 {
     NSRect field = NSInsetRect([self bounds], 0.5f, 0.5f);
     NSBezierPath *outline = CPRoundedRect(field, 6.0f);
     BOOL editing = [[self window] firstResponder] == [textField currentEditor] && [textField currentEditor] != nil;
 
-    [[NSColor colorWithCalibratedWhite:(editing ? 1.0f : 0.93f) alpha:1.0f] set];
+    // 0.93 idle was noticeably grey on both systems. 0.98 reads as white
+    // and still lifts to pure white when the field takes focus, which is
+    // what the darkening border reinforces.
+    [[NSColor colorWithCalibratedWhite:(editing ? 1.0f : 0.98f) alpha:1.0f] set];
     [outline fill];
     if (progress > 0.0 && progress < 1.0) {
         // Safari's blue line, filling as the page loads.
