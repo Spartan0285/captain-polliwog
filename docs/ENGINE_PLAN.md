@@ -1840,3 +1840,55 @@ the case for Milestone 2 rested on correctness counts and a percentage
 on a benchmark. It now rests on a sentence anyone can judge: on a
 modern engine you can sign into your Google account, and on this one
 you cannot, and no amount of work on the 604 engine will change that.
+
+## 25 September: spike C begins, at the bottom
+
+WebCore will not configure until its dependencies exist for this target.
+Reading 2.52's OptionsGTK.cmake for what it looks for, and removing what
+a Quartz port would not use - GTK, ATSPI, Manette, Epoxy, and Soup,
+which curl replaces - leaves thirteen:
+
+    GLib* Cairo HarfBuzz Freetype Fontconfig JPEG PNG WebP
+    LibXml2 SQLite3 ZLIB LibGcrypt Tasn1    (* see below)
+
+None can be borrowed from /opt/ppc. Those were built by GCC 6.5, and one
+image carrying two C++ runtimes is the fault this port already knows.
+Everything modern is built again by the modern compiler, into
+/opt/ppc-modern, by `scripts/toolchain/build-252-deps.sh`.
+
+The first four are done and are genuinely PowerPC - cputype 18,
+cpusubtype 9, ppc_650:
+
+    libz.a 99KB   libpng16.a 281KB   libpixman-1.a 547KB
+    libfreetype.a 812KB
+
+Getting zlib alone took five attempts, and the reasons are worth keeping
+because every remaining library will find its own version of them:
+
+- zlib.net moves old releases to /fossils/, so the URL 404d.
+- A failed download left a zero-length file, which satisfied the
+  "already fetched" test, so the failure was sticky across runs. Test
+  for a non-empty file, not an existing one.
+- /opt/ppc-modern has a compiler but **no ar**. cctools' ar lives with
+  the 604 toolchain in /opt/ppc, and the Linux ar does not produce an
+  archive these linkers will accept - which this port already knew and
+  the modern prefix had not been told.
+- Naming tools on PATH is not enough. zlib's generated Makefile narrows
+  the environment partway through, so the compiles succeed and the
+  archive step then cannot find its archiver. Absolute paths for CC, AR,
+  RANLIB and libtool.
+- zlib's configure writes the Darwin archiver into the Makefile by name
+  and ignores AR from the environment entirely. A variable on the make
+  command line is the one place it cannot ignore.
+
+**On GLib.** It is in the list because OptionsGTK asks for it, not
+because WebCore does. A Quartz port should not need it - GLib arrives
+through the GTK port's platform layer - but that is an assumption, and
+an expensive one if wrong: GLib wants meson, Python and a great deal of
+POSIX that Darwin 9 does not have. Worth settling early rather than
+discovering at the end.
+
+The estimate this produces: the dependency phase is days, not hours, and
+the port layer after it is still the months the plan says. What has
+changed is that the number is now made of named pieces rather than a
+guess.
