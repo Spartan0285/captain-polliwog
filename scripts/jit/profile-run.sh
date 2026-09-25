@@ -16,6 +16,13 @@
 # only falls back to killing if that does not work, in which case the
 # profile is lost and the script says so.
 #
+# The running-check matches the accounting name exactly (ps -axco command,
+# grep -x) and not the full command line. This script's own command line
+# contains .../MacOS/CaptainPolliwog, in the cp that installs the binary, so
+# a grep over full command lines matches the script itself: the first
+# version reported "it did not quit; killing it, which loses the profile"
+# about an app that had already quit cleanly and written 3826 profiles.
+#
 # Usage:
 #   profile-run.sh <host> <variant> <url> [seconds]
 #     e.g. profile-run.sh pbg4 leopard-g4-jit-pgo https://en.wikipedia.org/ 120
@@ -72,20 +79,20 @@ ssh -o ConnectTimeout=90 "$HOST" "
     i=0
     while [ \$i -lt $SECONDS_TO_RUN ]; do
         sleep 5; i=\$((i + 5))
-        if ! ps -axww | grep -q '[M]acOS/CaptainPolliwog'; then
+        if ! ps -axco command | grep -qx CaptainPolliwog; then
             echo \"==> app exited on its own after \${i}s\"; break
         fi
     done
 
-    ps -axww -o rss,command | awk '/MacOS\/[C]aptainPolliwog/ { printf \"==> memory %d MB\n\", \$1 / 1024 }'
+    ps -axco pid,rss,command | awk '\$3 == \"CaptainPolliwog\" { printf \"==> memory %d MB\n\", \$2 / 1024 }'
 
     # A Quit Apple Event, not a signal: the atexit handler is the only
     # thing that writes the profile out.
-    if ps -axww | grep -q '[M]acOS/CaptainPolliwog'; then
+    if ps -axco command | grep -qx CaptainPolliwog; then
         echo '==> asking it to quit'
         osascript -e 'tell application \"Captain Polliwog\" to quit' 2>/dev/null || true
         j=0
-        while ps -axww | grep -q '[M]acOS/CaptainPolliwog'; do
+        while ps -axco command | grep -qx CaptainPolliwog; do
             sleep 3; j=\$((j + 3))
             if [ \$j -ge 60 ]; then
                 echo '==> it did not quit; killing it, which loses the profile'
