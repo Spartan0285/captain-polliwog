@@ -59,42 +59,86 @@ fetch() {   # fetch <url> <file>
     fi
 }
 
-echo "=== zlib"
-fetch https://zlib.net/fossils/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz
-rm -rf zlib-1.3.1 && tar xf zlib-1.3.1.tar.gz && cd zlib-1.3.1
-CHOST=$HOST ./configure --prefix=$P --static
-# zlib's configure writes the Darwin archiver into the Makefile by name
-# and ignores AR from the environment, so it is overridden on the make
-# command line, where a variable beats the Makefile's own assignment.
-make -j4 AR="$LIBTOOL" ARFLAGS="-o" RANLIB="$RANLIB"
-sudo make install AR="$LIBTOOL" ARFLAGS="-o" RANLIB="$RANLIB"
-cd ..
 
-echo "=== libpng"
-fetch https://download.sourceforge.net/libpng/libpng-1.6.43.tar.gz libpng-1.6.43.tar.gz
-rm -rf libpng-1.6.43 && tar xf libpng-1.6.43.tar.gz && cd libpng-1.6.43
-./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
-    --with-zlib-prefix=$P CPPFLAGS="-I$P/include" LDFLAGS="$LINK -L$P/lib"
-make -j4 && sudo make install
-cd ..
+# Every component is gated, so one that has been fixed can be re-run on its
+# own: ONLY="libjpeg-turbo sqlite" bash build-252-deps.sh. With ONLY unset
+# the whole list builds, in dependency order. This matters because these
+# take ten minutes to reach the end of the list and each new component
+# tends to need two or three attempts to cross-build.
+ONLY=${ONLY:-}
+want() {
+    case " $ONLY " in
+        "  "|*" $1 "*) echo "=== $1"; cd ~/src/deps252 ;;
+        *) return 1 ;;
+    esac
+}
 
-echo "=== pixman"
-fetch https://cairographics.org/releases/pixman-0.42.2.tar.gz pixman-0.42.2.tar.gz
-rm -rf pixman-0.42.2 && tar xf pixman-0.42.2.tar.gz && cd pixman-0.42.2
-# No AltiVec: the G3 has none, and the engine picks its build by processor.
-./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
-    --disable-vmx --disable-arm-simd --disable-gtk --disable-libpng
-make -j4 && sudo make install
-cd ..
+if want zlib; then
+    fetch https://zlib.net/fossils/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz
+    rm -rf zlib-1.3.1 && tar xf zlib-1.3.1.tar.gz && cd zlib-1.3.1
+    CHOST=$HOST ./configure --prefix=$P --static
+    # zlib's configure writes the Darwin archiver into the Makefile by name
+    # and ignores AR from the environment, so it is overridden on the make
+    # command line, where a variable beats the Makefile's own assignment.
+    make -j4 AR="$LIBTOOL" ARFLAGS="-o" RANLIB="$RANLIB"
+    sudo make install AR="$LIBTOOL" ARFLAGS="-o" RANLIB="$RANLIB"
+fi
 
-echo "=== freetype"
-fetch https://download.savannah.gnu.org/releases/freetype/freetype-2.13.2.tar.gz freetype-2.13.2.tar.gz
-rm -rf freetype-2.13.2 && tar xf freetype-2.13.2.tar.gz && cd freetype-2.13.2
-./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
-    --with-zlib=yes --with-png=yes --with-harfbuzz=no --with-brotli=no --with-bzip2=no \
-    CPPFLAGS="-I$P/include" LDFLAGS="$LINK -L$P/lib"
-make -j4 && sudo make install
-cd ..
+if want libpng; then
+    fetch https://download.sourceforge.net/libpng/libpng-1.6.43.tar.gz libpng-1.6.43.tar.gz
+    rm -rf libpng-1.6.43 && tar xf libpng-1.6.43.tar.gz && cd libpng-1.6.43
+    ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
+        --with-zlib-prefix=$P CPPFLAGS="-I$P/include" LDFLAGS="$LINK -L$P/lib"
+    make -j4 && sudo make install
+fi
+
+if want pixman; then
+    fetch https://cairographics.org/releases/pixman-0.42.2.tar.gz pixman-0.42.2.tar.gz
+    rm -rf pixman-0.42.2 && tar xf pixman-0.42.2.tar.gz && cd pixman-0.42.2
+    # No AltiVec: the G3 has none, and the engine picks its build by processor.
+    ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
+        --disable-vmx --disable-arm-simd --disable-gtk --disable-libpng
+    make -j4 && sudo make install
+fi
+
+if want freetype; then
+    fetch https://download.savannah.gnu.org/releases/freetype/freetype-2.13.2.tar.gz freetype-2.13.2.tar.gz
+    rm -rf freetype-2.13.2 && tar xf freetype-2.13.2.tar.gz && cd freetype-2.13.2
+    ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
+        --with-zlib=yes --with-png=yes --with-harfbuzz=no --with-brotli=no --with-bzip2=no \
+        CPPFLAGS="-I$P/include" LDFLAGS="$LINK -L$P/lib"
+    make -j4 && sudo make install
+fi
+
+if want libjpeg-turbo; then
+    fetch https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.0.2/libjpeg-turbo-3.0.2.tar.gz libjpeg-turbo-3.0.2.tar.gz
+    rm -rf libjpeg-turbo-3.0.2 && tar xf libjpeg-turbo-3.0.2.tar.gz && cd libjpeg-turbo-3.0.2
+    # cmake, with the modern toolchain file the 2.52 engine itself uses.
+    # No SIMD: libjpeg-turbo's PowerPC path is AltiVec, and the G3 has none.
+    mkdir -p b && cd b
+    /opt/cmake/bin/cmake -S .. -B . -G "Unix Makefiles" \
+        -DCMAKE_TOOLCHAIN_FILE=/opt/ppc-modern/share/ppc-darwin-modern.cmake \
+        -DCMAKE_INSTALL_PREFIX=$P -DENABLE_SHARED=OFF -DENABLE_STATIC=ON \
+        -DWITH_SIMD=OFF -DCMAKE_BUILD_TYPE=Release
+    make -j4 && sudo make install
+fi
+
+if want sqlite; then
+    fetch https://www.sqlite.org/2024/sqlite-autoconf-3450100.tar.gz sqlite-autoconf-3450100.tar.gz
+    rm -rf sqlite-autoconf-3450100 && tar xf sqlite-autoconf-3450100.tar.gz && cd sqlite-autoconf-3450100
+    ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
+        --disable-readline --disable-editline
+    make -j4 && sudo make install
+fi
+
+if want libxml2; then
+    fetch https://download.gnome.org/sources/libxml2/2.12/libxml2-2.12.5.tar.xz libxml2-2.12.5.tar.xz
+    rm -rf libxml2-2.12.5 && tar xf libxml2-2.12.5.tar.xz && cd libxml2-2.12.5
+    ./configure --host=$HOST --prefix=$P --enable-static --disable-shared \
+        --without-python --without-lzma --with-zlib=$P --without-iconv
+    make -j4 && sudo make install
+fi
 
 echo "=== done $(date)"
-ls -l $P/lib/libz.a $P/lib/libpng16.a $P/lib/libpixman-1.a $P/lib/libfreetype.a 2>/dev/null | awk '{print $5, $9}'
+cd $P/lib && ls -l libz.a libpng16.a libpixman-1.a libfreetype.a libjpeg.a libturbojpeg.a \
+    libsqlite3.a libxml2.a 2>&1 | awk '{print $5, $9}'

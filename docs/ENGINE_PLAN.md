@@ -1892,3 +1892,79 @@ The estimate this produces: the dependency phase is days, not hours, and
 the port layer after it is still the months the plan says. What has
 changed is that the number is now made of named pieces rather than a
 guess.
+
+## 25 September: GLib leaves the list, and CMake's probe was lying
+
+**Eight of the thirteen are built**, all `PPC ppc750`, checked by pulling
+the first object out of each archive rather than trusting the build:
+
+    libz.a 99KB        libpng16.a 281KB    libpixman-1.a 547KB
+    libfreetype.a 812KB libjpeg.a 679KB    libturbojpeg.a 920KB
+    libsqlite3.a 1.8MB  libxml2.a 1.9MB
+
+libjpeg-turbo stopped on what read as its own bug:
+
+    CMake Error at CMakeLists.txt:96 (math):
+      math cannot parse the expression: " * 8"
+
+It is our toolchain file. `CMakeDetermineCompilerABI` links a probe
+*before* `CMAKE_C_STANDARD_LIBRARIES` exists, so the probe gets
+`-nodefaultlibs` with nothing put back in libc's place and cannot resolve
+what `crt1.o` calls - `__cthread_init_routine`, `_exit`, `_errno`. CMake
+prints one line, `ABI info - failed`, and carries on with
+`CMAKE_SIZEOF_VOID_P` **empty**.
+
+That empty value is the dangerous part. Every `if (CMAKE_SIZEOF_VOID_P
+EQUAL 8)` becomes a false that is accidentally correct on a 32-bit
+target, so nothing complains - the 604 engine has been building through
+this for weeks. Only arithmetic notices, and libjpeg-turbo multiplies it
+by eight to name the build. The failure had been silent because the wrong
+answer and the right answer agree here.
+
+The fix is `-lSystem` in `PPC_LINK_FLAGS`, duplicating what the standard
+libraries line already carries. Position does not matter: ld64 binds
+undefined symbols against any dylib on the command line, unlike a static
+archive. `ABI info - done`, `32-bit build (powerpc)`.
+
+`build-252-deps.sh` now gates each component, because the list is only
+going to get longer and reaching its end takes ten minutes:
+
+```bash
+ONLY="libjpeg-turbo sqlite" bash build-252-deps.sh
+```
+
+The gate is `if want X; then ... fi` and not `want X && { ... }`, which
+would have quietly turned `set -e` off inside every component.
+
+**GLib comes off the list.** The assumption was right, and the source
+says so rather than the build system:
+
+- Every `<glib*>` include in WebCore outside the port directories sits
+  behind `#if USE(GLIB)`. There are exactly three - `LocalizedStrings.h`,
+  `WorkerRunLoop.cpp`, `IDBSerialization.cpp` - plus the `accessibility/
+  atspi` tree, which is AT-SPI, is Linux's accessibility bus, and is not
+  in a Quartz port's source list.
+- WTF's 30 glib files are listed by `PlatformGTK.cmake`, not by WTF
+  itself, and the generic implementations they replace are all present:
+  `RunLoopGeneric.cpp`, `WorkQueueGeneric.cpp`, `MainThreadGeneric.cpp`,
+  `FileSystemPOSIX.cpp`.
+- There is a switch for it. `EVENT_LOOP_TYPE` picks `USE_GLIB_EVENT_LOOP`
+  or `USE_GENERIC_EVENT_LOOP`, which is how our own jsc-252 already
+  builds without GLib.
+- `platform/graphics/cairo` includes no glib at all. The graphics layer
+  we want does not come attached to the event loop we do not.
+
+The honest caveat: no shipping port builds WebCore with `USE_GLIB=0`, so
+those guards are exercised by nobody's CI and we will find gaps in them.
+But a gap is a compile error to fix one at a time, which is not the same
+kind of problem as cross-building GLib, GObject and GIO for Darwin 9 -
+meson, a native glib for its own tooling, and a great deal of POSIX this
+target does not have.
+
+**Twelve, then.** Five left: Fontconfig, HarfBuzz, WebP, Cairo,
+LibGcrypt and Tasn1 - six, counting the pair WebCrypto needs as two.
+Fontconfig stays despite being the un-Mac-like choice: the GTK port's
+font cache is `FontCacheFreeType.cpp` and is Fc-shaped throughout, and a
+Core Text backend is the 604 port's amount of work, not a first
+milestone's. Native text is a thing to earn later, after something
+renders at all.

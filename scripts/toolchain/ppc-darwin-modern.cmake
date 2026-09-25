@@ -53,7 +53,20 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 set(PPC_RUNTIME /opt/ppc-modern/runtime)
 # -L the runtime, so that -latomic (which WebKit's configure links by name)
 # finds the shared one that is shipped rather than nothing at all.
-set(PPC_LINK_FLAGS "-nodefaultlibs -static-libgcc -L${PPC_RUNTIME} -Wl,-no_function_starts,-no_data_in_code_info,-no_version_load_command,-no_source_version")
+#
+# -lSystem is here as well as in CMAKE_C_STANDARD_LIBRARIES_INIT below,
+# because CMake's own compiler probes link before the standard libraries
+# exist. CMakeDetermineCompilerABI runs while CMAKE_C_STANDARD_LIBRARIES is
+# still unset, so with -nodefaultlibs and nothing to take libc's place the
+# probe cannot resolve what crt1.o calls (__cthread_init_routine, _exit,
+# _errno) and fails. The failure is quiet: CMake prints one "ABI info -
+# failed" line and carries on with CMAKE_SIZEOF_VOID_P empty, which turns
+# every "EQUAL 8" into a false that happens to be correct here and every
+# arithmetic use of it into a syntax error. libjpeg-turbo multiplies it by
+# eight to name the build, and that is where it finally surfaced.
+# Position does not matter: ld64 binds undefined symbols against any dylib
+# on the command line, unlike a static archive.
+set(PPC_LINK_FLAGS "-nodefaultlibs -static-libgcc -L${PPC_RUNTIME} -lSystem -Wl,-no_function_starts,-no_data_in_code_info,-no_version_load_command,-no_source_version")
 foreach (_section __text_cold __text_startup __text_exit __text_hot)
     set(PPC_LINK_FLAGS "${PPC_LINK_FLAGS} -Wl,-rename_section,__TEXT,${_section},__TEXT,__text")
 endforeach ()
