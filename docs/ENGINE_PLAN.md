@@ -2124,3 +2124,25 @@ started failing the moment the fonts were fixed. It was testing the
 font, not the stack. Ligatures are now reported and not required, and
 the check that replaced it is that advances vary between glyphs, which
 is false only for a shaper handing back a default width.
+
+### The dependency phase's exit exam
+
+An archive that exists is not the same as one WebKit can find. The last
+check drives 2.52's own `Find*.cmake` modules, through the cross
+toolchain, at the version floors `OptionsGTK.cmake` asks for
+(`engine/tests/depprobe/CMakeLists.txt`):
+
+    FOUND:   Cairo;Fontconfig;Freetype;HarfBuzz;JPEG;PNG;WebP;LibXml2;
+             SQLite3;ZLIB;LibGcrypt;Tasn1;ICU
+    MISSING:
+
+Thirteen for thirteen. The dependency phase is closed.
+
+Configuring the GTK port itself stops on the first line of
+`FindGLib.cmake`, which is worth recording because it is the other half
+of the GLib argument: WebCore does not need GLib, and `OptionsGTK.cmake`
+cannot proceed a single step without it. The port that comes next is
+ours to write, not GTK's to borrow, and that was always the shape of
+spike C - what has changed is that everything underneath it now exists,
+for this processor, for this operating system, in one C++ runtime, and
+draws text on a PowerBook.
