@@ -2204,3 +2204,35 @@ microbenchmark set is a pipeline working, not a browser getting faster.
 The next pass trains on Speedometer itself, in the browser, which
 removes the whole class of coverage mismatch by construction: the
 training workload and the target workload become the same thing.
+
+### Tiger, at last: the text stack on a Pismo
+
+The PowerBook G3 came back, so the half of this that had only ever been
+checked on Leopard could finally be checked on the system it was fixed
+for. 10.4.11, PowerBook3,1, 1GB, `hw.vectorunit` 0 -- no AltiVec, which
+is the hardest target here. Every stage passed:
+
+    fontconfig sees fonts          192 fonts
+    serif       -> Times           /System/Library/Fonts/Times.dfont
+    sans-serif  -> Helvetica Neue
+    monospace   -> Monaco
+    ligatures                      13 glyphs for 14 (ligature formed)
+    glyphs reached the surface     1722 of 25200 pixels
+
+This is what the whole `no_leopard_extensions()` exercise was for. Every
+one of those `open$UNIX2003`, `realpath$DARWIN_EXTSN` and `__memcpy_chk`
+references would have bound lazily and taken the process down at the
+first call; the static check against the 10.4 SDK said they were gone,
+and the machine now agrees.
+
+Three things it settled that Leopard could not:
+
+- **`.dfont` works.** Tiger's Times is a resource-fork suitcase, not a
+  `.ttf`, and FreeType opened it with the face index fontconfig gave.
+- **The generic-family fallbacks are right.** `monospace` resolved to
+  Monaco rather than Menlo, which is 10.6 and does not exist here. The
+  list was written long enough to survive that without being asked to.
+- **A ligature formed**, 13 glyphs for 14, where Leopard's Times New
+  Roman produced none. Two systems, same code, different typography --
+  which is exactly why requiring a ligature was withdrawn as a test. It
+  would have failed here for being right.
