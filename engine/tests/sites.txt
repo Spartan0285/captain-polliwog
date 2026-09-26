@@ -1,0 +1,44 @@
+# Sites for scripts/crash-survey.sh: a spread of what a real person opens,
+# weighted towards the heavy ones, because a browser that renders a blog
+# but falls over on webmail is not one anyone can use.
+#
+# Only loaded, never signed into: nothing here is typed in or submitted.
+# Gmail's basic HTML view is included because that is where the first
+# crash came from; without a session it will land on a sign-in page, which
+# still exercises the same style and layout paths that trapped.
+#
+# Lines beginning with # are ignored.
+
+# --- webmail and applications, the heaviest DOM work
+https://mail.google.com/mail/u/0/h/
+https://outlook.live.com/
+https://app.fastmail.com/
+
+# --- news and long articles, lots of text and images
+https://www.macrumors.com/
+https://news.ycombinator.com/
+https://en.wikipedia.org/wiki/PowerPC
+https://lite.cnn.com/
+https://text.npr.org/
+
+# --- video and media, where the accelerator and external player matter
+https://www.youtube.com/
+https://vimeo.com/
+
+# --- shopping and search, script heavy and full of trackers
+https://lite.duckduckgo.com/lite/?q=powerpc
+https://www.amazon.com/
+https://www.ebay.com/
+
+# --- developer and reference, the sites this project itself uses
+https://github.com/
+https://developer.mozilla.org/en-US/docs/Web/CSS
+https://stackoverflow.com/
+
+# --- retro and small sites, the ones this browser exists for
+https://www.macintoshrepository.org/
+https://68kmla.org/
+https://tenfourfox.blogspot.com/
+
+# --- known-hard layout: heavy CSS and long tables
+https://browserbench.org/
