@@ -41,9 +41,13 @@ SLUG=$(echo "$APP" | tr 'A-Z ' 'a-z-')
 OUT="build/survey/$SLUG"
 mkdir -p "$OUT/crashes"
 
+# APP_PATH surveys a bundle that is not installed in /Applications -- a
+# release candidate unpacked somewhere harmless, say, so the copy the
+# machine's owner actually uses is left alone.
+APP_PATH=${APP_PATH:-/Applications/$APP.app}
 DOMAIN=$(ssh -n -o ConnectTimeout=60 "$HOST" \
-    "defaults read '/Applications/$APP.app/Contents/Info' CFBundleIdentifier 2>/dev/null" | tr -d '\r')
-[ -n "$DOMAIN" ] || { echo "no $APP.app in /Applications on $HOST" >&2; exit 1; }
+    "defaults read '$APP_PATH/Contents/Info' CFBundleIdentifier 2>/dev/null" | tr -d '\r')
+[ -n "$DOMAIN" ] || { echo "no bundle at $APP_PATH on $HOST" >&2; exit 1; }
 echo "==> $APP on $HOST  (defaults domain: $DOMAIN)"
 printf '%-46s %-9s %-8s %s\n' site load memory result
 printf -- '---------------------------------------------------------------------------\n'
@@ -61,7 +65,7 @@ while IFS= read -r url; do
     # this loop is reading, so the first site consumes the rest of the file
     # and the survey silently tests exactly one page.
     result=$(ssh -n -o ConnectTimeout=90 "$HOST" "
-        A='/Applications/$APP.app'
+        A='$APP_PATH'
         S=/tmp/polliwog-snapshot.png
         killall CaptainPolliwog 2>/dev/null; sleep 2
         rm -f \$S
