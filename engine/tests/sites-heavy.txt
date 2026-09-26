@@ -1,0 +1,13 @@
+# The script-heavy pages, for scripts/crash-survey.sh with a long DWELL.
+#
+# These are the ones that finish loading and then keep working: timers,
+# animations, XHR, layer flushes, style recalculation. The first crash this
+# was written for happened in exactly that phase, under
+# LayerFlushController, on a page that had already reported itself loaded.
+# A survey that quits on load cannot see any of it.
+https://mail.google.com/mail/u/0/h/
+https://www.youtube.com/
+https://vimeo.com/
+https://github.com/
+https://www.amazon.com/
+https://outlook.live.com/
