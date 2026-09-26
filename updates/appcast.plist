@@ -214,6 +214,75 @@ Smaller things.
 			<key>version</key>
 			<string>0.3.3</string>
 		</dict>
+		<dict>
+			<key>length</key>
+			<integer>70289769</integer>
+			<key>minimumSystemVersion</key>
+			<string>10.4</string>
+			<key>notes</key>
+			<string>Captain Polliwog 0.3.4
+
+New
+
+- A sidebar for your tabs, on Shift-Command-L. Favicons, titles, and a
+  close cross on the row you are pointing at.
+- A Reader button appears in the address bar when a page is worth
+  reading that way, and not when it is not.
+- A history window on Command-Y, searchable, with the last two thousand
+  pages.
+- Close every tab and you land on Top Sites and your favourites rather
+  than an empty window. If you would rather not have Top Sites, there is
+  now a switch for it in Preferences.
+- The keyboard shortcuts from Safari: Command-1 to 9 for tabs,
+  Command-0, Command-Shift-[ and ] to move between them, Control-Tab,
+  Command-O to open a file, Command-J for downloads, and a Develop menu
+  with Option-Command-U for the page source.
+
+Fixed
+
+- A crash while reading webmail. Style invalidation walked a stack of
+  ancestor elements and, in a case Gmail produces, popped it past the
+  bottom and read an element that was not there. Found by leaving pages
+  running for ten minutes at a time; the browser had been closing them
+  too quickly to notice.
+- Cookies on Tiger. The engine asked for a property of a cookie that
+  10.4 has never had, which stopped it partway through the list, so
+  whether a cookie reached a page depended on where it happened to sit.
+  This does not give Tiger HttpOnly protection - that system cannot
+  represent the flag at all - but it no longer loses cookies over it.
+- The address bar is the same colour as the rest of the toolbar again,
+  on both Tiger and Leopard, including the strip behind the text while
+  you are typing in it.
+- The offer to download VLC for PowerPC works again. VideoLAN moved that
+  file behind two redirects to a mirror; it now comes from the master
+  host directly.
+
+Faster
+
+- About six per cent on Speedometer 3.1, from four fixes to
+  JavaScriptCore's baseline JIT: arithmetic profiling that was being
+  written and never read, inline cache sizes that were wrong for this
+  processor, the "in" operator compiled properly for every kind of
+  array, and a call into libm that was corrupting our own stack frame.
+- The engine is now chosen by your processor as well as your system, so
+  a G4 gets the build made for a G4.
+
+Known
+
+- You cannot sign in to a Google account. Google's sign-in needs BigInt,
+  which this engine does not have and cannot be given without a newer
+  one. Work on that newer engine is under way and is a long road.
+- Some large sites use a lot of memory - Vimeo can reach a gigabyte on a
+  page left open. Keep an eye on it if your Mac has 512MB or less.</string>
+			<key>sha256</key>
+			<string>781270fe6d9912c352895691f8925979b2c0628b4bfb0a951576d9917767a8bb</string>
+			<key>signature</key>
+			<string>fYR/11qVmgCK59lqgjVBMLPo4BMqRRdjArYdR7pyx9s8qYO9qMX5PLe2SqkXquezNelh5gW3p1GFbYSj85nSBA==</string>
+			<key>url</key>
+			<string>https://github.com/Spartan0285/captain-polliwog/releases/download/v0.3.4/CaptainPolliwog-0.3.4.zip</string>
+			<key>version</key>
+			<string>0.3.4</string>
+		</dict>
 	</array>
 </dict>
 </plist>
