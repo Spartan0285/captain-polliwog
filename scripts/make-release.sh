@@ -52,10 +52,15 @@ rm -rf "$APP/Contents/Frameworks"
 ditto -x -k "$HOME/polliwog-build/stage/$LEOPARD/Frameworks.zip" "$APP/Contents"
 
 echo "==> Tiger engine ($TIGER) -> Frameworks-10.4"
+# package-webkit.sh already names the Tiger output Frameworks-10.4 inside
+# the zip, where the Leopard one is plain Frameworks. Take whichever
+# directory is actually in there rather than assuming either.
 rm -rf "$APP/Contents/Frameworks-10.4"
 tmp=$(mktemp -d)
 ditto -x -k "$HOME/polliwog-build/stage/$TIGER/Frameworks.zip" "$tmp"
-mv "$tmp/Frameworks" "$APP/Contents/Frameworks-10.4"
+inner=$(ls "$tmp")
+[ -d "$tmp/$inner" ] || { echo "nothing usable in the $TIGER zip" >&2; exit 1; }
+mv "$tmp/$inner" "$APP/Contents/Frameworks-10.4"
 rm -rf "$tmp"
 
 for d in Frameworks Frameworks-10.4; do
