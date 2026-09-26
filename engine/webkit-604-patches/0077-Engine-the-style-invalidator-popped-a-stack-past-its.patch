@@ -1,0 +1,75 @@
+From f035fcd0e98b36d923957a9c17e35e5c00c36912 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Fri, 25 Sep 2026 22:48:55 -0400
+Subject: [PATCH] Engine: the style invalidator popped a stack past its bottom
+
+Invalidator::invalidateStyleForTree walks a subtree keeping a stack of
+ancestors, and when it moves sideways or upwards it pops that stack until
+the top is the current element's parent:
+
+    while (parentStack.last() != parent) {
+        parentStack.removeLast();
+
+The outer test three lines above guards last() with isEmpty(). This one
+does not. If the parent is not on the stack at all, the loop empties it
+and then asks an empty Vector for its last element, which computes an
+index of zero minus one.
+
+GCC's -fisolate-erroneous-paths, which -O2 turns on, sees that the index
+can underflow and replaces the path with a trap, so the process dies
+cleanly at a known address rather than reading whatever lies before the
+buffer. That is how it was found: a PowerBook G4 took SIGTRAP inside this
+function with a signed-in Gmail message on screen, and the disassembly
+around the faulting address computes size - 1 and size - 2 and branches
+to the trap when the size is zero.
+
+Both engine builds contain that trap, so this is not something an
+optimisation introduced. WebKit 2.52 still writes the loop the same way,
+so it is not an upstream fix that was missed either: the invariant has
+simply held everywhere anyone ran it.
+
+Stopping at the bottom of the stack costs nothing when the invariant
+holds, and when it does not it leaves the selector filter's stack in step
+with the traversal's, since both now stop together. A stale filter for
+the remainder of a subtree is a wrong style at worst; the alternative is
+an out-of-bounds read.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ Source/WebCore/style/StyleInvalidator.cpp | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/Source/WebCore/style/StyleInvalidator.cpp b/Source/WebCore/style/StyleInvalidator.cpp
+index 31432ba8..71d80041 100644
+--- a/Source/WebCore/style/StyleInvalidator.cpp
++++ b/Source/WebCore/style/StyleInvalidator.cpp
+@@ -156,7 +156,25 @@ void Invalidator::invalidateStyleForTree(Element& root, SelectorFilter* filter)
+                 if (filter)
+                     filter->pushParent(parent);
+             } else {
+-                while (parentStack.last() != parent) {
++                // The stack is popped until it reaches this element's parent,
++                // on the understanding that the parent is always somewhere on
++                // it. When that does not hold the loop empties the stack and
++                // then asks an empty Vector for its last element, which is an
++                // index of zero minus one.
++                //
++                // GCC sees that and turns the path into a trap, so instead of
++                // reading whatever lies before the buffer it crashes cleanly
++                // in Invalidator::invalidateStyleForTree - which is what a
++                // PowerBook G4 did while a signed-in Gmail message was on
++                // screen. WebKit 2.52 still has the loop written this way, so
++                // this is not a fix that arrived upstream and was missed; the
++                // invariant simply held everywhere it was tried.
++                //
++                // Stopping at the bottom of the stack keeps the traversal's
++                // own bookkeeping consistent with the selector filter's,
++                // because both stop together, and turns a crash into at worst
++                // a stale filter for the rest of this subtree.
++                while (!parentStack.isEmpty() && parentStack.last() != parent) {
+                     parentStack.removeLast();
+                     if (filter)
+                         filter->popParent();
+-- 
+2.54.0 (Apple Git-157)
+

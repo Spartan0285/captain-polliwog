@@ -26,6 +26,13 @@ HOST=${1:?usage: crash-survey.sh host app-name [sites-file] [seconds]}
 APP=${2:?usage: crash-survey.sh host app-name [sites-file] [seconds]}
 SITES=${3:-engine/tests/sites.txt}
 PER_SITE=${4:-75}
+# How long to let the page sit after it finishes loading, still running.
+# Not idle time: a loaded page keeps flushing layers, recalculating style
+# and running timers, and the first crash this harness was built for
+# happened there rather than during the load. Quitting the moment the
+# snapshot appears scores that page "ok" and sees nothing -- which is what
+# it did for Gmail, where the snapshot fired on the loading splash.
+DWELL=${DWELL:-0}
 
 cd "$(dirname "$0")/.."
 [ -f "$SITES" ] || { echo "no site list at $SITES" >&2; exit 1; }
@@ -66,6 +73,12 @@ while IFS= read -r url; do
         while [ \$i -lt $PER_SITE ]; do
             sleep 3; i=\$((i + 3))
             [ -f \$S ] && break
+            ps -axco command | grep -qx CaptainPolliwog || break
+        done
+        # Sit on the loaded page, watching for it to die.
+        d=0
+        while [ \$d -lt $DWELL ]; do
+            sleep 5; d=\$((d + 5))
             ps -axco command | grep -qx CaptainPolliwog || break
         done
         mem=\$(ps -axco pid,rss,command | awk '\$3 == \"CaptainPolliwog\" { printf \"%dMB\", \$2/1024 }')
