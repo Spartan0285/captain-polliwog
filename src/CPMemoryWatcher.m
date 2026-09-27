@@ -6,10 +6,15 @@
 #import "CPSettings.h"
 #import "CPHTTPCache.h"
 #import "CPDebugSnapshot.h"
+#import "CPAppDelegate.h"
 #include <mach/mach.h>
 
 #define CPCheckInterval   20.0
 #define CPMinimumInterval 60.0
+// Rounds of cache-emptying and tab-discarding to try before giving up and
+// stopping the foreground page's scripts. Three, at a minute apart, so a
+// page that is merely slow to settle is never silenced.
+#define CPReliefsBeforeStoppingScripts 3
 
 static BOOL CPReadVMStatistics(vm_statistics_data_t *statistics)
 {
@@ -27,6 +32,16 @@ static unsigned long long CPFreeMemoryFloor(void)
     default:                    return 48ULL * 1024 * 1024;
     }
 }
+
+// WebCoreStatistics is WebKit's own class, with no header in the 10.4 SDK
+// to import, so its methods are declared here and the class is looked up by
+// name. Everything below checks respondsToSelector before calling: a build
+// of WebKit without it must keep working, just with less to release.
+@interface CPWebCoreStatistics : NSObject
++ (size_t)javaScriptObjectsCount;
++ (void)garbageCollectJavaScriptObjects;
++ (void)purgeInactiveFontData;
+@end
 
 @interface CPMemoryWatcher (Private)
 - (void)check:(NSTimer *)aTimer;
@@ -51,6 +66,10 @@ static unsigned long long CPFreeMemoryFloor(void)
     else if (freeBytes < CPFreeMemoryFloor())
         [self relieveMemoryPressure:[NSString stringWithFormat:@"only %.0f MB free",
                                      (double)freeBytes / (1024.0 * 1024.0)]];
+    else if (freeBytes > CPFreeMemoryFloor() * 4)
+        // Comfortable again: forget that we were ever struggling, so a quiet
+        // hour does not leave the escalation primed for the next page.
+        consecutiveReliefs = 0;
 }
 
 @end
@@ -96,6 +115,9 @@ static unsigned long long CPFreeMemoryFloor(void)
 - (void)relieveMemoryPressure:(NSString *)reason
 {
     Class webCache = NSClassFromString(@"WebCache");
+    Class stats = NSClassFromString(@"WebCoreStatistics");
+    size_t before = 0;
+    unsigned discarded;
 
     if (![[CPSettings sharedSettings] releasesMemoryUnderPressure])
         return;
@@ -111,8 +133,45 @@ static unsigned long long CPFreeMemoryFloor(void)
         [webCache performSelector:@selector(empty)];
     [CPHTTPCache emptyMemoryCache];
 
-    if (CPDebugLogging())
-        NSLog(@"Captain Polliwog: freed WebKit's memory cache (%@)", reason);
+    consecutiveReliefs++;
+
+    // Background tabs next. Every one that can go, not just enough to meet
+    // the tab budget: under this much pressure the budget is not what is
+    // binding. This deliberately calls the delegate's pressure-specific
+    // method and not enforceLiveTabLimit, which relieves pressure itself and
+    // would call straight back into here.
+    discarded = [(CPAppDelegate *)[NSApp delegate] discardBackgroundTabsUnderMemoryPressure];
+
+    // Only now is collecting worth the pause. A discarded tab's objects stay
+    // reachable until its WebView is gone, which is why running the collector
+    // on its own achieved nothing measurable on Vimeo: the million Arrays it
+    // holds are not garbage while the page is alive.
+    if ([stats respondsToSelector:@selector(javaScriptObjectsCount)])
+        before = [(Class)stats javaScriptObjectsCount];
+    if ([stats respondsToSelector:@selector(garbageCollectJavaScriptObjects)])
+        [(Class)stats garbageCollectJavaScriptObjects];
+    // Glyphs for fonts nothing is drawing with any more. Small next to the
+    // heap, but free.
+    if ([stats respondsToSelector:@selector(purgeInactiveFontData)])
+        [(Class)stats purgeInactiveFontData];
+
+    // Still here after three rounds of all that, so the page in front is the
+    // one eating the machine and nothing we own will get it back. Stop its
+    // scripts; it is the last thing short of being killed.
+    if (consecutiveReliefs >= CPReliefsBeforeStoppingScripts) {
+        if ([(CPAppDelegate *)[NSApp delegate] stopScriptsInForegroundTabsUnderMemoryPressure])
+            consecutiveReliefs = 0;
+    }
+
+    if (CPDebugLogging()) {
+        size_t after = [stats respondsToSelector:@selector(javaScriptObjectsCount)]
+                     ? [(Class)stats javaScriptObjectsCount] : 0;
+        NSLog(@"Captain Polliwog: released memory (%@); %u tabs discarded; "
+               "JavaScript objects %lu -> %lu; round %u",
+              reason, discarded, (unsigned long)before, (unsigned long)after,
+              consecutiveReliefs);
+
+    }
 }
 
 @end

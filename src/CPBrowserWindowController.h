@@ -97,3 +97,10 @@
 - (IBAction)reopenClosedTab:(id)sender;
 
 @end
+
+// The strip along the bottom, used for link targets and load progress, and
+// by CPAppDelegate to say why a page had its scripts stopped. Implemented in
+// the private category in the .m, declared here so other files can call it.
+@interface CPBrowserWindowController (CPStatusLine)
+- (void)setStatusText:(NSString *)text;
+@end

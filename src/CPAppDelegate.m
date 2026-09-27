@@ -438,6 +438,67 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
         [[CPMemoryWatcher sharedWatcher] relieveMemoryPressure:@"tabs were over the memory budget"];
 }
 
+// Everything that is not being looked at. enforceLiveTabLimit above stops at
+// the tab budget because it is enforcing a budget; this one is answering a
+// machine that is already paging, where the budget is beside the point.
+//
+// The rules about what may go are the same, and they matter: never the tab a
+// window is showing, and never one still loading, which would throw away
+// work in progress and very likely be reloaded seconds later.
+- (unsigned)discardBackgroundTabsUnderMemoryPressure
+{
+    unsigned discarded = 0;
+    unsigned windowIndex, index;
+
+    for (windowIndex = 0; windowIndex < [browserWindows count]; windowIndex++) {
+        CPBrowserWindowController *window = [browserWindows objectAtIndex:windowIndex];
+        NSArray *windowTabs = [window tabs];
+        for (index = 0; index < [windowTabs count]; index++) {
+            CPTab *tab = [windowTabs objectAtIndex:index];
+            if ([tab isDiscarded] || tab == [window selectedTab] || [tab isLoading])
+                continue;
+            [tab discard];
+            discarded++;
+        }
+    }
+    return discarded;
+}
+
+// The end of the line. A page that has survived three rounds of emptying
+// caches, discarding every other tab and collecting is holding the memory
+// itself, on purpose, in its own Arrays and Objects - Vimeo reaches 1.7GB on
+// a 2GB G4 doing exactly that - and there is nothing left for us to release.
+//
+// So stop it running. The page stays on screen and stays readable; what it
+// loses is everything that would have happened next. That is a poor outcome
+// and it is better than the one it replaces, which is the system killing the
+// application with no crash report and the person losing every window.
+//
+// Deliberately not permanent: CPTab sets JavaScript from CPSiteSettings each
+// time it loads a URL, so a reload or a click to somewhere else starts the
+// page over with scripts on.
+- (BOOL)stopScriptsInForegroundTabsUnderMemoryPressure
+{
+    BOOL stoppedAny = NO;
+    unsigned windowIndex;
+
+    for (windowIndex = 0; windowIndex < [browserWindows count]; windowIndex++) {
+        CPBrowserWindowController *window = [browserWindows objectAtIndex:windowIndex];
+        CPTab *tab = [window selectedTab];
+        WebView *webView = [tab webView];
+        WebPreferences *preferences = [webView preferences];
+
+        if (webView == nil || ![preferences isJavaScriptEnabled])
+            continue;
+        [preferences setJavaScriptEnabled:NO];
+        [window setStatusText:@"Scripts on this page were stopped to free memory. Reload to run them again."];
+        stoppedAny = YES;
+        NSLog(@"Captain Polliwog: stopped scripts in the front tab to free memory (%@)",
+              [tab URL]);
+    }
+    return stoppedAny;
+}
+
 // Debugging: once a minute, what WebKit holds -- the JavaScript heap, live
 // objects by type, global objects (one per frame), cached pages and fonts --
 // to tell a leak in a page from one in the engine or the app.

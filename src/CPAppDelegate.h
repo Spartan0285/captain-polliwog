@@ -29,6 +29,19 @@
 - (void)enforceLiveTabLimit;
 - (void)scheduleLiveTabLimit;
 
+// Called by CPMemoryWatcher, in that order, as pressure persists. Neither
+// calls back into the watcher: enforceLiveTabLimit relieves pressure the
+// other way round and these are what the watcher itself runs.
+//
+// Discards every background tab that can go, rather than enough to meet the
+// tab budget. Returns how many went.
+- (unsigned)discardBackgroundTabsUnderMemoryPressure;
+// Turns JavaScript off in the tab each window is showing, which is the last
+// thing left when the page in front is the one filling the machine. Returns
+// YES if any page was still running scripts to stop. Loading anything turns
+// them back on, because CPTab asks CPSiteSettings on every load.
+- (BOOL)stopScriptsInForegroundTabsUnderMemoryPressure;
+
 - (IBAction)newWindow:(id)sender;
 - (IBAction)newTab:(id)sender;
 - (IBAction)showDownloads:(id)sender;
