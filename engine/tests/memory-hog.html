@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Memory hog</title>
+<!--
+  A page that fills memory on purpose, for testing CPMemoryWatcher's
+  escalation.
+
+  Three real sites were tried first and none of them was a usable test.
+  Vimeo reached 1.7GB one run and 1.1GB the next, and on the run where it
+  mattered the ordinary fifteen-second script watchdog cut it short before
+  the machine was ever under pressure. A test that depends on what a website
+  feels like doing today cannot show whether a fix works.
+
+  So this does the same thing Vimeo does - holds a growing pile of Arrays
+  and Objects that stay reachable, which is why collecting them does nothing
+  - but at a rate we choose, and it keeps a note of how far it has got in
+  the title so the state is visible in a screenshot.
+
+  Two knobs in the query string:
+    ?mb=8      roughly how many megabytes to add each second
+    ?busy=0    milliseconds of solid work per tick, to give the script time
+               limit something to catch; 0 means allocate and yield
+-->
+<style>
+  body { font: 14px -apple-system, "Lucida Grande", sans-serif; margin: 2em; }
+  #n { font-size: 2em; font-weight: bold; }
+  .note { color: #555; max-width: 34em; }
+</style>
+</head>
+<body>
+<p class="note">Allocating on purpose. This page is a test instrument, not a bug.</p>
+<p><span id="n">0</span> MB held, <span id="objects">0</span> objects</p>
+<p class="note" id="state">starting</p>
+<script>
+(function () {
+    var params = {};
+    location.search.replace(/[?&]([^=&]+)=([^&]*)/g, function (_, k, v) { params[k] = v; });
+    var perSecond = parseInt(params.mb || "8", 10);
+    var busyMs = parseInt(params.busy || "0", 10);
+
+    // Reachable from this array for as long as the page lives, which is the
+    // whole point: a garbage collector cannot take any of it.
+    var held = [];
+    var objects = 0;
+    var megabytes = 0;
+
+    function block() {
+        // About a megabyte of live objects, in the shape a page really makes
+        // them: small objects in an array, each with a string and a number.
+        var chunk = [];
+        for (var i = 0; i < 4096; i++) {
+            chunk.push({ id: i, label: "row " + i + " of a table nobody asked for",
+                         when: new Date().getTime(), flag: (i & 1) === 0 });
+        }
+        objects += 4097;
+        return chunk;
+    }
+
+    function spin(ms) {
+        var until = new Date().getTime() + ms;
+        var x = 0;
+        while (new Date().getTime() < until) { x += Math.sqrt(x + 1); }
+        return x;
+    }
+
+    function tick() {
+        for (var i = 0; i < perSecond; i++) {
+            held.push(block());
+            megabytes++;
+        }
+        if (busyMs > 0)
+            spin(busyMs);
+        document.getElementById("n").firstChild.nodeValue = String(megabytes);
+        document.getElementById("objects").firstChild.nodeValue = String(objects);
+        document.title = megabytes + " MB held - memory hog";
+        document.getElementById("state").firstChild.nodeValue =
+            "adding " + perSecond + " MB a second" +
+            (busyMs > 0 ? ", " + busyMs + "ms of work a tick" : "");
+    }
+
+    setInterval(tick, 1000);
+    tick();
+})();
+</script>
+</body>
+</html>
