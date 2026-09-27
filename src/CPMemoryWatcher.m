@@ -7,6 +7,7 @@
 #import "CPHTTPCache.h"
 #import "CPDebugSnapshot.h"
 #import "CPAppDelegate.h"
+#import "CPScriptWatchdog.h"
 #include <mach/mach.h>
 
 #define CPCheckInterval   20.0
@@ -15,6 +16,9 @@
 // stopping the foreground page's scripts. Three, at a minute apart, so a
 // page that is merely slow to settle is never silenced.
 #define CPReliefsBeforeStoppingScripts 3
+// How long the machine has to stay comfortable before the escalation is
+// forgotten and scripts are allowed to run normally again.
+#define CPRecoveryInterval 120.0
 
 static BOOL CPReadVMStatistics(vm_statistics_data_t *statistics)
 {
@@ -66,10 +70,16 @@ static unsigned long long CPFreeMemoryFloor(void)
     else if (freeBytes < CPFreeMemoryFloor())
         [self relieveMemoryPressure:[NSString stringWithFormat:@"only %.0f MB free",
                                      (double)freeBytes / (1024.0 * 1024.0)]];
-    else if (freeBytes > CPFreeMemoryFloor() * 4)
-        // Comfortable again: forget that we were ever struggling, so a quiet
-        // hour does not leave the escalation primed for the next page.
+    else if (freeBytes > CPFreeMemoryFloor() * 4 &&
+             (lastRelief == nil || -[lastRelief timeIntervalSinceNow] > CPRecoveryInterval)) {
+        // Comfortable for long enough to believe it. The interval matters:
+        // discarding a tab frees memory for a moment, and an immediate reset
+        // let the escalation be undone by the very thing that was working.
+        // Measured, it went round 1, round 1, round 1 and took five minutes
+        // to reach round 2.
         consecutiveReliefs = 0;
+        [CPScriptWatchdog setEmergencyTimeLimit:NO];
+    }
 }
 
 @end

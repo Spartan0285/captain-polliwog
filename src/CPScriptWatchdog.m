@@ -22,9 +22,23 @@ typedef void (*CPJSSetExecutionTimeLimitFunction)(CPJSContextGroupRef group, dou
 // comes near this.
 #define CPScriptTimeLimit 15.0
 
+// What the limit becomes when the machine is running out of memory. Short
+// enough that anything doing work is stopped, not zero: a page still has to
+// be able to answer a click.
+#define CPEmergencyTimeLimit 0.25
+
+// Kept so the limit can be changed after it is first set. The group is
+// shared by every page, which is why installing once is enough.
+static CPJSSetExecutionTimeLimitFunction gSetLimit = NULL;
+static CPJSContextGroupRef gGroup = NULL;
+static BOOL gEmergency = NO;
+
 static bool CPStopLongScript(CPJSContextRef context, void *info)
 {
-    NSLog(@"Captain Polliwog: stopped a script that ran for more than %.0f seconds", CPScriptTimeLimit);
+    if (gEmergency)
+        NSLog(@"Captain Polliwog: stopped a script to free memory");
+    else
+        NSLog(@"Captain Polliwog: stopped a script that ran for more than %.0f seconds", CPScriptTimeLimit);
     return true;
 }
 
@@ -52,7 +66,21 @@ static bool CPStopLongScript(CPJSContextRef context, void *info)
         context = (CPJSContextRef)[frame performSelector:@selector(globalContext)];
     if (context == NULL)
         return;
-    setLimit(getGroup(context), CPScriptTimeLimit, CPStopLongScript, NULL);
+    gSetLimit = setLimit;
+    gGroup = getGroup(context);
+    setLimit(gGroup, CPScriptTimeLimit, CPStopLongScript, NULL);
+}
+
++ (void)setEmergencyTimeLimit:(BOOL)emergency
+{
+    if (gSetLimit == NULL || gGroup == NULL || emergency == gEmergency)
+        return;
+    gEmergency = emergency;
+    gSetLimit(gGroup, emergency ? CPEmergencyTimeLimit : CPScriptTimeLimit,
+              CPStopLongScript, NULL);
+    NSLog(@"Captain Polliwog: script time limit now %.2fs%@",
+          emergency ? CPEmergencyTimeLimit : CPScriptTimeLimit,
+          emergency ? @" (memory)" : @" (normal)");
 }
 
 @end

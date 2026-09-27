@@ -16,4 +16,18 @@
 // Idempotent: every page shares one JavaScript engine, so once is enough.
 + (void)installForWebView:(WebView *)webView;
 
+// Cuts the limit to a fraction of a second, so that any script which runs at
+// all is stopped, and puts it back again.
+//
+// This is what "stopping a page" actually needs. Turning JavaScript off in a
+// WebView's preferences governs whether a page may start running scripts; it
+// does not touch the timers a loaded page has already scheduled, which was
+// measured: after the front tab had its scripts "stopped", its JavaScript
+// objects still went from 2,812,342 to 3,194,334.
+//
+// The limit belongs to the context group, which every page shares, so this
+// is not selective - under memory pressure that is the intent, and by the
+// time it is reached every other tab has been discarded anyway.
++ (void)setEmergencyTimeLimit:(BOOL)emergency;
+
 @end

@@ -14,6 +14,7 @@
 #import "CPDebugSnapshot.h"
 #import "CPTab.h"
 #import "CPMemoryWatcher.h"
+#import "CPScriptWatchdog.h"
 #import "CPBookmarksController.h"
 #import "CPHTTPCache.h"
 #import "CPHistoryWindow.h"
@@ -490,7 +491,11 @@ static NSMenu *CPAddSubmenu(NSMenu *mainMenu, NSString *title)
 
         if (webView == nil || ![preferences isJavaScriptEnabled])
             continue;
+        // Both halves are needed and neither is enough. The preference stops
+        // the page starting anything new; the time limit stops what it has
+        // already scheduled, which the preference does not touch.
         [preferences setJavaScriptEnabled:NO];
+        [CPScriptWatchdog setEmergencyTimeLimit:YES];
         [window setStatusText:@"Scripts on this page were stopped to free memory. Reload to run them again."];
         stoppedAny = YES;
         NSLog(@"Captain Polliwog: stopped scripts in the front tab to free memory (%@)",
