@@ -33,7 +33,15 @@ LABEL=${3:?usage: speedometer.sh host app-name label [minutes]}
 # is too short does not fail loudly; it just reports no score, which is how
 # fourteen minutes of G4 time were spent proving nothing.
 MINUTES=${4:-30}
+# Speedometer's default is ten iterations of all twenty suites, which this
+# G4 does not finish inside thirty minutes. For comparing two builds that is
+# not needed: both get the same count, and the comparison is as sound with
+# three. A score measured this way is NOT comparable with the full-run
+# figures in ENGINE_PLAN (median 0.444) - only with another run at the same
+# count. Set ITERATIONS= empty for a full, comparable run.
+ITERATIONS=${ITERATIONS-3}
 URL='https://browserbench.org/Speedometer3.1/?startAutomatically=true'
+[ -n "$ITERATIONS" ] && URL="$URL&iterationCount=$ITERATIONS"
 
 cd "$(dirname "$0")/../.."
 OUT=build/speedometer
