@@ -33,7 +33,7 @@ DOMAIN=$(ssh -n -o ConnectTimeout=60 "$HOST" \
 echo "==> $LABEL: $URL for $MINUTES minutes"
 ssh -n -o ConnectTimeout=90 "$HOST" "
     killall CaptainPolliwog 2>/dev/null; sleep 3
-    defaults write '$DOMAIN' CPDebugLogging -bool YES
+    defaults write '$DOMAIN' CPDebugLog -bool YES
     defaults write '$DOMAIN' CPDebugURL '$URL'
     marker=\$(date +%s)
     open \"$APPPATH\"
@@ -54,5 +54,5 @@ ssh -n -o ConnectTimeout=90 "$HOST" "
     sleep 3
     ps -axco command | grep -qx CaptainPolliwog && killall CaptainPolliwog 2>/dev/null
     defaults delete '$DOMAIN' CPDebugURL 2>/dev/null
-    defaults delete '$DOMAIN' CPDebugLogging 2>/dev/null
+    defaults delete '$DOMAIN' CPDebugLog 2>/dev/null
     true" | tee "$OUT/$LABEL.txt"

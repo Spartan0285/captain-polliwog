@@ -54,6 +54,7 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 - (BOOL)isEditingAddress;
 - (NSURL *)URLFromUserInput:(NSString *)input;
 - (void)writeDebugSnapshot;
+- (void)runDebugScriptAgain;
 @end
 
 @implementation CPBrowserWindowController (Private)
@@ -420,6 +421,20 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         if (script != nil && ![selectedTab isDiscarded]) {
             NSString *result = [[selectedTab webView] stringByEvaluatingJavaScriptFromString:script];
             NSLog(@"Captain Polliwog: script result: %@", result);
+            // CPDebugScriptInterval: run it again every so many seconds and
+            // log each answer.
+            //
+            // A benchmark's score does not exist when the page finishes
+            // loading; Speedometer's arrives nine minutes later. The way that
+            // used to be read was a screenshot taken over ssh, and
+            // screencapture run from an ssh session writes no file and prints
+            // no error, so every run of the comparison produced a picture of
+            // nothing and no score at all.
+            if ([[NSUserDefaults standardUserDefaults] integerForKey:@"CPDebugScriptInterval"] > 0)
+                [self performSelector:@selector(runDebugScriptAgain)
+                           withObject:nil
+                           afterDelay:(double)[[NSUserDefaults standardUserDefaults]
+                                               integerForKey:@"CPDebugScriptInterval"]];
         }
     }
 
@@ -436,6 +451,21 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         else
             NSLog(@"Captain Polliwog: quality lookup: not a page to ask about");
     }
+}
+
+// Keeps evaluating CPDebugScript until the page goes away, so something that
+// only appears later - a benchmark's score - can still be read.
+- (void)runDebugScriptAgain
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSString *script = [defaults stringForKey:@"CPDebugScript"];
+    int interval = (int)[defaults integerForKey:@"CPDebugScriptInterval"];
+
+    if (script == nil || interval <= 0 || [selectedTab isDiscarded])
+        return;
+    NSLog(@"Captain Polliwog: script result: %@",
+          [[selectedTab webView] stringByEvaluatingJavaScriptFromString:script]);
+    [self performSelector:@selector(runDebugScriptAgain) withObject:nil afterDelay:(double)interval];
 }
 
 @end

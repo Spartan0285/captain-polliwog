@@ -39,7 +39,7 @@ for u in "$@"; do EXTRA="$EXTRA '$u'"; done
 echo "==> $LABEL: $(($# + 1)) tabs for $MINUTES minutes"
 ssh -n -o ConnectTimeout=90 "$HOST" "
     killall CaptainPolliwog 2>/dev/null; sleep 3
-    defaults write '$DOMAIN' CPDebugLogging -bool YES
+    defaults write '$DOMAIN' CPDebugLog -bool YES
     defaults write '$DOMAIN' CPDebugURL '$FIRST'
     open \"$APPPATH\"
     sleep 45
@@ -65,5 +65,5 @@ ssh -n -o ConnectTimeout=90 "$HOST" "
     sleep 4
     ps -axco command | grep -qx CaptainPolliwog && killall CaptainPolliwog 2>/dev/null
     defaults delete '$DOMAIN' CPDebugURL 2>/dev/null
-    defaults delete '$DOMAIN' CPDebugLogging 2>/dev/null
+    defaults delete '$DOMAIN' CPDebugLog 2>/dev/null
     true" | tee "$OUT/$LABEL.txt"
