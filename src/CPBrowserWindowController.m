@@ -55,6 +55,7 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 - (NSURL *)URLFromUserInput:(NSString *)input;
 - (void)writeDebugSnapshot;
 - (void)runDebugScriptAgain;
+- (void)askYouTubeAgain;
 @end
 
 @implementation CPBrowserWindowController (Private)
@@ -885,7 +886,29 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 // still gets the 360p they would have got anyway.
 - (void)handOffYouTubeAtChosenQuality
 {
+    youTubeAttempts = 0;
     [self setStatusText:@"Asking YouTube which qualities it has..."];
+    [CPYouTubeFormats resolveInWebView:[[self selectedTab] webView] delegate:self];
+}
+
+// Asked too early, so ask again.
+//
+// The first answer after a page settles is often no answer at all: YouTube
+// replies with playabilityStatus ERROR for a second or two while the page is
+// still arranging itself, and a moment later replies properly. Measured on
+// the PowerBook G4 from one page load: the first request came back ERROR and
+// the next, six tenths of a second later, returned the whole ladder.
+//
+// Taking the first answer as final is what made the hand-over fall back to
+// the 360p the page was already playing, which looked like the quality
+// preference being ignored - and looked fixed the moment anything caused a
+// second attempt.
+#define CPYouTubeAttemptLimit 3
+
+- (void)askYouTubeAgain
+{
+    if ([self selectedTab] == nil)
+        return;
     [CPYouTubeFormats resolveInWebView:[[self selectedTab] webView] delegate:self];
 }
 
@@ -913,15 +936,21 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         NSLog(@"Captain Polliwog: quality lookup: %@ [%@] ceiling %up",
               error != nil ? error : @"ok", report, [CPYouTubeFormats advisableHeightCeiling]);
         if ([[NSUserDefaults standardUserDefaults] integerForKey:@"CPDebugYouTubeQuality"] < 2
-            || formats == nil) {
+            && formats != nil) {
             [self setStatusText:nil];
             return;
         }
     }
     if (formats == nil) {
+        if (++youTubeAttempts < CPYouTubeAttemptLimit) {
+            [self setStatusText:@"Asking YouTube which qualities it has..."];
+            [self performSelector:@selector(askYouTubeAgain) withObject:nil afterDelay:1.5];
+            return;
+        }
         // Not an alert. The fallback plays the video, so this is a note about
         // quality and not a failure to do the thing that was asked.
-        NSLog(@"Captain Polliwog: no quality choice on this video (%@); handing over the 360p stream",
+        NSLog(@"Captain Polliwog: no quality choice on this video after %d tries (%@); "
+              @"handing over the 360p stream", youTubeAttempts,
               error != nil ? error : @"no reason given");
         [self setStatusText:@"YouTube would not offer a better quality - playing 360p."];
         media = [CPExternalPlayer playingMediaURLInWebView:webView];

@@ -195,6 +195,9 @@ static NSString * const CPPollScript =
 
     if ([answer hasPrefix:@"ok:"]) {
         NSArray *formats = [self formatsFromJSON:[answer substringFromIndex:3]];
+        if (CPDebugLogging())
+            NSLog(@"Captain Polliwog: the stream list took %.1f seconds",
+                  attempt * CPPollInterval);
         if ([formats count] == 0)
             [self answerDelegate:delegate formats:nil
                            error:@"the answer made no sense" webView:webView];
@@ -215,6 +218,8 @@ static NSString * const CPPollScript =
         return;
     }
     if (attempt >= CPPollLimit) {
+        NSLog(@"Captain Polliwog: gave up on the stream list after %.0f seconds",
+              attempt * CPPollInterval);
         [self answerDelegate:delegate formats:nil
                        error:@"YouTube did not answer in time" webView:webView];
         return;
