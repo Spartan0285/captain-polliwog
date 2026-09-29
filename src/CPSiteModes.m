@@ -137,10 +137,21 @@ static int CPWebKitMajorVersion(void)
     return CPStoredMode([[NSUserDefaults standardUserDefaults] dictionaryForKey:CPSiteModesKey], key) != nil;
 }
 
-// Sites whose desktop version is too much for these Macs, or doesn't work
-// on their engines, where the mobile one does: YouTube's desktop app never
-// shows anything, its mobile site works. Below the person's own choice
-// for a site, above the default for all sites.
+// Sites whose desktop version is too much for these Macs, where the mobile
+// one is not. Below the person's own choice for a site, above the default
+// for all sites.
+//
+// YouTube is here for speed, not because the desktop site fails. Measured
+// on the PowerBook G4 in September 2026: m.youtube.com loads in 12 to 24
+// seconds, www.youtube.com in 112. An older note here said the desktop app
+// "never shows anything", and that is no longer true - it renders, finds
+// its player and plays. It is simply five times slower.
+//
+// It is not the reason YouTube plays at 360p either, which was the obvious
+// suspicion and is wrong: desktop and mobile both report the same
+// available qualities, medium and auto. That limit is the engine having no
+// Media Source Extensions, so YouTube falls back to a single progressive
+// stream, and the progressive stream is 360p wherever you ask from.
 static NSDictionary *CPBuiltInSiteModes(void)
 {
     static NSDictionary *modes = nil;
