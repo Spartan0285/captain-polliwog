@@ -32,6 +32,15 @@ export PKG_CONFIG_LIBDIR=$P/lib/pkgconfig PKG_CONFIG_PATH=
 # work: our ld64 cannot read that SDK's crt1.o, so every configure test that
 # builds a program fails. /opt/ppc/tiger-stubs holds the one stub we need and
 # nothing else, so programs still find crt1.o where they always did.
+# Made here rather than assumed. It went missing once, the link quietly fell
+# through to Leopard's libiconv, and the result refused to load on Tiger -
+# "Incompatible library version", in dyld, before main, on a G3 that had
+# been working ten minutes earlier.
+if [ ! -f /opt/ppc/tiger-stubs/libiconv.2.dylib ]; then
+    sudo mkdir -p /opt/ppc/tiger-stubs
+    sudo cp -a /opt/ppc/SDKs/MacOSX10.4u.sdk/usr/lib/libiconv.2.dylib /opt/ppc/tiger-stubs/
+    sudo ln -sf libiconv.2.dylib /opt/ppc/tiger-stubs/libiconv.dylib
+fi
 LINK="-mmacosx-version-min=10.4 -static-libgcc -L/opt/ppc/tiger-stubs -Wl,-no_function_starts,-no_data_in_code_info,-no_version_load_command,-no_source_version"
 
 mkdir -p ~/src/deps && cd ~/src/deps

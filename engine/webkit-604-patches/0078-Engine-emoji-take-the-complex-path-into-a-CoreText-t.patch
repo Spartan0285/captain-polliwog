@@ -1,0 +1,169 @@
+From 4a43fd2315821facd7f7daa52fd26f7b04fb2012 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Tue, 29 Sep 2026 09:20:32 -0400
+Subject: [PATCH] Engine: emoji take the complex path into a CoreText that
+ cannot survive it
+
+68kmla.org killed the browser on a PowerBook G3 running 10.4.11, every time,
+and a page containing nothing but U+2764 U+FE0F does the same. The crash is
+EXC_BAD_ACCESS at 0x00000000 inside Tiger's CoreText -
+TFontCascade::CreateFallback, reached from the glyph encoder's unmapped
+character run.
+
+characterRangeCodePath sends four things down the complex path that only
+exist to select an emoji presentation: variation selectors, regional
+indicator pairs, skin tone modifiers and tag sequences. On a system with no
+emoji font there is no presentation to select, nothing to tint and no flag
+to draw, so the only thing the complex path achieves there is handing
+CoreText characters no installed font maps. It answers by building a
+fallback and dereferences null.
+
+On 10.4 those four now stay on the simple path, which draws the base
+characters and ignores the rest - all Tiger could ever have drawn. Complex
+scripts Tiger does have fonts for are deliberately untouched: Arabic,
+Devanagari, Thai and Hebrew with points still take the complex path and
+still shape correctly, verified on the G3 after this change.
+
+Font::canRenderCombiningCharacterSequence is guarded the same way and for
+the same reason: it asks CoreText which font it would choose, by the same
+call, and crashes in the same place.
+
+Verified on the Pismo: 68kmla.org loads, a twelve-script probe reports
+"survived all 12", and emoji render as empty boxes rather than taking the
+browser with them.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ .../WebCore/platform/graphics/FontCascade.cpp | 54 +++++++++++++++++--
+ .../platform/graphics/cocoa/FontCocoa.mm      | 28 ++++++++++
+ 2 files changed, 77 insertions(+), 5 deletions(-)
+
+diff --git a/Source/WebCore/platform/graphics/FontCascade.cpp b/Source/WebCore/platform/graphics/FontCascade.cpp
+index 81961d5b..700e5508 100644
+--- a/Source/WebCore/platform/graphics/FontCascade.cpp
++++ b/Source/WebCore/platform/graphics/FontCascade.cpp
+@@ -870,11 +870,40 @@ FontCascade::CodePath FontCascade::characterRangeCodePath(const UChar* character
+                 return Complex;
+             if (supplementaryCharacter < 0x1F1E6) // U+1F1E6 through U+1F1FF Regional Indicator Symbols
+                 continue;
+-            if (supplementaryCharacter <= 0x1F1FF)
++            if (supplementaryCharacter <= 0x1F1FF) {
++                // CP_TIGER: emoji, and 10.4 has no font for any of it.
++                //
++                // Every branch marked CP_TIGER in this function sends the
++                // complex path a character no installed font maps. Tiger's
++                // CoreText answers that by building a fallback, dereferences
++                // null inside TFontCascade::CreateFallback, and takes the
++                // browser with it - EXC_BAD_ACCESS at 0x00000000, reproduced
++                // on a PowerBook G3 running 10.4.11 from a page containing
++                // nothing but U+2764 U+FE0F.
++                //
++                // None of this machinery can be honoured on a system with no
++                // emoji font: a variation selector has no second presentation
++                // to select, a skin tone has nothing to tint, a regional pair
++                // has no flag. The simple path draws the base characters and
++                // ignores the rest, which is all Tiger could ever have drawn.
++                //
++                // Complex scripts that Tiger does have fonts for - Arabic,
++                // Devanagari, Thai, Hebrew - are untouched and still take the
++                // complex path, because they work.
++#if defined(CP_TIGER) && CP_TIGER
++                continue;
++#else
+                 return Complex;
++#endif
++            }
+ 
+-            if (isEmojiFitzpatrickModifier(supplementaryCharacter))
++            if (isEmojiFitzpatrickModifier(supplementaryCharacter)) {
++#if defined(CP_TIGER) && CP_TIGER
++                continue;   // CP_TIGER: see the note on emoji above
++#else
+                 return Complex;
++#endif
++            }
+             if (isEmojiGroupCandidate(supplementaryCharacter)) {
+                 previousCharacterIsEmojiGroupCandidate = true;
+                 continue;
+@@ -882,12 +911,22 @@ FontCascade::CodePath FontCascade::characterRangeCodePath(const UChar* character
+ 
+             if (supplementaryCharacter < 0xE0000)
+                 continue;
+-            if (supplementaryCharacter < 0xE0080) // Tags
++            if (supplementaryCharacter < 0xE0080) { // Tags
++#if defined(CP_TIGER) && CP_TIGER
++                continue;   // CP_TIGER: see the note on emoji above
++#else
+                 return Complex;
++#endif
++            }
+             if (supplementaryCharacter < 0xE0100) // U+E0100 through U+E01EF Unicode variation selectors.
+                 continue;
+-            if (supplementaryCharacter <= 0xE01EF)
++            if (supplementaryCharacter <= 0xE01EF) {
++#if defined(CP_TIGER) && CP_TIGER
++                continue;   // CP_TIGER: see the note on emoji above
++#else
+                 return Complex;
++#endif
++            }
+ 
+             // FIXME: Check for Brahmi (U+11000 block), Kaithi (U+11080 block) and other complex scripts
+             // in plane 1 or higher.
+@@ -897,8 +936,13 @@ FontCascade::CodePath FontCascade::characterRangeCodePath(const UChar* character
+ 
+         if (c < 0xFE00) // U+FE00 through U+FE0F Unicode variation selectors
+             continue;
+-        if (c <= 0xFE0F)
++        if (c <= 0xFE0F) {
++#if defined(CP_TIGER) && CP_TIGER
++            continue;   // CP_TIGER: see the note on emoji below
++#else
+             return Complex;
++#endif
++        }
+ 
+         if (c < 0xFE20) // U+FE20 through U+FE2F Combining half marks
+             continue;
+diff --git a/Source/WebCore/platform/graphics/cocoa/FontCocoa.mm b/Source/WebCore/platform/graphics/cocoa/FontCocoa.mm
+index 4c8b7f21..7e4e000d 100644
+--- a/Source/WebCore/platform/graphics/cocoa/FontCocoa.mm
++++ b/Source/WebCore/platform/graphics/cocoa/FontCocoa.mm
+@@ -767,6 +767,34 @@ bool Font::canRenderCombiningCharacterSequence(const UChar* characters, size_t l
+     if (!addResult.isNewEntry)
+         return addResult.iterator->value;
+ 
++#if defined(CP_TIGER) && CP_TIGER
++    // Tiger cannot be asked this question without falling over.
++    //
++    // What follows hands the sequence to CTLineCreateWithUniCharProvider and
++    // reads back which font CoreText chose. On 10.4 that call dereferences
++    // null inside TFontCascade::CreateFallback when it meets a character no
++    // installed font maps - reproduced on a PowerBook G3 running 10.4.11
++    // loading 68kmla.org, every time: EXC_BAD_ACCESS at 0x00000000, browser
++    // gone, no page.
++    //
++    // There is nothing to guard on our side, because the crash is inside the
++    // create call rather than in what it returns. So 10.4 does not ask, and
++    // takes the font at its word.
++    //
++    // The cost is real and worth stating: a combining sequence this font
++    // cannot actually draw is drawn by it anyway, without its marks, instead
++    // of being handed to a font that could. That is a worse glyph and a live
++    // browser. Leopard is untouched and still asks.
++    //
++    // Compile-time on purpose. This was first written as a runtime check on
++    // kern.osrelease, which looked right and did nothing: sysctlbyname() for
++    // that name returns -1 on 10.4, so the check fell back to its default and
++    // the browser went on crashing. CP_TIGER is what the build already uses
++    // to mark code only 10.4 takes.
++    addResult.iterator->value = true;
++    return true;
++#endif
++
+     RetainPtr<CFTypeRef> fontEqualityObject = platformData().objectForEqualityCheck();
+ 
+     ProviderInfo info = { characters, length, getCFStringAttributes(false, platformData().orientation()) };
+-- 
+2.54.0 (Apple Git-157)
+
