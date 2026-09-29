@@ -13,6 +13,7 @@
 #import "CPAutoFillController.h"
 #import "CPDebugSnapshot.h"
 #import "CPTab.h"
+#import "CPEmojiFont.h"
 #import "CPMemoryWatcher.h"
 #import "CPScriptWatchdog.h"
 #import "CPBookmarksController.h"
@@ -651,6 +652,11 @@ static size_t CPStatisticCount(Class statistics, NSString *name)
     NSString *debugURL = [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugURL"];
     NSArray *debugTabs;
     unsigned index;
+
+    // Before any window, because the first page drawn may want it: neither
+    // Tiger nor Leopard has an emoji font, and a page with a heart in it
+    // draws an empty box without this.
+    [CPEmojiFont activateBundledFont];
 
     if (CPDebugLogging() && [[NSUserDefaults standardUserDefaults] boolForKey:@"CPDebugMemory"])
         [NSTimer scheduledTimerWithTimeInterval:60.0 target:self selector:@selector(logMemoryStatistics:) userInfo:nil repeats:YES];
