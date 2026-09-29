@@ -57,6 +57,11 @@ typedef enum {
 - (void)setUsesCompatibilityScripts:(BOOL)flag;
 - (BOOL)blocksAdsAndTrackers;
 - (void)setBlocksAdsAndTrackers:(BOOL)flag;
+// Lite mode: a page's own scripts run, everyone else's do not, and any of
+// them that settles in for a long stay is stopped. See CPCurlProtocol for
+// what it refuses and CPScriptWatchdog for how long it allows.
+- (BOOL)runsScriptsSparingly;
+- (void)setRunsScriptsSparingly:(BOOL)flag;
 // Video and audio in pages (through the media relay).
 - (BOOL)playsVideo;
 - (void)setPlaysVideo:(BOOL)flag;

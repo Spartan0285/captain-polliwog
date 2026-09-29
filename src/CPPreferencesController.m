@@ -11,6 +11,7 @@
 #import "CPDefaultBrowser.h"
 #import "CPSafeBrowsing.h"
 #import "CPExternalPlayer.h"
+#import "CPScriptWatchdog.h"
 #import "CPTimeMachine.h"
 #import "CPYouTubeFormats.h"
 #import "CPWelcome.h"
@@ -83,6 +84,7 @@ static struct {
     { @"showsAnimatedImages", @"setShowsAnimatedImages:", @"Animate images", @"GIF animations keep the processor busy." },
     { @"webGLEnabled", @"setWebGLEnabled:", @"Allow 3D graphics (WebGL)", @"Slow on these Macs; pages fall back without it." },
     { @"javaScriptEnabled", @"setJavaScriptEnabled:", @"Run JavaScript", @"Most sites need it; Reader never does." },
+    { @"runsScriptsSparingly", @"setRunsScriptsSparingly:", @"Run scripts sparingly (Lite)", @"A site's own scripts only, and none for long." },
     { @"blocksAdsAndTrackers", @"setBlocksAdsAndTrackers:", @"Block ads and trackers", @"Often the heaviest part of a page." },
     { @"playsVideo", @"setPlaysVideo:", @"Play video and audio", @"Takes effect when Captain Polliwog next opens." },
     { @"autoplaysVideo", @"setAutoplaysVideo:", @"Let video play by itself", @"Off, video waits for a click." },
@@ -803,6 +805,11 @@ static struct {
 }
 
 
+- (void)noteScriptLimitChanged
+{
+    [CPScriptWatchdog limitChanged];
+}
+
 - (IBAction)timeMachineDateChanged:(id)sender
 {
     [CPTimeMachine setPreferredDate:[sender dateValue]];
@@ -817,6 +824,10 @@ static struct {
 
 - (IBAction)switchChanged:(id)sender
 {
+    // Lite mode shortens how long a script may run, and that should take hold
+    // now rather than at the next launch.
+    if ([CPSwitches[[sender tag]].setter isEqualToString:@"setRunsScriptsSparingly:"])
+        [self performSelector:@selector(noteScriptLimitChanged) withObject:nil afterDelay:0.0];
     int index = [sender tag];
     BOOL on = [sender state] == NSOnState;
     NSMethodSignature *signature = [[CPSettings sharedSettings] methodSignatureForSelector:NSSelectorFromString(CPSwitches[index].setter)];

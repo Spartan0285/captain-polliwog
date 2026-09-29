@@ -30,4 +30,8 @@
 // time it is reached every other tab has been discarded anyway.
 + (void)setEmergencyTimeLimit:(BOOL)emergency;
 
+// Re-reads the Lite mode setting, so turning it on or off takes hold at once
+// rather than at the next launch.
++ (void)limitChanged;
+
 @end

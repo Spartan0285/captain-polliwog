@@ -34,6 +34,58 @@ static const char *CPBlockedDomains[] = {
     NULL
 };
 
+// Lite mode's rule: a page's own scripts run, everyone else's do not.
+//
+// Most of what makes a modern page heavy on these Macs is not the site's own
+// code but the dozen other people's it invites in - analytics, tags, embeds,
+// consent frameworks - each of which arrives, parses and runs before anything
+// the reader came for. Refusing those leaves the site's own scripts working,
+// which is the difference between this and turning JavaScript off.
+//
+// A request is taken for a script when its address ends in .js, which is
+// nearly all of them, or when the page asked for it with the Accept header
+// WebKit uses for scripts and nothing else looks likelier. Getting this wrong
+// in the cautious direction means something loads that need not have; getting
+// it wrong the other way would break a site, so the test stays narrow.
+static BOOL CPLooksLikeScript(NSURLRequest *request)
+{
+    NSString *path = [[[request URL] path] lowercaseString];
+    NSString *accept = [[request allHTTPHeaderFields] objectForKey:@"Accept"];
+
+    if ([path hasSuffix:@".js"] || [path hasSuffix:@".mjs"])
+        return YES;
+    // WebKit asks for scripts with a bare */* . Documents, stylesheets and
+    // images all name their type, so this does not catch them; an XHR does,
+    // which is why the extension is tried first and this only decides the
+    // rest.
+    return accept != nil && [[accept stringByTrimmingCharactersInSet:
+        [NSCharacterSet whitespaceCharacterSet]] isEqualToString:@"*/*"];
+}
+
+static BOOL CPIsThirdParty(NSURLRequest *request)
+{
+    NSString *host = [[[request URL] host] lowercaseString];
+    NSString *pageHost = [[[request mainDocumentURL] host] lowercaseString];
+    NSRange dot;
+
+    if (host == nil || pageHost == nil || [host isEqualToString:pageHost])
+        return NO;
+    // apple.com and www.apple.com are the same party, and so are images.bbc.
+    // co.uk and bbc.co.uk. Comparing the last two labels is not right for
+    // every registry in the world - co.uk has three - but it errs towards
+    // calling things first-party, which is the safe direction here.
+    dot = [pageHost rangeOfString:@"." options:NSBackwardsSearch];
+    if (dot.location != NSNotFound) {
+        NSRange second = [pageHost rangeOfString:@"." options:NSBackwardsSearch
+                                           range:NSMakeRange(0, dot.location)];
+        NSString *root = second.location != NSNotFound
+            ? [pageHost substringFromIndex:second.location + 1] : pageHost;
+        if ([host isEqualToString:root] || [host hasSuffix:[@"." stringByAppendingString:root]])
+            return NO;
+    }
+    return YES;
+}
+
 static BOOL CPIsBlocked(NSURLRequest *request)
 {
     NSString *host = [[[request URL] host] lowercaseString];
@@ -78,7 +130,9 @@ static BOOL CPIsBlocked(NSURLRequest *request)
 {
     NSCachedURLResponse *cached;
 
-    if ([[CPSettings sharedSettings] blocksAdsAndTrackers] && CPIsBlocked([self request])) {
+    if (([[CPSettings sharedSettings] blocksAdsAndTrackers] && CPIsBlocked([self request]))
+        || ([[CPSettings sharedSettings] runsScriptsSparingly]
+            && CPIsThirdParty([self request]) && CPLooksLikeScript([self request]))) {
         if (CPDebugLogging())
             NSLog(@"Captain Polliwog: blocked %@", [[self request] URL]);
         [[self client] URLProtocol:self didFailWithError:

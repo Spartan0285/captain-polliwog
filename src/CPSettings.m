@@ -22,6 +22,7 @@ static NSString * const CPDownloadsFolderKey   = @"CPDownloadsFolder";
 static NSString * const CPJavaScriptKey        = @"CPJavaScriptEnabled";
 static NSString * const CPCompatibilityKey     = @"CPCompatibilityScripts";
 static NSString * const CPBlocksAdsKey         = @"CPBlocksAdsAndTrackers";
+static NSString * const CPSparingScriptsKey    = @"CPRunsScriptsSparingly";
 static NSString * const CPPlaysVideoKey        = @"CPPlaysVideo";
 static NSString * const CPAutoplayKey          = @"CPAutoplaysVideo";
 static NSString * const CPPlayButtonKey        = @"CPShowsVideoPlayButton";
@@ -86,6 +87,9 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPJavaScriptKey];
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPCompatibilityKey];
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPBlocksAdsKey];
+    // Off by default: it changes how sites behave, and that should be a
+    // choice someone makes rather than one they discover.
+    [defaults setObject:[NSNumber numberWithBool:NO] forKey:CPSparingScriptsKey];
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPPlaysVideoKey];
     [defaults setObject:[NSNumber numberWithBool:NO] forKey:CPAutoplayKey];
     [defaults setObject:[NSNumber numberWithBool:YES] forKey:CPPlayButtonKey];
@@ -205,6 +209,7 @@ static void CPCallWithArgument(id target, NSString *selectorName, unsigned value
 CPBooleanSetting(javaScriptEnabled, setJavaScriptEnabled, CPJavaScriptKey)
 CPBooleanSetting(usesCompatibilityScripts, setUsesCompatibilityScripts, CPCompatibilityKey)
 CPBooleanSetting(blocksAdsAndTrackers, setBlocksAdsAndTrackers, CPBlocksAdsKey)
+CPBooleanSetting(runsScriptsSparingly, setRunsScriptsSparingly, CPSparingScriptsKey)
 CPBooleanSetting(playsVideo, setPlaysVideo, CPPlaysVideoKey)
 CPBooleanSetting(autoplaysVideo, setAutoplaysVideo, CPAutoplayKey)
 CPBooleanSetting(showsVideoPlayButton, setShowsVideoPlayButton, CPPlayButtonKey)

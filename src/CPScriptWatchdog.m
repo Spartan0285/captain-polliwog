@@ -22,6 +22,14 @@ typedef void (*CPJSSetExecutionTimeLimitFunction)(CPJSContextGroupRef group, dou
 // comes near this.
 #define CPScriptTimeLimit 15.0
 
+// What the limit becomes in Lite mode. A page's own scripts do their work in
+// short pieces and never come near this; what it catches is the kind that
+// settles in - a layout that keeps re-measuring itself, a frame loop nobody
+// stops, a parser chewing through something far too large. Three seconds is
+// long enough that nothing ordinary notices and short enough that a G3 is not
+// held for a quarter of a minute.
+#define CPSparingTimeLimit 3.0
+
 // What the limit becomes when the machine is running out of memory. Short
 // enough that anything doing work is stopped, not zero: a page still has to
 // be able to answer a click.
@@ -41,6 +49,12 @@ static bool CPStopLongScript(CPJSContextRef context, void *info)
         NSLog(@"Captain Polliwog: stopped a script that ran for more than %.0f seconds", CPScriptTimeLimit);
     return true;
 }
+
+// Used before it is defined, so declared here: gcc has no idea a class method
+// exists until it has read it.
+@interface CPScriptWatchdog (Private)
++ (double)currentLimit;
+@end
 
 @implementation CPScriptWatchdog
 
@@ -68,7 +82,23 @@ static bool CPStopLongScript(CPJSContextRef context, void *info)
         return;
     gSetLimit = setLimit;
     gGroup = getGroup(context);
-    setLimit(gGroup, CPScriptTimeLimit, CPStopLongScript, NULL);
+    setLimit(gGroup, [self currentLimit], CPStopLongScript, NULL);
+}
+
+// Whichever is shortest of the reasons to be strict.
++ (double)currentLimit
+{
+    if (gEmergency)
+        return CPEmergencyTimeLimit;
+    return [[CPSettings sharedSettings] runsScriptsSparingly]
+        ? CPSparingTimeLimit : CPScriptTimeLimit;
+}
+
+// Called when the setting changes, so it takes effect without a relaunch.
++ (void)limitChanged
+{
+    if (gSetLimit != NULL && gGroup != NULL)
+        gSetLimit(gGroup, [self currentLimit], CPStopLongScript, NULL);
 }
 
 + (void)setEmergencyTimeLimit:(BOOL)emergency
@@ -76,10 +106,9 @@ static bool CPStopLongScript(CPJSContextRef context, void *info)
     if (gSetLimit == NULL || gGroup == NULL || emergency == gEmergency)
         return;
     gEmergency = emergency;
-    gSetLimit(gGroup, emergency ? CPEmergencyTimeLimit : CPScriptTimeLimit,
-              CPStopLongScript, NULL);
+    gSetLimit(gGroup, [self currentLimit], CPStopLongScript, NULL);
     NSLog(@"Captain Polliwog: script time limit now %.2fs%@",
-          emergency ? CPEmergencyTimeLimit : CPScriptTimeLimit,
+          [self currentLimit],
           emergency ? @" (memory)" : @" (normal)");
 }
 
