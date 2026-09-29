@@ -1,5 +1,23 @@
 Captain Polliwog 0.3.5
 
+Emoji
+
+- Pages with emoji in them no longer show empty boxes. Tiger and Leopard
+  are older than emoji, so neither has ever had a font for them; the
+  browser now carries one - Noto Emoji, black and white - and uses it
+  only for itself. Nothing is added to your font book.
+
+  Black and white rather than colour because every colour emoji format
+  was invented years after this engine and none of them would draw here.
+
+- On Tiger, a single emoji could take the browser down. A heart followed
+  by the invisible character that asks for it to be drawn as emoji was
+  enough: the system's text machinery, asked to find a font for a
+  character nothing has, walked off the end of itself. 68kmla.org has
+  exactly that in its footer, which is why it closed the browser every
+  time. Fixed, and the font means those characters now draw properly
+  rather than merely failing safely.
+
 Memory
 
 - Pages that fill memory no longer take the browser down with them. Some
