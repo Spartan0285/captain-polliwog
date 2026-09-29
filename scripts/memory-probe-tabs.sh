@@ -60,7 +60,7 @@ ssh -n -o ConnectTimeout=90 "$HOST" "
     done
     echo '    --- what the watcher did:'
     P=\$(ps -axco pid,command | awk '\$2==\"CaptainPolliwog\"{print \$1}')
-    grep -E 'released memory|stopped scripts|discarded tab' /var/log/system.log | tail -12 | sed 's/^.*Captain Polliwog: /    /'
+    grep -hE 'released memory|stopped scripts|discarded tab' /var/log/system.log /Library/Logs/Console/*/console.log \$HOME/Library/Logs/Console/*/console.log 2>/dev/null | tail -12 | sed 's/^.*Captain Polliwog: /    /'
     osascript -e 'tell application \"Captain Polliwog\" to quit' 2>/dev/null || true
     sleep 4
     ps -axco command | grep -qx CaptainPolliwog && killall CaptainPolliwog 2>/dev/null

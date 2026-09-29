@@ -32,6 +32,10 @@ DOMAIN=$(ssh -n -o ConnectTimeout=60 "$HOST" \
 
 echo "==> $LABEL: $URL for $MINUTES minutes"
 ssh -n -o ConnectTimeout=90 "$HOST" "
+    # Leopard sends NSLog to system.log through ASL; Tiger writes it to
+    # the console log instead. Greping only system.log made every Tiger
+    # machine report no watchdog activity whatever the watchdog did.
+    CPLOGS=\"/var/log/system.log /Library/Logs/Console/*/console.log \$HOME/Library/Logs/Console/*/console.log\"
     killall CaptainPolliwog 2>/dev/null; sleep 3
     defaults write '$DOMAIN' CPDebugLog -bool YES
     defaults write '$DOMAIN' CPDebugURL '$URL'
@@ -47,8 +51,8 @@ ssh -n -o ConnectTimeout=90 "$HOST" "
         printf '    %-7s %-9s %-9s\n' \"\${i}s\" \"\$((rss / 1024))MB\" \"\${free}MB\"
     done
     echo '    --- watchdog:'
-    grep 'freed WebKit' /var/log/system.log 2>/dev/null | tail -3 | sed 's/^/    /' || true
-    n=\$(grep -c 'freed WebKit' /var/log/system.log 2>/dev/null || echo 0)
+    grep -h 'freed WebKit' \$CPLOGS 2>/dev/null | tail -3 | sed 's/^/    /' || true
+    n=\$(grep -hc 'freed WebKit' \$CPLOGS 2>/dev/null | awk '{t+=\$1} END {print t+0}')
     echo \"    cache flushes logged: \$n\"
     osascript -e 'tell application \"Captain Polliwog\" to quit' 2>/dev/null || true
     sleep 3
