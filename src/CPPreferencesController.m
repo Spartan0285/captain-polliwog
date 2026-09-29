@@ -356,9 +356,10 @@ static struct {
             [view addSubview:qualityPopUp];
             [qualityPopUp release];
             top -= 26.0f;
-            CPLabel(view, NSMakeRect(118.0f, top, 350.0f, 26.0f),
-                    [NSString stringWithFormat:@"A choice taller than this Mac should decode is "
-                     @"brought down to %up. YouTube in the browser stays at 360p either way.",
+            CPLabel(view, NSMakeRect(118.0f, top, 350.0f, 32.0f),
+                    [NSString stringWithFormat:@"Brought down to %up on this Mac, and to 360p on "
+                     @"any video over a minute - YouTube serves us no more than that above 360p. "
+                     @"The browser itself stays at 360p either way.",
                      [CPYouTubeFormats advisableHeightCeiling]], YES, NO);
         } else {
             // QuickTime Player takes one stream, and every quality above 360p
@@ -367,6 +368,7 @@ static struct {
                     @"360p only. Above that YouTube sends the picture and the sound separately, "
                     @"which VLC and MPlayer can be handed and QuickTime Player cannot.", YES, NO);
         }
+
     }
     [tabs addTabViewItem:item];
 

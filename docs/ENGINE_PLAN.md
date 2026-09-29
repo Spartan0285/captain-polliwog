@@ -2320,3 +2320,65 @@ would still cap at 480p by TenFourFox's measurements.
 One landmine recorded for whoever tries: `Settings.in:240` defaults
 `maximumSourceBufferSize` to 304MB **per SourceBuffer**. Two buffers is
 608MB of coded frames before eviction. On a 1GB G3 that alone is fatal.
+
+## YouTube above 360p: what is actually in the way
+
+Written down because this project has now twice recorded a wrong reason for
+it, once in the release notes users read.
+
+The wrong reason was Media Source Extensions. MSE decides whether this engine
+can *play* adaptive streams; it has nothing to do with which streams YouTube
+is willing to *name*. The page's own playerResponse carries adaptiveFormats up
+to 1080p with plain unciphered URLs, and every one of them answers 403,
+because the WEB client's formats need a PO token - a BotGuard attestation
+appended as `&pot=` - and BotGuard cannot run here. Progressive itag 18 is
+exempt, which is exactly why 360p works and nothing else does.
+
+That part is solvable. Asking InnerTube as `ANDROID_VR` - the one client with
+no PO token policy and no JS player requirement - returns the whole H.264
+ladder with working addresses, and the request can be made from inside the
+page, which is where the one unforgeable ingredient (visitorData) already is.
+Implemented in CPYouTubeFormats and verified on the PowerBook G4.
+
+**The wall is elsewhere, and it is not ours.** Those addresses serve only the
+first minute or so of a video. Measured on one video, bisected to the byte:
+
+| itag | what it is | readable bytes | seconds |
+|------|------------|----------------|---------|
+| 135  | 480p       | 2,764,932      | 62.2    |
+| 134  | 360p       | 1,828,962      | 63.4    |
+| 133  | 240p       | 981,058        | 66.8    |
+| 140  | AAC 128k   | 1,071,111      | 66.2    |
+| 160  | 144p       | 508,816        | 74.7    |
+| 139  | AAC 48k    | 464,974        | 76.2    |
+
+The limit is on the **end** of the byte range, not the start: a range from
+the middle of the file succeeds if it ends inside the window, and a range
+from zero fails if it ends outside it. This was initially read as "only
+ranges starting at zero", which is wrong and cost an afternoon - that
+appearance came from only ever testing 1MB windows, which straddle the cap.
+
+It does not move with time, it does not advance as the allowed part is read,
+it is not a fraction of the file (the same itag 140 cap applies to a 3 minute
+video and a 4 hour one), and it is not a DASH segment boundary. Re-resolving
+per chunk does not help: every fresh URL has the same window from byte zero.
+Nothing client-side lifts it - `range=`, `rn`, `rbuf`, `cpn`, `alr`, `ump`,
+`sq`, `ratebypass`, `pcm2cms`, client user agents, and every unsigned query
+parameter were each tried and each refused. yt-dlp fails on it too, live.
+
+So above 360p is available only for videos shorter than the window, which is
+what CPYouTubeFormats implements: a video over 55 seconds is handed the
+progressive stream whatever quality was asked for.
+
+The one real gain is that the progressive stream should be resolved through
+the plain `ANDROID` client rather than taken from the page. That URL has no
+`gir`/`clen`, carries `ratebypass=yes`, and accepts arbitrary byte ranges
+anywhere in the file including the tail - so it can be seeked, and it does
+not depend on the page having a usable address, which it increasingly does
+not (the modern web response is SABR-only: adaptiveFormats with neither a
+URL nor a signatureCipher, only a serverAbrStreamingUrl).
+
+Getting better than 360p at full length would need either a real PO token,
+which means running YouTube's BotGuard VM, or SABR - a protobuf-over-UMP
+protocol with no reference implementation in yt-dlp to copy. Neither is worth
+it here.

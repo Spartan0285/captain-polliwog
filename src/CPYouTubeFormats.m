@@ -12,6 +12,8 @@ NSString * const CPFormatVideoURL = @"url";
 NSString * const CPFormatAudioURL = @"audio";
 NSString * const CPFormatLabel    = @"label";
 NSString * const CPFormatBitrate  = @"bitrate";
+NSString * const CPFormatProgressive = @"prog";
+NSString * const CPFormatSeconds = @"secs";
 
 // Pinned on purpose. yt-dlp's own source warns that ANDROID_VR above 1.65
 // "may return SABR streams only" - a streaming protocol with no plain URLs
@@ -49,30 +51,42 @@ static NSString *CPResolveScript(void)
     @"      clientName: 'ANDROID_VR', clientVersion: '" CP_INNERTUBE_CLIENT_VERSION "',"
     @"      hl: 'en', visitorData: vd } },"
     @"    videoId: vid, contentCheckOk: true, racyCheckOk: true });"
-    @"  var xhr = new XMLHttpRequest();"
-    @"  xhr.open('POST', '/youtubei/v1/player?prettyPrint=false', true);"
-    @"  xhr.setRequestHeader('Content-Type', 'application/json');"
-    @"  xhr.onreadystatechange = function () {"
-    @"    if (xhr.readyState !== 4) return;"
+    // Two requests, because no single client answers both halves.
+    // ANDROID_VR is the only one that hands out adaptive URLs; plain ANDROID
+    // is the only one whose progressive itag 18 URL can be read right
+    // through. See the comment on the ladder below for why that matters.
+    @"  var post = function (body, done) {"
+    @"    var x = new XMLHttpRequest();"
+    @"    x.open('POST', '/youtubei/v1/player?prettyPrint=false', true);"
+    @"    x.setRequestHeader('Content-Type', 'application/json');"
+    @"    x.onreadystatechange = function () {"
+    @"      if (x.readyState !== 4) return;"
+    @"      if (x.status !== 200) { done(null, 'YouTube answered ' + x.status); return; }"
+    @"      try { done(JSON.parse(x.responseText), null); }"
+    @"      catch (e) { done(null, 'unreadable answer'); }"
+    @"    };"
+    @"    try { x.send(body); } catch (e) { done(null, 'the request was refused'); }"
+    @"  };"
+    @"  post(body, function (r, failed) {"
     @"    var q = W.__cpQ;"
     @"    if (!q || q.video !== vid) return;"
-    @"    if (xhr.status !== 200) { q.state = 'error'; q.error = 'YouTube answered ' + xhr.status; return; }"
-    @"    var r; try { r = JSON.parse(xhr.responseText); }"
-    @"    catch (e) { q.state = 'error'; q.error = 'unreadable answer'; return; }"
+    @"    if (failed) { q.state = 'error'; q.error = failed; return; }"
     @"    var ps = r.playabilityStatus && r.playabilityStatus.status;"
-    @"    var sd = r.streamingData;"
-    @"    if (!sd || !sd.adaptiveFormats) {"
+    @"    var sd = r.streamingData || {};"
+    @"    var adaptive = sd.adaptiveFormats || [];"
+    @"    if (!adaptive.length) {"
     // UNPLAYABLE here is usually a "made for kids" video, which this client
     // is not allowed to fetch. Reported rather than worked around: the
     // hand-off falls back to the 360p the page is already playing.
-    @"      q.state = 'error';"
-    @"      q.error = (ps === 'UNPLAYABLE') ? 'YouTube will not serve this video to us'"
-    @"                                      : (ps || 'no streams offered');"
-    @"      return;"
+    // Not fatal. The progressive stream below comes from a different client
+    // and often answers when this one will not, and it is the one that plays
+    // to the end anyway.
+    @"      q.why = (ps === 'UNPLAYABLE') ? 'YouTube will not serve the better qualities'"
+    @"                                    : (ps || 'no adaptive streams offered');"
     @"    }"
     @"    var vids = [], auds = [], i;"
-    @"    for (i = 0; i < sd.adaptiveFormats.length; i++) {"
-    @"      var f = sd.adaptiveFormats[i], mt = f.mimeType || '';"
+    @"    for (i = 0; i < adaptive.length; i++) {"
+    @"      var f = adaptive[i], mt = f.mimeType || '';"
     @"      if (!f.url) continue;"
     // H.264 only, and AAC only. These are what QuickTime, VLC and MPlayer
     // all decode on PowerPC; VP9 and Opus would be software-decoded from
@@ -88,19 +102,42 @@ static NSString *CPResolveScript(void)
     @"    vids.sort(function (a, b) {"
     @"      return (b.height - a.height) || ((a.fps || 30) - (b.fps || 30)); });"
     @"    var out = [];"
-    @"    for (i = 0; i < vids.length; i++) {"
+    @"    for (i = 0; audio && i < vids.length; i++) {"
     @"      var v = vids[i];"
     @"      if (i && vids[i - 1].height === v.height) continue;"
     @"      out.push({ height: v.height, fps: v.fps || 30, url: v.url, audio: audio,"
     @"                 label: String(v.height) + 'p' + ((v.fps || 30) > 30 ? String(v.fps) : ''),"
     @"                 bitrate: v.bitrate || 0 });"
     @"    }"
-    @"    if (!out.length) { q.state = 'error'; q.error = 'no H.264 streams offered'; return; }"
-    @"    if (!audio) { q.state = 'error'; q.error = 'no AAC sound offered'; return; }"
-    @"    q.formats = out; q.state = 'ok';"
-    @"  };"
-    @"  try { xhr.send(body); }"
-    @"  catch (e) { W.__cpQ.state = 'error'; W.__cpQ.error = 'the request was refused'; }"
+    @"    var seconds = parseInt((r.videoDetails && r.videoDetails.lengthSeconds) || '0', 10);"
+    // Now the progressive stream, from the plain ANDROID client. This is the
+    // one that can actually be played to the end - see formatsForWebView's
+    // note on the sixty-second wall - so it is always fetched, and it is what
+    // a video longer than that wall is handed.
+    @"    var second = JSON.stringify({ context: { client: {"
+    @"        clientName: 'ANDROID', clientVersion: '21.02.35', androidSdkVersion: 30,"
+    @"        osName: 'Android', osVersion: '11', hl: 'en', gl: 'US' } },"
+    @"      videoId: vid, contentCheckOk: true, racyCheckOk: true });"
+    @"    post(second, function (r2, failed2) {"
+    @"      var q2 = W.__cpQ, i2, f2, prog = '';"
+    @"      if (!q2 || q2.video !== vid) return;"
+    @"      var fs = (r2 && r2.streamingData && r2.streamingData.formats) || [];"
+    @"      for (i2 = 0; i2 < fs.length; i2++) {"
+    @"        f2 = fs[i2];"
+    @"        if (f2.itag === 18 && f2.url) { prog = f2.url; break; }"
+    @"      }"
+    @"      if (prog)"
+    @"        out.unshift({ height: 360, fps: 30, url: prog, audio: '', prog: 1,"
+    @"                      label: '360p', bitrate: 0, secs: seconds });"
+    @"      for (i2 = 0; i2 < out.length; i2++) out[i2].secs = seconds;"
+    @"      if (!out.length) {"
+    @"        q2.state = 'error';"
+    @"        q2.error = q2.why || 'nothing playable offered';"
+    @"        return;"
+    @"      }"
+    @"      q2.formats = out; q2.state = 'ok';"
+    @"    });"
+    @"  });"
     @"  return 'working';"
     @"})()";
 }
@@ -279,7 +316,9 @@ static int CPJSONNumber(NSString *piece, NSString *key)
         int fps = CPJSONNumber(piece, @"fps");
         int bitrate = CPJSONNumber(piece, @"bitrate");
 
-        if ([url length] == 0 || [audio length] == 0 || height <= 0)
+        // A progressive entry has no separate sound, which is the whole
+        // point of it, so only the address and the height are required.
+        if ([url length] == 0 || height <= 0)
             continue;
         [formats addObject:[NSDictionary dictionaryWithObjectsAndKeys:
             [NSNumber numberWithInt:height], CPFormatHeight,
@@ -289,6 +328,8 @@ static int CPJSONNumber(NSString *piece, NSString *key)
             [label length] > 0 ? label
                 : [NSString stringWithFormat:@"%dp", height], CPFormatLabel,
             [NSNumber numberWithInt:bitrate], CPFormatBitrate,
+            [NSNumber numberWithBool:CPJSONNumber(piece, @"prog") != 0], CPFormatProgressive,
+            [NSNumber numberWithInt:CPJSONNumber(piece, @"secs")], CPFormatSeconds,
             nil]];
     }
     return formats;
@@ -320,6 +361,32 @@ static int CPJSONNumber(NSString *piece, NSString *key)
     case 100:           return 1080;    // 970
     default:            return 720;
     }
+}
+
+// How much of a video YouTube will actually let us read above 360p. The
+// shortest wall measured was 62 seconds; this is under it on purpose, because
+// being wrong in the other direction hands someone a video that stops.
+#define CPReadableSeconds 55
+
++ (NSDictionary *)formatToHandOverIn:(NSArray *)formats preferredHeight:(unsigned)wanted
+{
+    NSEnumerator *entries = [formats objectEnumerator];
+    NSDictionary *entry;
+    NSDictionary *progressive = nil;
+    int seconds = 0;
+
+    while ((entry = [entries nextObject]) != nil) {
+        if ([[entry objectForKey:CPFormatProgressive] boolValue] && progressive == nil)
+            progressive = entry;
+        if ([[entry objectForKey:CPFormatSeconds] intValue] > seconds)
+            seconds = [[entry objectForKey:CPFormatSeconds] intValue];
+    }
+    // Long enough that the better qualities would run out partway.
+    if (seconds > CPReadableSeconds && progressive != nil)
+        return progressive;
+    if (seconds > CPReadableSeconds)
+        return nil;     // nothing here can be played to the end
+    return [self formatInFormats:formats closestToHeight:wanted];
 }
 
 + (NSDictionary *)formatInFormats:(NSArray *)formats closestToHeight:(unsigned)wanted

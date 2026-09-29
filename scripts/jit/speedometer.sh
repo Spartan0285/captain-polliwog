@@ -60,6 +60,12 @@ ssh -n -o ConnectTimeout=90 "$HOST" "
     defaults write '$DOMAIN' CPDebugURL '$URL'
     defaults write '$DOMAIN' CPDebugScript -string \"\$(cat /tmp/speedo-probe.js)\"
     defaults write '$DOMAIN' CPDebugScriptInterval -int 15
+    # CPDebugScript is only evaluated from writeDebugSnapshot, which the
+    # window controller only schedules when a snapshot path is set. Without
+    # this the script never runs at all. The app writes this picture itself,
+    # which is the part screencapture could never do from an ssh session.
+    rm -f /tmp/speedo-$LABEL.png
+    defaults write '$DOMAIN' CPDebugSnapshotPath /tmp/speedo-$LABEL.png
     marker=\$(date +%s)
     start=\$(date +%s)
     open '/Applications/$APP.app'
@@ -80,8 +86,12 @@ ssh -n -o ConnectTimeout=90 "$HOST" "
     defaults delete '$DOMAIN' CPDebugURL 2>/dev/null
     defaults delete '$DOMAIN' CPDebugScript 2>/dev/null
     defaults delete '$DOMAIN' CPDebugScriptInterval 2>/dev/null
+    defaults delete '$DOMAIN' CPDebugSnapshotPath 2>/dev/null
     crash=\$(ls -t \$HOME/Library/Logs/CrashReporter/CaptainPolliwog* 2>/dev/null | head -1)
     if [ -n \"\$crash\" ] && [ \$(stat -f %m \"\$crash\") -ge \$start ]; then
         echo '  CRASHED during the run'
     fi
     true"
+
+scp -O -q "$HOST:/tmp/speedo-$LABEL.png" "$OUT/$LABEL.png" 2>/dev/null \
+    && echo "  screen -> $OUT/$LABEL.png" || true

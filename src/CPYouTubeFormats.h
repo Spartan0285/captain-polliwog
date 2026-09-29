@@ -55,7 +55,23 @@
 //   CPFormatAudioURL  NSString, the best AAC stream, same for every entry
 //   CPFormatLabel     NSString, "720p" or "720p60", for a menu
 //   CPFormatBitrate   NSNumber, bits per second, video only
+//   CPFormatProgressive  NSNumber, YES when picture and sound are one
+//                        stream - the only kind that plays to the end
+//   CPFormatSeconds   NSNumber, how long the video is
 + (NSArray *)formatsForWebView:(WebView *)webView;
+
+// The one to hand over, given what someone asked for in Preferences.
+//
+// Above 360p YouTube serves us only the first minute or so: every adaptive
+// URL refuses any byte range ending past roughly sixty seconds of media,
+// whoever asks and however it is asked. Measured across six formats of one
+// video the wall sits at 62.2s, 63.4s, 66.8s, 66.2s, 74.7s and 76.2s, and it
+// does not move with time or with reading the part that is allowed. So a
+// video longer than that gets the progressive stream, whatever quality was
+// asked for, because a picture that stops after a minute is worse than one
+// that is only 360p. A video short enough to fit - a Short, say - can have
+// any quality on the list.
++ (NSDictionary *)formatToHandOverIn:(NSArray *)formats preferredHeight:(unsigned)wanted;
 
 // The tallest format this Mac should be asked to decode, by processor: a G3
 // cannot keep up with 720p even in PowerVLC, and a G5 can take 1080p. Used
@@ -81,3 +97,5 @@ extern NSString * const CPFormatVideoURL;
 extern NSString * const CPFormatAudioURL;
 extern NSString * const CPFormatLabel;
 extern NSString * const CPFormatBitrate;
+extern NSString * const CPFormatProgressive;
+extern NSString * const CPFormatSeconds;

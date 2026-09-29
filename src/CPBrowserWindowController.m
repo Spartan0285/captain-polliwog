@@ -936,16 +936,24 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         wanted = [CPYouTubeFormats advisableHeightCeiling];
     else if (wanted > [CPYouTubeFormats advisableHeightCeiling])
         wanted = [CPYouTubeFormats advisableHeightCeiling];
-    chosen = [CPYouTubeFormats formatInFormats:formats closestToHeight:wanted];
+    chosen = [CPYouTubeFormats formatToHandOverIn:formats preferredHeight:wanted];
     if (chosen == nil) {
+        // Nothing on offer can be played to the end. Better to hand over the
+        // stream the page itself is playing than something that stops.
+        NSString *media = [CPExternalPlayer playingMediaURLInWebView:webView];
         [self setStatusText:nil];
+        if (media != nil)
+            [CPExternalPlayer playMediaURL:media];
         return;
     }
     [self setStatusText:[NSString stringWithFormat:@"Handing %@ to %@...",
         [chosen objectForKey:CPFormatLabel],
         [CPExternalPlayer displayNameForPlayer:[CPExternalPlayer preferredPlayer]]]];
+    // A progressive stream carries its own sound and must not be given a
+    // second one.
     if (![CPExternalPlayer playMediaURL:[chosen objectForKey:CPFormatVideoURL]
-                          withAudioURL:[chosen objectForKey:CPFormatAudioURL]]) {
+                          withAudioURL:[[chosen objectForKey:CPFormatProgressive] boolValue]
+                                       ? nil : [chosen objectForKey:CPFormatAudioURL]]) {
         [self setStatusText:nil];
         NSBeginInformationalAlertSheet(@"Could not open the video", @"OK", nil, nil, [self window],
             nil, NULL, NULL, NULL,
@@ -964,8 +972,9 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
 
     // YouTube has better streams than the one the page is playing, and they
     // have to be fetched before anything can be handed over.
+    // No longer restricted to players that take two streams: the stream this
+    // usually ends up handing over is progressive, which any of them play.
     if (player != nil
-        && [CPExternalPlayer preferredPlayerAcceptsSeparateAudio]
         && [CPYouTubeFormats canResolveInWebView:[[self selectedTab] webView]]) {
         [self handOffYouTubeAtChosenQuality];
         return;
