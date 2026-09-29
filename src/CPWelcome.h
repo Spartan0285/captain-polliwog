@@ -52,4 +52,7 @@ NSImage *CPApplicationIcon(void);
 // browser this Mac came with can no longer reach.
 + (void)downloadVLC;
 
+// Where to send someone who would rather pick a build themselves.
++ (NSString *)VLCReleasesURL;
+
 @end

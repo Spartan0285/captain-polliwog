@@ -13,22 +13,47 @@
 
 static NSString * const CPWelcomeDoneKey = @"CPWelcomeCompleted";
 
-// The last PowerPC build VideoLAN made. 2.0.10 is old, and it is what there
-// is; nothing newer was ever built for these Macs.
+// PowerVLC, which is VLC rebuilt for these processors rather than the last
+// universal binary VideoLAN happened to ship. Separate G3, G4 and G5 builds,
+// and on a G4 it plays 720p, which the 2.0.10 we used to point at does not.
 //
-// download.videolan.org and not get.videolan.org, which is the redirector:
-// it answers 302 to a mirror chosen by geography, and that mirror redirects
-// again. Our own downloads follow redirects -- CPNetworkTask sets
-// CURLOPT_FOLLOWLOCATION for them -- but an emulated guest reaches the web
-// through PowerEmu's forward proxy, which terminates the TLS a 2008 machine
-// cannot, and a proxy that does not follow the hop reports whatever it got
-// as a failure. The file was never missing; it was two redirects away.
-//
-// The master host answers 200 directly, with no redirect and no mirror
-// roulette, and honours range requests, which is what resuming a partial
-// download needs.
-static NSString * const CPVLCDownloadURL =
-    @"https://download.videolan.org/pub/videolan/vlc/2.0.10/macosx/vlc-2.0.10-powerpc.dmg";
+// The releases page is where a person should end up if they want to choose
+// for themselves; the direct asset is what the button downloads, picked to
+// match the processor they are actually running, because a G3 given the
+// AltiVec build gets an illegal instruction and a G5 given the G3 build runs
+// far slower than it needs to.
+static NSString * const CPVLCReleasesURL =
+    @"https://github.com/Olsro/powervlc/releases";
+static NSString * const CPVLCVersion = @"2.1.0";
+static NSString * const CPVLCAssetFormat =
+    @"https://github.com/Olsro/powervlc/releases/download/powervlc-%@/powervlc-%@-mac-%@.zip";
+
+// hw.cpusubtype, which is the only thing that tells a 7400 from a 750 from a
+// 970. hw.vectorunit answers the narrower question of whether AltiVec is
+// present and cannot separate a G4 from a G5.
+static NSString *CPPowerPCVariant(void)
+{
+    int subtype = 0;
+    size_t length = sizeof subtype;
+
+    if (sysctlbyname("hw.cpusubtype", &subtype, &length, NULL, 0) != 0)
+        return nil;
+    switch (subtype) {
+    case 9:                 return @"g3";   // 750
+    case 10: case 11:       return @"g4";   // 7400, 7450
+    case 100:               return @"g5";   // 970
+    default:                return nil;     // not a processor we know
+    }
+}
+
+static NSString *CPVLCDownloadURLForThisMac(void)
+{
+    NSString *variant = CPPowerPCVariant();
+    if (variant == nil)
+        return nil;
+    return [NSString stringWithFormat:CPVLCAssetFormat,
+            CPVLCVersion, CPVLCVersion, variant];
+}
 
 #define WELCOME_W 520.0
 #define WELCOME_H 460.0
@@ -89,9 +114,27 @@ static CPWelcome *sharedWelcome = nil;
 
 + (void)downloadVLC
 {
+    NSString *url = CPVLCDownloadURLForThisMac();
+    NSString *variant = CPPowerPCVariant();
+
+    // A Mac whose processor we cannot name gets the releases page instead of
+    // a guess: better to choose from a list than to be handed the wrong
+    // build and find out when it will not start.
+    if (url == nil) {
+        [[NSApp delegate] performSelector:@selector(openAddress:)
+                              withObject:CPVLCReleasesURL];
+        return;
+    }
     [[CPDownloadsController sharedController]
-        startDownloadWithRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:CPVLCDownloadURL]]
-               suggestedFilename:@"vlc-2.0.10-powerpc.dmg"];
+        startDownloadWithRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:url]]
+               suggestedFilename:[NSString stringWithFormat:@"powervlc-%@-mac-%@.zip",
+                                  CPVLCVersion, variant]];
+}
+
+// For the link beside the button, and for anyone who would rather look.
++ (NSString *)VLCReleasesURL
+{
+    return CPVLCReleasesURL;
 }
 
 + (void)showIfNeeded

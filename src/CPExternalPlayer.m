@@ -10,10 +10,15 @@
 
 static NSString * const CPPreferredPlayerKey = @"CPExternalPlayerPath";
 
-// Best first. The first three decode H.264 with FFmpeg, which on PowerPC
+// Best first. Most of these decode H.264 with FFmpeg, which on PowerPC
 // means AltiVec; QuickTime Player is the one every Mac has and the slowest
 // of them, so it comes last and is never chosen over the others.
+//
+// PowerVLC leads because it is the only one built for these processors
+// rather than merely running on them: separate G3, G4 and G5 builds, and on
+// a G4 it manages 720p, which nothing else here does.
 static NSString * const CPKnownPlayers[] = {
+    @"/Applications/PowerVLC.app",
     @"/Applications/VLC.app",
     @"/Applications/MPlayer OSX Extended.app",
     @"/Applications/MPlayer OSX.app",
@@ -135,7 +140,11 @@ static BOOL CPTakesURLArgument(NSString *bundlePath)
 {
     NSString *identifier = [[[NSBundle bundleWithPath:bundlePath] infoDictionary]
                             objectForKey:@"CFBundleIdentifier"];
+    // PowerVLC is a VLC by behaviour and not by identifier: it ships as
+    // com.github.PowerVLC, which matches neither videolan prefix. Without
+    // this it is handed no address at all and opens to an empty window.
     return [identifier hasPrefix:@"org.videolan"] || [identifier hasPrefix:@"com.videolan"]
+        || [identifier rangeOfString:@"powervlc" options:NSCaseInsensitiveSearch].location != NSNotFound
         || [identifier rangeOfString:@"mplayer" options:NSCaseInsensitiveSearch].location != NSNotFound;
 }
 
