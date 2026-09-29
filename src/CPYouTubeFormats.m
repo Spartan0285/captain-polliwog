@@ -14,6 +14,7 @@ NSString * const CPFormatLabel    = @"label";
 NSString * const CPFormatBitrate  = @"bitrate";
 NSString * const CPFormatProgressive = @"prog";
 NSString * const CPFormatSeconds = @"secs";
+NSString * const CPFormatHLSURL = @"hls";
 
 // Pinned on purpose. yt-dlp's own source warns that ANDROID_VR above 1.65
 // "may return SABR streams only" - a streaming protocol with no plain URLs
@@ -129,13 +130,34 @@ static NSString *CPResolveScript(void)
     @"      if (prog)"
     @"        out.unshift({ height: 360, fps: 30, url: prog, audio: '', prog: 1,"
     @"                      label: '360p', bitrate: 0, secs: seconds });"
-    @"      for (i2 = 0; i2 < out.length; i2++) out[i2].secs = seconds;"
-    @"      if (!out.length) {"
-    @"        q2.state = 'error';"
-    @"        q2.error = q2.why || 'nothing playable offered';"
-    @"        return;"
-    @"      }"
-    @"      q2.formats = out; q2.state = 'ok';"
+    // And the iPhone client, for its HLS manifest. When a video has one it is
+    // the best thing on offer here by a distance: picture and sound in one
+    // stream, H.264 and AAC, up to 1080p, and - unlike the adaptive ladder -
+    // not cut off after a minute. Measured on a 3:32 video, a segment three
+    // and a half minutes in came back whole.
+    //
+    // Only about one video in eight has one, and nothing we send makes it
+    // appear, so this is a bonus rather than the answer.
+    @"      var third = JSON.stringify({ context: { client: {"
+    @"          clientName: 'IOS', clientVersion: '20.10.4', hl: 'en', gl: 'US',"
+    @"          deviceMake: 'Apple', deviceModel: 'iPhone16,2',"
+    @"          osName: 'iPhone', osVersion: '18.3.2.22D82' } },"
+    @"        videoId: vid, contentCheckOk: true, racyCheckOk: true });"
+    @"      post(third, function (r3, failed3) {"
+    @"        var q3 = W.__cpQ, i3;"
+    @"        if (!q3 || q3.video !== vid) return;"
+    @"        var hls = (r3 && r3.streamingData && r3.streamingData.hlsManifestUrl) || '';"
+    @"        for (i3 = 0; i3 < out.length; i3++) {"
+    @"          out[i3].secs = seconds;"
+    @"          out[i3].hls = hls;"
+    @"        }"
+    @"        if (!out.length) {"
+    @"          q3.state = 'error';"
+    @"          q3.error = q3.why || 'nothing playable offered';"
+    @"          return;"
+    @"        }"
+    @"        q3.formats = out; q3.state = 'ok';"
+    @"      });"
     @"    });"
     @"  });"
     @"  return 'working';"
@@ -330,6 +352,7 @@ static int CPJSONNumber(NSString *piece, NSString *key)
             [NSNumber numberWithInt:bitrate], CPFormatBitrate,
             [NSNumber numberWithBool:CPJSONNumber(piece, @"prog") != 0], CPFormatProgressive,
             [NSNumber numberWithInt:CPJSONNumber(piece, @"secs")], CPFormatSeconds,
+            CPJSONString(piece, @"hls") != nil ? CPJSONString(piece, @"hls") : @"", CPFormatHLSURL,
             nil]];
     }
     return formats;
@@ -380,6 +403,14 @@ static int CPJSONNumber(NSString *piece, NSString *key)
             progressive = entry;
         if ([[entry objectForKey:CPFormatSeconds] intValue] > seconds)
             seconds = [[entry objectForKey:CPFormatSeconds] intValue];
+    }
+    // A manifest beats everything else here: muxed, up to 1080p, and not cut
+    // off after a minute the way the separate streams are. Only about one
+    // video in eight has one.
+    entries = [formats objectEnumerator];
+    while ((entry = [entries nextObject]) != nil) {
+        if ([[entry objectForKey:CPFormatHLSURL] length] > 0)
+            return entry;
     }
     // Long enough that the better qualities would run out partway.
     if (seconds > CPReadableSeconds && progressive != nil)

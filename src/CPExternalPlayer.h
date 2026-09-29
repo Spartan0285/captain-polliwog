@@ -53,6 +53,16 @@
 // A nil audioURL behaves exactly like playMediaURL:.
 + (BOOL)playMediaURL:(NSString *)mediaURL withAudioURL:(NSString *)audioURL;
 
+// Opens an adaptive manifest - HLS - in the preferred player, asking it not
+// to climb above maxHeight. Handed over as its own address rather than
+// through the relay: the manifest names its segments by absolute address, so
+// relaying the manifest alone would send the player somewhere it cannot
+// follow, and these players reach googlevideo over TLS perfectly well.
++ (BOOL)playManifestURL:(NSString *)manifestURL maxHeight:(unsigned)maxHeight;
+
+// Whether the preferred player understands an adaptive manifest.
++ (BOOL)preferredPlayerAcceptsManifest;
+
 // Whether the preferred player can take sound as a second stream, and so
 // whether a quality above 360p can be handed to it.
 + (BOOL)preferredPlayerAcceptsSeparateAudio;

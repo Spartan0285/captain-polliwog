@@ -937,6 +937,19 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     else if (wanted > [CPYouTubeFormats advisableHeightCeiling])
         wanted = [CPYouTubeFormats advisableHeightCeiling];
     chosen = [CPYouTubeFormats formatToHandOverIn:formats preferredHeight:wanted];
+
+    // A manifest is handed over whole, with a ceiling, and the player picks
+    // from inside it. This is the one path on YouTube that reaches 720p and
+    // plays to the end, and only some videos have one.
+    if (chosen != nil && [[chosen objectForKey:CPFormatHLSURL] length] > 0
+        && [CPExternalPlayer preferredPlayerAcceptsManifest]) {
+        [self setStatusText:[NSString stringWithFormat:@"Handing up to %up to %@...", wanted,
+            [CPExternalPlayer displayNameForPlayer:[CPExternalPlayer preferredPlayer]]]];
+        if ([CPExternalPlayer playManifestURL:[chosen objectForKey:CPFormatHLSURL]
+                                    maxHeight:wanted])
+            return;
+        // Fall through to the ordinary streams if it would not start.
+    }
     if (chosen == nil) {
         // Nothing on offer can be played to the end. Better to hand over the
         // stream the page itself is playing than something that stops.
@@ -946,9 +959,21 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
             [CPExternalPlayer playMediaURL:media];
         return;
     }
-    [self setStatusText:[NSString stringWithFormat:@"Handing %@ to %@...",
-        [chosen objectForKey:CPFormatLabel],
-        [CPExternalPlayer displayNameForPlayer:[CPExternalPlayer preferredPlayer]]]];
+    // Say when the choice was overruled, and why. Handing over 360p after
+    // someone has asked for 720p, with nothing said, reads as a preference
+    // that does not work - which is exactly how it was reported.
+    {
+        unsigned got = (unsigned)[[chosen objectForKey:CPFormatHeight] intValue];
+        NSString *player = [CPExternalPlayer displayNameForPlayer:[CPExternalPlayer preferredPlayer]];
+        if (got < wanted && [[chosen objectForKey:CPFormatProgressive] boolValue])
+            [self setStatusText:[NSString stringWithFormat:
+                @"Handing %@ to %@ - YouTube serves this browser only the first minute above 360p, "
+                @"and this video is longer than that.",
+                [chosen objectForKey:CPFormatLabel], player]];
+        else
+            [self setStatusText:[NSString stringWithFormat:@"Handing %@ to %@...",
+                [chosen objectForKey:CPFormatLabel], player]];
+    }
     // A progressive stream carries its own sound and must not be given a
     // second one.
     if (![CPExternalPlayer playMediaURL:[chosen objectForKey:CPFormatVideoURL]

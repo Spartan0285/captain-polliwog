@@ -357,9 +357,10 @@ static struct {
             [qualityPopUp release];
             top -= 26.0f;
             CPLabel(view, NSMakeRect(118.0f, top, 350.0f, 32.0f),
-                    [NSString stringWithFormat:@"Brought down to %up on this Mac, and to 360p on "
-                     @"any video over a minute - YouTube serves us no more than that above 360p. "
-                     @"The browser itself stays at 360p either way.",
+                    [NSString stringWithFormat:@"Only takes effect on videos under a minute: above "
+                     @"360p YouTube serves this browser no more than that, so anything longer is "
+                     @"handed over at 360p whatever is chosen here. Also brought down to %up on "
+                     @"this Mac. The browser itself stays at 360p either way.",
                      [CPYouTubeFormats advisableHeightCeiling]], YES, NO);
         } else {
             // QuickTime Player takes one stream, and every quality above 360p

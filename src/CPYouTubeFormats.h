@@ -58,6 +58,8 @@
 //   CPFormatProgressive  NSNumber, YES when picture and sound are one
 //                        stream - the only kind that plays to the end
 //   CPFormatSeconds   NSNumber, how long the video is
+//   CPFormatHLSURL    NSString, a muxed manifest up to 1080p when this
+//                     video has one, which is uncapped - empty when not
 + (NSArray *)formatsForWebView:(WebView *)webView;
 
 // The one to hand over, given what someone asked for in Preferences.
@@ -99,3 +101,4 @@ extern NSString * const CPFormatLabel;
 extern NSString * const CPFormatBitrate;
 extern NSString * const CPFormatProgressive;
 extern NSString * const CPFormatSeconds;
+extern NSString * const CPFormatHLSURL;

@@ -226,6 +226,62 @@ static NSString *CPAudioSlaveFlag(NSString *bundlePath)
     return [self playMediaURL:mediaURL withAudioURL:nil];
 }
 
+// VLC reads HLS and can be told a ceiling; MPlayer of this vintage cannot be
+// relied on to, and QuickTime Player will not take the option at all.
++ (BOOL)preferredPlayerAcceptsManifest
+{
+    NSString *player = [self preferredPlayer];
+    NSString *flag = player != nil ? CPAudioSlaveFlag(player) : nil;
+    return flag != nil && [flag isEqualToString:@"--input-slave="];
+}
+
++ (BOOL)playManifestURL:(NSString *)manifestURL maxHeight:(unsigned)maxHeight
+{
+    NSString *player = [self preferredPlayer];
+    NSMutableDictionary *environment;
+    NSEnumerator *names;
+    NSString *name, *executable;
+    NSTask *task;
+
+    if (player == nil || ![self preferredPlayerAcceptsManifest] || [manifestURL length] == 0)
+        return NO;
+    executable = [[[NSBundle bundleWithPath:player] infoDictionary] objectForKey:@"CFBundleExecutable"];
+    if (executable == nil)
+        return NO;
+
+    environment = [[[[NSProcessInfo processInfo] environment] mutableCopy] autorelease];
+    names = [[environment allKeys] objectEnumerator];
+    while ((name = [names nextObject]) != nil) {
+        if ([name hasPrefix:@"DYLD_"])
+            [environment removeObjectForKey:name];
+    }
+    if (lastLaunched > 0 && kill(lastLaunched, 0) == 0)
+        kill(lastLaunched, SIGTERM);
+    lastLaunched = 0;
+
+    task = [[[NSTask alloc] init] autorelease];
+    [task setLaunchPath:[[player stringByAppendingPathComponent:@"Contents/MacOS"]
+                         stringByAppendingPathComponent:executable]];
+    [task setArguments:[NSArray arrayWithObjects:manifestURL,
+        [NSString stringWithFormat:@"--adaptive-maxheight=%u", maxHeight], nil]];
+    [task setEnvironment:environment];
+    if (CPDebugLogging())
+        NSLog(@"Captain Polliwog: handing a manifest to %@, no taller than %up",
+              [player lastPathComponent], maxHeight);
+    NS_DURING
+        [task launch];
+    NS_HANDLER
+        NSLog(@"Captain Polliwog: %@ would not start: %@", player, [localException reason]);
+        return NO;
+    NS_ENDHANDLER
+    lastLaunched = [task processIdentifier];
+    [self performSelector:@selector(bringForward:)
+               withObject:[NSArray arrayWithObjects:[NSNumber numberWithInt:lastLaunched],
+                                   [NSNumber numberWithInt:0], nil]
+               afterDelay:0.5];
+    return YES;
+}
+
 + (BOOL)playMediaURL:(NSString *)mediaURL withAudioURL:(NSString *)audioURL
 {
     NSString *player = [self preferredPlayer];
