@@ -182,6 +182,17 @@ static NSString *CPEscapeHTML(NSString *text)
         return;
     [preferences setJavaEnabled:NO];
     [preferences setPlugInsEnabled:NO];
+    // The browser's own stylesheet, for the few things that have to hold
+    // whenever an element appears rather than at one moment - the Internet
+    // Archive's banner among them. Set per tab because the preferences
+    // object is per tab; WebKit reads the file itself.
+    {
+        NSString *css = [[NSBundle mainBundle] pathForResource:@"user" ofType:@"css"];
+        if (css != nil) {
+            [preferences setUserStyleSheetLocation:[NSURL fileURLWithPath:css]];
+            [preferences setUserStyleSheetEnabled:YES];
+        }
+    }
     [preferences setJavaScriptCanOpenWindowsAutomatically:NO];
     [preferences setPrivateBrowsingEnabled:[standard privateBrowsingEnabled]];
     [preferences setAllowsAnimatedImages:[standard allowsAnimatedImages]];

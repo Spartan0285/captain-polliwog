@@ -360,10 +360,31 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
         return;
     if (url == nil || [url isEqual:[CPAppDelegate startPageURL]])
         text = @"";
-    else
+    else if ([CPTimeMachine isArchiveURL:url]
+             && [CPTimeMachine originalURLFromArchiveURL:url] != nil) {
+        // A page opened with Time Machine shows the address it is a copy of,
+        // not the archive's own. The real one is forty characters of host,
+        // timestamp and escaping before the part anyone wants to read, and
+        // the address bar is the one place where what a person is looking at
+        // should be legible at a glance.
+        //
+        // The date is not lost: it is on the clock beside this field, which
+        // names it in its tool tip. Typing here and pressing return goes to
+        // the live page, which is the right way out of the past.
+        text = [[CPTimeMachine originalURLFromArchiveURL:url] absoluteString];
+    } else
         text = [url absoluteString];
     if (![[addressField stringValue] isEqualToString:text])
         [addressField setStringValue:text];
+
+    // The clock says whether this page is in the past, and when.
+    if (timeMachineButton != nil) {
+        NSDate *captured = [CPTimeMachine dateFromArchiveURL:url];
+        [timeMachineButton setToolTip:captured != nil
+            ? [NSString stringWithFormat:@"Time Machine - showing %@",
+               [CPTimeMachine describeDate:captured]]
+            : @"Time Machine"];
+    }
 }
 
 - (BOOL)isEditingAddress

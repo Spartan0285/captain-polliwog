@@ -1,0 +1,33 @@
+/* Rules the browser applies to every page, kept deliberately few.
+ *
+ * A user stylesheet is the right tool for something that has to hold whenever
+ * an element appears rather than at one moment: WebKit applies it as the
+ * document is built and again as it changes, so nothing here depends on
+ * catching a page at the right instant.
+ */
+
+/* The Internet Archive's own banner, on pages opened with Time Machine.
+ *
+ * It is injected by the archive's JavaScript some time after the page has
+ * finished loading - a probe run at load found no trace of it, and a
+ * screenshot a moment later showed it in place - so removing it with a script
+ * means guessing when. This does not have to guess. The identifiers belong to
+ * the archive alone and match nothing else on the web.
+ *
+ * What is lost is the capture date it displays; the address bar says that
+ * instead, and says it without costing a hundred pixels at the top of a
+ * 1024x768 screen.
+ */
+#wm-ipp-base,
+#wm-ipp,
+#wm-ipp-print,
+#donato {
+    display: none !important;
+}
+
+/* The archive pushes the page down to make room for that banner, on the
+ * element itself, so hiding it alone would leave the gap behind.
+ */
+body[style*="padding-top"] {
+    padding-top: 0 !important;
+}
