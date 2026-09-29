@@ -1,0 +1,101 @@
+From 315ca4e8a3c7a45cda8feb4ee3f4a8192b307ec8 Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Tue, 29 Sep 2026 11:00:00 -0400
+Subject: [PATCH] Engine: every POST on Tiger went out empty
+
+setHTTPBody(NSMutableURLRequest*, FormData*) reaches through
+-[NSURLRequest _CFURLRequest] to set the body on the CFURLRequest
+underneath. That accessor does not exist on 10.4, so nothing was set and the
+request went out with Content-Length: 0 and no body - silently, and for
+every POST the engine made: every form posted by script, every API call.
+
+It surfaced as YouTube refusing to name its better streams. Asking InnerTube
+for them answered 400 "Precondition check failed" on a PowerBook G3 running
+10.4.11 and 200 on a PowerBook G4 from the same build, the same page and a
+token that worked fine when replayed from another machine. Capturing the
+request on a listener showed the difference plainly: Content-Length: 0 from
+Tiger, 71 bytes from Leopard. Our own network layer then confirmed it from
+the inside - "POST .../youtubei/v1/log_event - body 0 bytes (HTTPBody 0)" on
+10.4 where 10.5 had 3636 bytes in the same place.
+
+So on 10.4 the body goes onto the NSMutableURLRequest directly. Files and
+blobs cannot be flattened - flatten() omits them by design - so a form
+carrying one is handed over as a stream instead, which is the same object
+the CFURLRequest path would have built.
+
+Verified on the Pismo: POSTs now carry their bodies (1301 bytes where there
+were 0), and the stream lookup that could not work at all now returns the
+full ladder.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ .../platform/network/mac/FormDataStreamMac.mm | 46 +++++++++++++++++++
+ 1 file changed, 46 insertions(+)
+
+diff --git a/Source/WebCore/platform/network/mac/FormDataStreamMac.mm b/Source/WebCore/platform/network/mac/FormDataStreamMac.mm
+index 4240ee0a..f96ba003 100644
+--- a/Source/WebCore/platform/network/mac/FormDataStreamMac.mm
++++ b/Source/WebCore/platform/network/mac/FormDataStreamMac.mm
+@@ -32,13 +32,59 @@
+ #if !USE(CFURLCONNECTION)
+ 
+ #import "CFNetworkSPI.h"
++#import "FormData.h"
+ #import "FormDataStreamCFNet.h"
+ 
+ namespace WebCore {
+ 
+ void setHTTPBody(NSMutableURLRequest *request, FormData* formData)
+ {
++#if defined(CP_TIGER) && CP_TIGER
++    // 10.4 has no -[NSURLRequest _CFURLRequest].
++    //
++    // The line below reaches through that private accessor to set the body on
++    // the CFURLRequest underneath. On Tiger the selector does not exist, so
++    // nothing is set and the request goes out empty - with Content-Length: 0
++    // and no body at all, which the server sees as a malformed call rather
++    // than as an error worth explaining.
++    //
++    // This was not a YouTube problem, though that is where it surfaced:
++    // asking InnerTube for the better streams answered 400 "Precondition
++    // check failed" on the Pismo and 200 on the PowerBook G4, from the same
++    // build and the same page. Every POST this engine makes on 10.4 was
++    // affected - every form posted by script, every API call - and all of
++    // them silently.
++    //
++    // Measured, from our own network layer: on 10.4 the requests arrived as
++    // "POST .../youtubei/v1/log_event - body 0 bytes (HTTPBody 0)" where 10.5
++    // had 3636 bytes in the same place.
++    //
++    // So on 10.4 the body is put on the NSMutableURLRequest directly. Files
++    // and blobs cannot be flattened - flatten() omits them by design - so
++    // anything carrying one is handed over as a stream instead, which is the
++    // same object the CF path would have built.
++    if (!formData || formData->isEmpty()) {
++        [request setHTTPBody:nil];
++        return;
++    }
++
++    bool everythingIsInMemory = true;
++    for (size_t i = 0; i < formData->elements().size(); ++i) {
++        if (formData->elements()[i].m_type != FormDataElement::Type::Data) {
++            everythingIsInMemory = false;
++            break;
++        }
++    }
++
++    if (everythingIsInMemory) {
++        Vector<char> bytes;
++        formData->flatten(bytes);
++        [request setHTTPBody:[NSData dataWithBytes:bytes.data() length:bytes.size()]];
++    } else
++        [request setHTTPBodyStream:createHTTPBodyNSInputStream(*formData).get()];
++#else
+     setHTTPBody(const_cast<CFMutableURLRequestRef>([request _CFURLRequest]), formData);
++#endif
+ }
+ 
+ RetainPtr<NSInputStream> createHTTPBodyNSInputStream(FormData& formData)
+-- 
+2.54.0 (Apple Git-157)
+

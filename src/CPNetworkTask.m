@@ -648,6 +648,13 @@ static NSString *CPAcceptLanguageHeader(void)
         uploadBody = [collected retain];
     }
 
+    if (CPDebugLogging() && ![method isEqualToString:@"GET"])
+        NSLog(@"Captain Polliwog: %@ %@ - body %lu bytes (HTTPBody %lu, stream %@)",
+              method, [[request URL] absoluteString],
+              (unsigned long)[uploadBody length],
+              (unsigned long)[[request HTTPBody] length],
+              [request HTTPBodyStream] != nil ? @"yes" : @"no");
+
     if ([method isEqualToString:@"HEAD"]) {
         curl_easy_setopt(easy, CURLOPT_NOBODY, 1L);
     } else if (uploadBody != nil) {
