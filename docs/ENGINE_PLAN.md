@@ -2236,3 +2236,87 @@ Three things it settled that Leopard could not:
   Roman produced none. Two systems, same code, different typography --
   which is exactly why requiring a ligature was withdrawn as a test. It
   would have failed here for being right.
+
+## 29 September: video, and why embedding is not the win it looks like
+
+The plan was to put libvlc behind `<video>` with a proper MSE, so that
+YouTube would offer more than 360p. Two research passes over WebKit 604,
+VLC 3.0.21 and every port that has tried this say most of that is wrong,
+and the part that is right is worth doing for a different reason.
+
+### The blocker, solved
+
+`libvlc_new` aborted in `config_GetDataDir`. The cause is two facts
+meeting. `config_GetLibDir` walks the loaded images and returns the
+directory of the first whose path ends in the three bytes `VLC`; if none
+matches it falls back to `dladdr`, and if that fails it calls a literal
+`/* should never happen */ abort()`. PowerVLC statically links a
+pre-10.3 dlcompat shim whose `dladdr` is hardcoded to `return 0`, so the
+fallback can never succeed. `PowerVLC` works because its filename ends
+in "VLC". Our `spike-vlc` did not.
+
+Renaming the same binary to `spike-VLC` fixed it. Verified: every stage
+passes, including our own `call_once`, threads and exceptions with
+libvlc resident, which was the gating question about two C++ runtimes in
+one process.
+
+No environment variable can substitute. `VLC_DATA_PATH` short-circuits
+`config_GetDataDir`, but `bank.c` calls `config_GetLibDir`
+unconditionally before it ever reads `VLC_PLUGIN_PATH`. That is the trap
+LibVLCSharp has had open since 2020.
+
+### Handing off beats embedding, on this hardware
+
+TenFourFox is the only real precedent on these machines, and its history
+inverts the assumption. Its **QuickTime Enabler**, which scraped a URL
+and handed it to an external player - what `CPExternalPlayer` already
+does - managed 720p on a 1.25GHz G4. Its in-browser decode path, with
+AltiVec ffmpeg and MSE working, recommended 360p and called HD
+unviable. A dual 2.3GHz G5 measured 23.4fps at 360p with 22% dropped.
+
+Embedding libvlc via `vmem` has been tried three times and abandoned
+three times, always for the same reason: QtWebKit with phonon-vlc in
+2010 (removed 2011, "unused, not finished and unmaintained"),
+QtMediaPlayer's VLC backend ("significant performance lost"), and
+WebChimera.js ("using vmem is pretty bad performance-wise").
+
+So the external player stays. What is worth adding is making it feel
+less like a detour - one click from the page rather than a menu item.
+
+### What embedding is actually for
+
+Codec coverage, not resolution. QuickTime 7 on Tiger and Leopard cannot
+decode VP8, VP9, Opus, WebM or H.264 High profile at all; libvlc can.
+That is worth roughly 800 lines: a `MediaPlayerPrivateVLC` shaped like
+`MediaPlayerPrivateMediaFoundation` - 25 methods, of which 16 are pure
+virtual - rendering through `libvlc_video_set_format_callbacks` and
+painting in `paint()`.
+
+Not `set_nsobject`, for three independent reasons. `MediaPlayerPrivate`
+has no hook that accepts an NSView; this port runs with accelerated
+compositing off, so `platformLayer()` has nothing to attach to; and
+VLC's `macosx` vout is an `NSOpenGLView` requiring GLSL, which
+PowerPC-era GPUs do not have.
+
+### MSE: do not
+
+Three to six months, and libvlc is the wrong layer. WebKit's
+`SourceBufferPrivate` wants a demuxer that emits individually
+timestamped samples and a renderer that accepts them back one at a time;
+libvlc's only input is a single byte stream per media, with no
+timestamps. The GStreamer MSE backend is 4,983 lines on top of an
+existing backend and only works because GStreamer exposes elements.
+
+Two findings settle it. A second init segment mid-stream is ignored by
+VLC's fragmented MP4 demuxer, which kills the adaptive quality switching
+that is the whole point. And the closest peer - Wayfarer on MorphOS,
+PowerPC, niche OS, MSE working - is ~11,000 lines built on **ffmpeg**,
+not libvlc. Every project that succeeded reached that conclusion
+independently.
+
+If MSE is ever attempted, it should target libavcodec directly, and it
+would still cap at 480p by TenFourFox's measurements.
+
+One landmine recorded for whoever tries: `Settings.in:240` defaults
+`maximumSourceBufferSize` to 304MB **per SourceBuffer**. Two buffers is
+608MB of coded frames before eviction. On a 1GB G3 that alone is fatal.
