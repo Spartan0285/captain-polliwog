@@ -5,6 +5,7 @@
 #import "CPBrowserWindowController.h"
 #import "CPAutoFill.h"
 #import "CPExternalPlayer.h"
+#import "CPYouTubeFormats.h"
 #import "CPAppDelegate.h"
 #import "CPTab.h"
 #import "CPSiteModes.h"
@@ -421,6 +422,20 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
             NSLog(@"Captain Polliwog: script result: %@", result);
         }
     }
+
+    // CPDebugYouTubeQuality: run the real quality lookup and log what came
+    // back, without starting a player. The resolve is asynchronous and a
+    // probe script cannot wait for it - a synchronous XMLHttpRequest times
+    // out here, because this engine's requests go through our own
+    // NSURLProtocol and never complete inside a blocked main thread - so
+    // there is no way to test the production path from JavaScript alone.
+    if ([[NSUserDefaults standardUserDefaults] integerForKey:@"CPDebugYouTubeQuality"] > 0
+        && ![selectedTab isDiscarded]) {
+        if ([CPYouTubeFormats canResolveInWebView:[selectedTab webView]])
+            [CPYouTubeFormats resolveInWebView:[selectedTab webView] delegate:self];
+        else
+            NSLog(@"Captain Polliwog: quality lookup: not a page to ask about");
+    }
 }
 
 @end
@@ -829,6 +844,86 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     [self updateChromeForSelectedTab];
 }
 
+// On YouTube the address the page is playing is the 360p progressive file,
+// because that is the only one this engine is served. Better ones exist and
+// have to be asked for separately - see CPYouTubeFormats - and they arrive as
+// a video stream and a sound stream, which only VLC and MPlayer can be handed
+// at once.
+//
+// So this is tried first and the ordinary hand-over is the fallback: if
+// YouTube will not say, or the player cannot take two streams, the viewer
+// still gets the 360p they would have got anyway.
+- (void)handOffYouTubeAtChosenQuality
+{
+    [self setStatusText:@"Asking YouTube which qualities it has..."];
+    [CPYouTubeFormats resolveInWebView:[[self selectedTab] webView] delegate:self];
+}
+
+- (void)youTubeFormats:(NSArray *)formats error:(NSString *)error forWebView:(WebView *)webView
+{
+    NSDictionary *chosen;
+    unsigned wanted;
+    NSString *media;
+
+    // A different tab is in front now, or a different page. Whatever was
+    // asked for is no longer what anyone is looking at.
+    if (webView != [[self selectedTab] webView]) {
+        [self setStatusText:nil];
+        return;
+    }
+    // 1 reports what YouTube offered and stops there; 2 goes on to hand it
+    // over, which is the only way to see the relayed addresses the player is
+    // actually given.
+    if ([[NSUserDefaults standardUserDefaults] integerForKey:@"CPDebugYouTubeQuality"] > 0) {
+        NSMutableString *report = [NSMutableString string];
+        NSEnumerator *entries = [formats objectEnumerator];
+        NSDictionary *entry;
+        while ((entry = [entries nextObject]) != nil)
+            [report appendFormat:@"%@ ", [entry objectForKey:CPFormatLabel]];
+        NSLog(@"Captain Polliwog: quality lookup: %@ [%@] ceiling %up",
+              error != nil ? error : @"ok", report, [CPYouTubeFormats advisableHeightCeiling]);
+        if ([[NSUserDefaults standardUserDefaults] integerForKey:@"CPDebugYouTubeQuality"] < 2
+            || formats == nil) {
+            [self setStatusText:nil];
+            return;
+        }
+    }
+    if (formats == nil) {
+        // Not an alert. The fallback plays the video, so this is a note about
+        // quality and not a failure to do the thing that was asked.
+        NSLog(@"Captain Polliwog: no quality choice on this video (%@); handing over the 360p stream",
+              error != nil ? error : @"no reason given");
+        [self setStatusText:@"YouTube would not offer a better quality - playing 360p."];
+        media = [CPExternalPlayer playingMediaURLInWebView:webView];
+        if (media != nil)
+            [CPExternalPlayer playMediaURL:media];
+        return;
+    }
+
+    // 0 means "best this Mac can handle", which is what a fresh install gets.
+    wanted = (unsigned)[[NSUserDefaults standardUserDefaults] integerForKey:@"CPYouTubeHandoffHeight"];
+    if (wanted == 0)
+        wanted = [CPYouTubeFormats advisableHeightCeiling];
+    else if (wanted > [CPYouTubeFormats advisableHeightCeiling])
+        wanted = [CPYouTubeFormats advisableHeightCeiling];
+    chosen = [CPYouTubeFormats formatInFormats:formats closestToHeight:wanted];
+    if (chosen == nil) {
+        [self setStatusText:nil];
+        return;
+    }
+    [self setStatusText:[NSString stringWithFormat:@"Handing %@ to %@...",
+        [chosen objectForKey:CPFormatLabel],
+        [CPExternalPlayer displayNameForPlayer:[CPExternalPlayer preferredPlayer]]]];
+    if (![CPExternalPlayer playMediaURL:[chosen objectForKey:CPFormatVideoURL]
+                          withAudioURL:[chosen objectForKey:CPFormatAudioURL]]) {
+        [self setStatusText:nil];
+        NSBeginInformationalAlertSheet(@"Could not open the video", @"OK", nil, nil, [self window],
+            nil, NULL, NULL, NULL,
+            @"%@ would not start.",
+            [CPExternalPlayer displayNameForPlayer:[CPExternalPlayer preferredPlayer]]);
+    }
+}
+
 // Hand what the page is playing to VLC or MPlayer, which decode H.264 with
 // AltiVec and make a resolution or so more of it watchable than QuickTime
 // does. See CPExternalPlayer.
@@ -837,6 +932,14 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
     NSString *media = [CPExternalPlayer playingMediaURLInWebView:[[self selectedTab] webView]];
     NSString *player = [CPExternalPlayer preferredPlayer];
 
+    // YouTube has better streams than the one the page is playing, and they
+    // have to be fetched before anything can be handed over.
+    if (player != nil
+        && [CPExternalPlayer preferredPlayerAcceptsSeparateAudio]
+        && [CPYouTubeFormats canResolveInWebView:[[self selectedTab] webView]]) {
+        [self handOffYouTubeAtChosenQuality];
+        return;
+    }
     if (media == nil) {
         NSBeginInformationalAlertSheet(@"No video on this page", @"OK", nil, nil, [self window],
             nil, NULL, NULL, NULL,

@@ -42,6 +42,21 @@
 // the player could not be launched.
 + (BOOL)playMediaURL:(NSString *)mediaURL;
 
+// The same, with sound arriving as a second stream.
+//
+// YouTube's better qualities exist only as separate video and audio - that
+// is what "adaptive" means - so anything above 360p has to be handed over as
+// two addresses. VLC joins them with --input-slave and MPlayer with
+// -audiofile; QuickTime Player cannot do it at all, which is why choosing a
+// quality is offered only when one of the other two is the preferred player.
+//
+// A nil audioURL behaves exactly like playMediaURL:.
++ (BOOL)playMediaURL:(NSString *)mediaURL withAudioURL:(NSString *)audioURL;
+
+// Whether the preferred player can take sound as a second stream, and so
+// whether a quality above 360p can be handed to it.
++ (BOOL)preferredPlayerAcceptsSeparateAudio;
+
 // Internal: keeps asking the window server to front the player until it has
 // finished launching.
 + (void)bringForward:(NSArray *)state;

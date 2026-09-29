@@ -11,6 +11,7 @@
 #import "CPDefaultBrowser.h"
 #import "CPSafeBrowsing.h"
 #import "CPExternalPlayer.h"
+#import "CPYouTubeFormats.h"
 #import "CPWelcome.h"
 
 #define CPWindowWidth   520.0f
@@ -60,6 +61,12 @@ static NSButton *CPButton(NSView *parent, NSRect frame, NSString *title, id targ
 - (void)buildInterface;
 - (void)refresh;
 @end
+
+// The heights offered, tallest first. Not every video has all of them - the
+// menu offered here is what to ask for, and what arrives is the tallest the
+// video actually has that is no taller than this.
+static const int CPQualities[] = { 1080, 720, 480, 360 };
+#define CPQualityCount (sizeof(CPQualities) / sizeof(CPQualities[0]))
 
 @implementation CPPreferencesController (Private)
 
@@ -320,6 +327,45 @@ static struct {
                          @"the PowerPC build of VLC needs one, so video plays here or not at all.", only],
                         YES, NO);
             }
+        }
+    }
+
+    // Which YouTube quality to ask for when handing a video over. Above 360p
+    // the video and its sound are separate streams, so this only means
+    // anything with a player that can be given both - see CPYouTubeFormats.
+    {
+        top -= 30.0f;
+        CPLabel(view, NSMakeRect(18.0f, top + 3.0f, 100.0f, 17.0f), @"YouTube quality:", NO, NO);
+        if ([CPExternalPlayer preferredPlayerAcceptsSeparateAudio]) {
+            int wanted = (int)[[NSUserDefaults standardUserDefaults]
+                               integerForKey:@"CPYouTubeHandoffHeight"];
+            unsigned index;
+            qualityPopUp = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(118.0f, top, 190.0f, 22.0f)];
+            // 0 is the default and stays first: it follows the processor, so
+            // the same preference is right on a G3 and on a G5.
+            [qualityPopUp addItemWithTitle:@"Best this Mac can handle"];
+            [[qualityPopUp lastItem] setTag:0];
+            for (index = 0; index < CPQualityCount; index++) {
+                [qualityPopUp addItemWithTitle:[NSString stringWithFormat:@"%dp", CPQualities[index]]];
+                [[qualityPopUp lastItem] setTag:CPQualities[index]];
+            }
+            [qualityPopUp selectItemAtIndex:[qualityPopUp indexOfItemWithTag:wanted] >= 0
+                ? (unsigned)[qualityPopUp indexOfItemWithTag:wanted] : 0];
+            [qualityPopUp setTarget:self];
+            [qualityPopUp setAction:@selector(qualityChanged:)];
+            [view addSubview:qualityPopUp];
+            [qualityPopUp release];
+            top -= 26.0f;
+            CPLabel(view, NSMakeRect(118.0f, top, 350.0f, 26.0f),
+                    [NSString stringWithFormat:@"A choice taller than this Mac should decode is "
+                     @"brought down to %up. YouTube in the browser stays at 360p either way.",
+                     [CPYouTubeFormats advisableHeightCeiling]], YES, NO);
+        } else {
+            // QuickTime Player takes one stream, and every quality above 360p
+            // is two. Saying why is better than a popup that does nothing.
+            CPLabel(view, NSMakeRect(120.0f, top - 4.0f, 350.0f, 30.0f),
+                    @"360p only. Above that YouTube sends the picture and the sound separately, "
+                    @"which VLC and MPlayer can be handed and QuickTime Player cannot.", YES, NO);
         }
     }
     [tabs addTabViewItem:item];
@@ -726,6 +772,14 @@ static struct {
 - (IBAction)playerChanged:(id)sender
 {
     [CPExternalPlayer setPreferredPlayer:[[sender selectedItem] representedObject]];
+}
+
+
+- (IBAction)qualityChanged:(id)sender
+{
+    [[NSUserDefaults standardUserDefaults] setInteger:[[sender selectedItem] tag]
+                                               forKey:@"CPYouTubeHandoffHeight"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
 - (IBAction)switchChanged:(id)sender

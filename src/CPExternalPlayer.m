@@ -109,7 +109,52 @@ static NSString * const CPKnownPlayers[] = {
 
 // The relay's own URL form, the same one MediaPlayerPrivateQTKit builds:
 // http://127.0.0.1:<port>/media?token=<token>&url=<escaped>
-static NSURL *CPRelayedURL(NSString *mediaURL)
+// The URL as base64url with no padding: A-Z a-z 0-9 - _ and nothing else, so
+// no encoder downstream has anything to act on.
+static NSString *CPBase64URLEncode(NSString *text)
+{
+    static const char *alphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const char *bytes = [text UTF8String];
+    size_t length = bytes != NULL ? strlen(bytes) : 0;
+    NSMutableString *out;
+    size_t i;
+    unsigned accumulator = 0;
+    int held = 0;
+
+    if (length == 0)
+        return nil;
+    out = [NSMutableString stringWithCapacity:(length * 4) / 3 + 4];
+    for (i = 0; i < length; i++) {
+        accumulator = (accumulator << 8) | (unsigned char)bytes[i];
+        held += 8;
+        while (held >= 6) {
+            held -= 6;
+            [out appendFormat:@"%c", alphabet[(accumulator >> held) & 0x3f]];
+        }
+    }
+    // The leftover bits, padded with zeros rather than '=' - the decoder
+    // stops on a partial group, and '=' is exactly the kind of character
+    // this is avoiding.
+    if (held > 0)
+        [out appendFormat:@"%c", alphabet[(accumulator << (6 - held)) & 0x3f]];
+    return out;
+}
+
+// The extension the relay address is given, which is the only thing VLC uses
+// to decide what a --input-slave holds. Guessed from the address, since
+// YouTube says so in its mime parameter and most other sites end the path
+// with it.
+static NSString *CPRelayExtension(NSString *mediaURL, BOOL isAudio)
+{
+    if (isAudio)
+        return [mediaURL rangeOfString:@"mime=audio%2Fwebm"].location != NSNotFound
+            ? @"weba" : @"m4a";
+    return [mediaURL rangeOfString:@"mime=video%2Fwebm"].location != NSNotFound
+        ? @"webm" : @"mp4";
+}
+
+static NSURL *CPRelayedURL(NSString *mediaURL, BOOL isAudio)
 {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     int port = (int)[defaults integerForKey:@"CPMediaRelayPort"];
@@ -124,10 +169,17 @@ static NSURL *CPRelayedURL(NSString *mediaURL)
     if (port <= 0 || token == nil)
         return [NSURL URLWithString:mediaURL];
 
-    escaped = [(NSString *)CFURLCreateStringByAddingPercentEscapes(NULL, (CFStringRef)mediaURL, NULL,
-        CFSTR(":/?#[]@!$&'()*+,;=%"), kCFStringEncodingUTF8) autorelease];
+    // base64url, not percent escapes. VLC re-encodes the address it is given
+    // before it sends it, so every % in a percent-escaped URL arrives at the
+    // relay as %25 and the relay - which decodes once - sees an address that
+    // does not begin with http and refuses it. Nothing in this alphabet can
+    // be escaped again. See CPBase64URLDecode in CPMediaRelay.m.
+    escaped = CPBase64URLEncode(mediaURL);
+    if (escaped == nil)
+        return nil;
     return [NSURL URLWithString:[NSString stringWithFormat:
-        @"http://127.0.0.1:%d/media?token=%@&url=%@", port, token, escaped]];
+        @"http://127.0.0.1:%d/media/%@/%@.%@", port, token, escaped,
+        CPRelayExtension(mediaURL, isAudio)]];
 }
 
 // The last player this browser started, so a second hand-over can end it
@@ -148,10 +200,37 @@ static BOOL CPTakesURLArgument(NSString *bundlePath)
         || [identifier rangeOfString:@"mplayer" options:NSCaseInsensitiveSearch].location != NSNotFound;
 }
 
-+ (BOOL)playMediaURL:(NSString *)mediaURL
+// VLC and MPlayer both take a second stream for sound, and spell it
+// differently. Returns nil for a player that cannot, which is QuickTime.
+static NSString *CPAudioSlaveFlag(NSString *bundlePath)
+{
+    NSString *identifier = [[[NSBundle bundleWithPath:bundlePath] infoDictionary]
+                            objectForKey:@"CFBundleIdentifier"];
+
+    if ([identifier hasPrefix:@"org.videolan"] || [identifier hasPrefix:@"com.videolan"]
+        || [identifier rangeOfString:@"powervlc" options:NSCaseInsensitiveSearch].location != NSNotFound)
+        return @"--input-slave=";
+    if ([identifier rangeOfString:@"mplayer" options:NSCaseInsensitiveSearch].location != NSNotFound)
+        return @"-audiofile";
+    return nil;
+}
+
++ (BOOL)preferredPlayerAcceptsSeparateAudio
 {
     NSString *player = [self preferredPlayer];
-    NSURL *relayed = CPRelayedURL(mediaURL);
+    return player != nil && CPAudioSlaveFlag(player) != nil;
+}
+
++ (BOOL)playMediaURL:(NSString *)mediaURL
+{
+    return [self playMediaURL:mediaURL withAudioURL:nil];
+}
+
++ (BOOL)playMediaURL:(NSString *)mediaURL withAudioURL:(NSString *)audioURL
+{
+    NSString *player = [self preferredPlayer];
+    NSURL *relayed = CPRelayedURL(mediaURL, NO);
+    NSURL *relayedAudio = audioURL != nil ? CPRelayedURL(audioURL, YES) : nil;
     NSMutableDictionary *environment;
     NSEnumerator *names;
     NSString *name;
@@ -163,6 +242,14 @@ static BOOL CPTakesURLArgument(NSString *bundlePath)
     if (player == nil) {
         NSLog(@"Captain Polliwog: no media player is set, so %@ cannot be handed over",
               [mediaURL substringToIndex:MIN((unsigned)60, (unsigned)[mediaURL length])]);
+        return NO;
+    }
+    // Asked for two streams and given a player that takes one. Better to
+    // say so than to hand over the video and let it play in silence.
+    if (relayedAudio != nil && player != nil && CPAudioSlaveFlag(player) == nil) {
+        NSLog(@"Captain Polliwog: %@ cannot take sound as a second stream, "
+              @"so the chosen quality cannot be handed to it",
+              [player lastPathComponent]);
         return NO;
     }
     if (relayed == nil) {
@@ -220,6 +307,19 @@ static BOOL CPTakesURLArgument(NSString *bundlePath)
         if (executable == nil)
             return NO;
         [arguments addObject:[relayed absoluteString]];
+        // Sound as a second stream, for the qualities that only exist that
+        // way. VLC wants it glued to the flag, MPlayer wants it as the next
+        // argument - passing it the wrong way round is not an error, it just
+        // plays the video silently, which looks like a broken hand-over.
+        if (relayedAudio != nil) {
+            NSString *flag = CPAudioSlaveFlag(player);
+            if ([flag hasSuffix:@"="])
+                [arguments addObject:[flag stringByAppendingString:[relayedAudio absoluteString]]];
+            else if (flag != nil) {
+                [arguments addObject:flag];
+                [arguments addObject:[relayedAudio absoluteString]];
+            }
+        }
         [task setLaunchPath:[[player stringByAppendingPathComponent:@"Contents/MacOS"]
                              stringByAppendingPathComponent:executable]];
         [task setArguments:arguments];
