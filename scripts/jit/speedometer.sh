@@ -22,7 +22,11 @@ set -eu
 HOST=${1:?usage: speedometer.sh host app-name label [minutes]}
 APP=${2:?usage: speedometer.sh host app-name label [minutes]}
 LABEL=${3:?usage: speedometer.sh host app-name label [minutes]}
-MINUTES=${4:-12}
+# A full run on a PowerBook G4 takes well over fifteen minutes - the progress
+# counter is at 0/580 six seconds in - so the default is generous. A cap that
+# is too short does not fail loudly; it just reports no score, which is how
+# fourteen minutes of G4 time were spent proving nothing.
+MINUTES=${4:-30}
 URL='https://browserbench.org/Speedometer3.1/?startAutomatically=true'
 
 cd "$(dirname "$0")/../.."

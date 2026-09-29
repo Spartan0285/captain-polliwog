@@ -2382,3 +2382,34 @@ Getting better than 360p at full length would need either a real PO token,
 which means running YouTube's BotGuard VM, or SABR - a protobuf-over-UMP
 protocol with no reference implementation in yt-dlp to copy. Neither is worth
 it here.
+
+### The Speedometer harness, and an instrument that was never checked in
+
+Two separate faults, found while trying to get a PGO-versus-baseline number.
+
+The harness read its score by calling `screencapture` over ssh. That writes
+no file and prints no error from a non-GUI session, so every run of the
+comparison produced nothing at all, silently, including one that had been
+running for fourteen minutes. It now reads the score from the log, via a new
+`CPDebugScriptInterval` that re-evaluates `CPDebugScript` every few seconds -
+`CPDebugScript` alone is evaluated once, when the page finishes loading,
+which for a benchmark is before the run has started.
+
+`CPDebugScript` is only evaluated from `writeDebugSnapshot`, which the window
+controller only schedules when `CPDebugSnapshotPath` is set, so the harness
+has to set that too or the script never runs. That is worth untangling: what
+a probe script does has nothing to do with photography.
+
+The polling also has a limit worth knowing before trusting it: while the
+benchmark saturates the main thread the timer gets few turns, and evaluating
+JavaScript re-entrantly into a busy engine is not free. A run from
+browserbench.org does start and does progress (confirmed from the app's own
+snapshot: TodoMVC-JavaScript-ES5, 0/580, six seconds in) but takes well over
+fifteen minutes on a G4, so the cap is now thirty.
+
+The better mechanism already existed and is not in this repository. The four
+runs recorded on 24 September used a local copy of Speedometer 3.1 with one
+added line that posts the score back - no polling, no re-entrancy, no guess
+about how long to wait. That copy lived in a scratchpad directory and is
+gone. An instrument the project depends on should be checked in; rebuilding
+it is the right fix for this harness.
