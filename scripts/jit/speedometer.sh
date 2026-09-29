@@ -62,24 +62,27 @@ DOMAIN=$(ssh -n -o ConnectTimeout=60 "$HOST" \
 # The page watches for its own score on its own timer, in the same event loop
 # as the benchmark, and navigates to an address carrying the number once it
 # appears. The browser logs every address it finishes.
+# NOTE: no // comments in this script. It is flattened to a single line
+# before being handed to the browser, and a // comment would swallow
+# everything after it - which is how a probe that looked right returned an
+# empty string and cost a run.
+#
+# It must also stay cheap. This runs while the benchmark is running, so it
+# does one getElementById every ten seconds and nothing else. An earlier
+# version ran querySelectorAll('[id*="result"]') - an attribute-substring
+# scan of the whole document - every five seconds, which is measurable work
+# inside the thing being measured.
 cat > /tmp/speedo-probe.js <<'JS'
 (function () {
   if (window.__cpScoreWatch) return 'watching';
   window.__cpScoreWatch = setInterval(function () {
-    var el = document.getElementById('result-number'), text = '', all, i, t;
-    if (el) text = (el.textContent || '').replace(/\s+/g, '');
-    if (!text) {
-      all = document.querySelectorAll('[id*="result"], [class*="result-number"]');
-      for (i = 0; i < all.length; i++) {
-        t = (all[i].textContent || '').replace(/\s+/g, '');
-        if (/^[0-9]+(\.[0-9]+)?$/.test(t)) { text = t; break; }
-      }
-    }
+    var el = document.getElementById('result-number');
+    var text = el ? (el.textContent || '').replace(/\s+/g, '') : '';
     if (/^[0-9]+(\.[0-9]+)?$/.test(text)) {
       clearInterval(window.__cpScoreWatch);
       location.href = 'https://browserbench.org/?cpscore=' + text + '&run=__LABEL__';
     }
-  }, 5000);
+  }, 10000);
   return 'watching';
 })()
 JS

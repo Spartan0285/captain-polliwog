@@ -2413,3 +2413,47 @@ added line that posts the score back - no polling, no re-entrancy, no guess
 about how long to wait. That copy lived in a scratchpad directory and is
 gone. An instrument the project depends on should be checked in; rebuilding
 it is the right fix for this harness.
+
+### Speedometer 3.1 does not finish, and the reason is ours
+
+Worth writing down before it is rediscovered as "the benchmark is slow".
+
+From browserbench.org, Speedometer 3.1 on the PowerBook G4 runs hard for
+about two minutes and then stops. Sampled once a minute from outside the
+machine, so nothing was perturbed:
+
+    00:01  cpu=42%  rss=19MB
+    01:02  cpu=53%  rss=278MB
+    02:03  cpu=15%  rss=299MB
+    03:04  cpu=3%   rss=293MB
+    ... unchanged at 293MB and ~3% for another twenty minutes
+
+Not slow: stopped. Confirmed with no probe of any kind installed - 73% then
+1.5% after two minutes - so it is not the harness reaching into the page.
+
+What the log shows at that moment is thirty-eight resources answered 400,
+among them the suite it stalls on:
+
+    revalidated .../todomvc/vanilla-examples/javascript-es5/dist/index.html
+    revalidated .../javascript-es5/dist/index.html
+    revalidated .../javascript-es5/dist/index.html
+    from-network(400) .../javascript-es5/dist/index.html
+    revalidated .../javascript-es5/dist/index.html
+    from-network(400) .../javascript-es5/dist/index.html
+
+The same URL revalidates cleanly several times and is then refused, and the
+pattern alternates. Fetching it from a Mac with our own user agent, with a
+valid conditional header, with a malformed one, and with none at all, all
+answer 200 - so it is not the address, the agent, or the header being
+rejected. Something in what we send on a reused connection is, and the
+suite's iframe never loads, so the runner waits for ever.
+
+This matters well beyond the benchmark: any site fetching the same resource
+repeatedly is exposed to it, and a 400 on a subresource is silent.
+
+Two consequences. There is no Speedometer number from the live site at
+present, so the PGO-versus-baseline comparison cannot be settled this way -
+which is a second reason to check in the local copy that posts its score
+back. And the intermittent 400 is a networking bug worth a session of its
+own, starting with a capture of the raw request our libcurl sends on the
+second and third use of a connection.
