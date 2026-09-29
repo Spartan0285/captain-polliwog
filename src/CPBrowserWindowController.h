@@ -31,6 +31,8 @@
     NSButton            *downloadsButton;
     int                  downloadsProgressStep;     // what its icon shows, in twentieths
     int                  youTubeAttempts;           // asking again when the page was not ready
+    NSButton            *timeMachineButton;         // the clock, beside the address bar
+    NSDatePicker        *timeMachinePicker;         // the date being travelled to
     NSButton            *newTabButton;
     CPAddressBar        *addressBar;
     NSTextField         *addressField;      // the address bar's text

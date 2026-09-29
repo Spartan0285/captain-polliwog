@@ -17,6 +17,7 @@ typedef enum {
     CPIconGlobe,
     CPIconPageSettings,
     CPIconReader,
+    CPIconClock,
     CPIconCount
 } CPIconKind;
 
@@ -164,6 +165,26 @@ static NSImage *CPDrawIcon(CPIconKind kind)
         break;
     }
 
+    case CPIconClock: {
+        // A clock face at sixteen pixels: a ring, and two hands set to ten
+        // past ten, which is where every watch in every advertisement points
+        // because it frames the face and reads as "clock" instantly. Ticks
+        // would turn to mush at this size, so there are none.
+        NSBezierPath *ring = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(2.5f, 2.5f, 11.0f, 11.0f)];
+        NSBezierPath *hands = [NSBezierPath bezierPath];
+        [[NSColor colorWithCalibratedWhite:0.25f alpha:1.0f] set];
+        [ring setLineWidth:1.4f];
+        [ring stroke];
+        [hands setLineWidth:1.4f];
+        [hands setLineCapStyle:NSRoundLineCapStyle];
+        [hands moveToPoint:NSMakePoint(8.0f, 8.0f)];
+        [hands lineToPoint:NSMakePoint(8.0f, 11.3f)];       // long hand, to twelve
+        [hands moveToPoint:NSMakePoint(8.0f, 8.0f)];
+        [hands lineToPoint:NSMakePoint(5.4f, 9.4f)];         // short hand, to ten
+        [hands stroke];
+        break;
+    }
+
     case CPIconReader: {
         // Safari's Reader mark: lines of text with the first indented,
         // which reads as a paragraph at sixteen pixels where anything
@@ -235,5 +256,6 @@ static NSImage *CPIcon(CPIconKind kind)
 + (NSImage *)globeImage { return CPIcon(CPIconGlobe); }
 + (NSImage *)pageSettingsImage { return CPIcon(CPIconPageSettings); }
 + (NSImage *)readerImage { return CPIcon(CPIconReader); }
++ (NSImage *)clockImage { return CPIcon(CPIconClock); }
 
 @end

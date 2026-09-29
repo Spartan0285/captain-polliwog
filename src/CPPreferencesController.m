@@ -11,6 +11,7 @@
 #import "CPDefaultBrowser.h"
 #import "CPSafeBrowsing.h"
 #import "CPExternalPlayer.h"
+#import "CPTimeMachine.h"
 #import "CPYouTubeFormats.h"
 #import "CPWelcome.h"
 
@@ -369,6 +370,31 @@ static struct {
                     @"which VLC and MPlayer can be handed and QuickTime Player cannot.", YES, NO);
         }
 
+    }
+
+    // Where Time Machine starts. There is deliberately no date format setting
+    // beside it: the picker reads and writes dates in the system's own
+    // language and region, so a format preference here could only disagree
+    // with the rest of the Mac.
+    {
+        top -= 34.0f;
+        CPLabel(view, NSMakeRect(18.0f, top + 3.0f, 100.0f, 17.0f), @"Time Machine:", NO, NO);
+        timeMachinePicker = [[NSDatePicker alloc] initWithFrame:NSMakeRect(118.0f, top, 190.0f, 24.0f)];
+        [timeMachinePicker setDatePickerStyle:NSTextFieldAndStepperDatePickerStyle];
+        [timeMachinePicker setDatePickerElements:NSYearMonthDayDatePickerElementFlag];
+        [timeMachinePicker setDateValue:[CPTimeMachine preferredDate]];
+        [timeMachinePicker setMinDate:[NSCalendarDate dateWithYear:1996 month:1 day:1
+                                                             hour:12 minute:0 second:0
+                                                         timeZone:[NSTimeZone localTimeZone]]];
+        [timeMachinePicker setMaxDate:[NSDate date]];
+        [timeMachinePicker setTarget:self];
+        [timeMachinePicker setAction:@selector(timeMachineDateChanged:)];
+        [view addSubview:timeMachinePicker];
+        [timeMachinePicker release];
+        top -= 26.0f;
+        CPLabel(view, NSMakeRect(118.0f, top, 350.0f, 26.0f),
+                @"The date the clock beside the address bar opens at. Pages come from the "
+                @"Internet Archive, which is thorough and slow.", YES, NO);
     }
     [tabs addTabViewItem:item];
 
@@ -776,6 +802,11 @@ static struct {
     [CPExternalPlayer setPreferredPlayer:[[sender selectedItem] representedObject]];
 }
 
+
+- (IBAction)timeMachineDateChanged:(id)sender
+{
+    [CPTimeMachine setPreferredDate:[sender dateValue]];
+}
 
 - (IBAction)qualityChanged:(id)sender
 {

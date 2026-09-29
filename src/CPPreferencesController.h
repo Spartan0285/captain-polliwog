@@ -14,6 +14,7 @@
     NSMutableArray *switchBoxes;       // the Performance tab's switches, by tag
     NSPopUpButton  *playerPopUp;       // which media player a video is handed to
     NSPopUpButton  *qualityPopUp;      // which YouTube quality to ask for
+    NSDatePicker   *timeMachinePicker; // the date Time Machine opens at
     NSPopUpButton  *scrollSpeedPopUp;  // how far a wheel event moves a page
     NSTextField   *homePageField;
     NSPopUpButton *newTabPopUp;

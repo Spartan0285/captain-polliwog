@@ -23,4 +23,7 @@
 + (NSImage *)pageSettingsImage;
 + (NSImage *)readerImage;
 
+// The Time Machine mark, beside the address bar.
++ (NSImage *)clockImage;
+
 @end

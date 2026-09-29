@@ -5,6 +5,7 @@
 #import "CPBrowserWindowController.h"
 #import "CPAutoFill.h"
 #import "CPExternalPlayer.h"
+#import "CPTimeMachine.h"
 #import "CPYouTubeFormats.h"
 #import "CPAppDelegate.h"
 #import "CPTab.h"
@@ -140,14 +141,20 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
                                     action:@selector(showShareMenu:)
                                    toolTip:@"Share"
                                     toView:bar];
+    timeMachineButton = [self addButtonWithImage:[CPIcons clockImage]
+                                           frame:NSMakeRect(barWidth - 118.0f, buttonY, 26.0f, 24.0f)
+                                          action:@selector(showTimeMachine:)
+                                         toolTip:@"Time Machine"
+                                          toView:bar];
     [backButton setAutoresizingMask:NSViewNotSizable];
     [forwardButton setAutoresizingMask:NSViewNotSizable];
     [newTabButton setAutoresizingMask:NSViewMinXMargin];
     [downloadsButton setAutoresizingMask:NSViewMinXMargin];
     [shareButton setAutoresizingMask:NSViewMinXMargin];
+    [timeMachineButton setAutoresizingMask:NSViewMinXMargin];
 
     addressBar = [[CPAddressBar alloc] initWithFrame:NSMakeRect(left + 64.0f, floorf((CPBarHeight - 26.0f) / 2.0f),
-                                                                barWidth - (left + 64.0f) - 98.0f, 26.0f)];
+                                                                barWidth - (left + 64.0f) - 126.0f, 26.0f)];
     [addressBar setAutoresizingMask:NSViewWidthSizable];
     [bar addSubview:addressBar];
     [addressBar release];
@@ -436,6 +443,29 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
                            withObject:nil
                            afterDelay:(double)[[NSUserDefaults standardUserDefaults]
                                                integerForKey:@"CPDebugScriptInterval"]];
+        }
+    }
+
+    // CPDebugTimeMachine: a date, as YYYY-MM-DD, to send the page back to
+    // once it has loaded. The sheet needs a click, and a machine on the other
+    // side of the room cannot give it one, so this drives the same code the
+    // Go button does.
+    {
+        NSString *when = [[NSUserDefaults standardUserDefaults] stringForKey:@"CPDebugTimeMachine"];
+        if ([when length] == 10 && ![selectedTab isDiscarded]) {
+            NSDate *date = [NSCalendarDate dateWithYear:[[when substringToIndex:4] intValue]
+                                                  month:[[when substringWithRange:NSMakeRange(5, 2)] intValue]
+                                                    day:[[when substringWithRange:NSMakeRange(8, 2)] intValue]
+                                                   hour:12 minute:0 second:0
+                                               timeZone:[NSTimeZone localTimeZone]];
+            NSURL *archived = [CPTimeMachine archiveURLForURL:[selectedTab URL] onDate:date];
+            NSLog(@"Captain Polliwog: time machine to %@ -> %@",
+                  [CPTimeMachine describeDate:date],
+                  archived != nil ? [archived absoluteString] : @"nothing to look up");
+            if (archived != nil) {
+                [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"CPDebugTimeMachine"];
+                [selectedTab loadRequest:[NSURLRequest requestWithURL:archived]];
+            }
         }
     }
 
@@ -990,6 +1020,116 @@ static NSString * const CPSearchURLFormat = @"https://lite.duckduckgo.com/lite/?
             @"%@ would not start.",
             [CPExternalPlayer displayNameForPlayer:[CPExternalPlayer preferredPlayer]]);
     }
+}
+
+// Time Machine: the page in front, as it was on a day you choose.
+//
+// The date is entered with an NSDatePicker rather than a text field, which is
+// why there is no date format setting anywhere in this browser. The picker
+// already formats and parses in the system's own language and region - a
+// German Mac shows 15.01.2005 and an American one 1/15/2005 - so a setting
+// could only ever disagree with the rest of the Mac.
+- (IBAction)showTimeMachine:(id)sender
+{
+    NSURL *current = [selectedTab URL];
+    NSWindow *sheet;
+    NSView *content;
+    NSTextField *label;
+    NSButton *go, *cancel;
+    NSDate *start;
+
+    if (current == nil || [CPTimeMachine archiveURLForURL:current onDate:[NSDate date]] == nil) {
+        NSBeginInformationalAlertSheet(@"Nothing to look up", @"OK", nil, nil, [self window],
+            nil, NULL, NULL, NULL,
+            @"The Internet Archive keeps copies of pages from the web. This is not one: "
+            @"open a website first, then come back.");
+        return;
+    }
+
+    // The date showing: the one being looked at if this is already an
+    // archived page, so stepping back another year is one change rather than
+    // two, else whatever Preferences says.
+    start = [CPTimeMachine dateFromArchiveURL:current];
+    if (start == nil)
+        start = [CPTimeMachine startingDate];
+
+    sheet = [[NSWindow alloc] initWithContentRect:NSMakeRect(0.0f, 0.0f, 380.0f, 128.0f)
+                                        styleMask:NSTitledWindowMask
+                                          backing:NSBackingStoreBuffered
+                                            defer:YES];
+    content = [sheet contentView];
+
+    label = [[[NSTextField alloc] initWithFrame:NSMakeRect(20.0f, 86.0f, 340.0f, 30.0f)] autorelease];
+    [label setStringValue:@"Show this page as it was on:"];
+    [label setBezeled:NO];
+    [label setDrawsBackground:NO];
+    [label setEditable:NO];
+    [label setSelectable:NO];
+    [content addSubview:label];
+
+    timeMachinePicker = [[NSDatePicker alloc] initWithFrame:NSMakeRect(20.0f, 52.0f, 200.0f, 24.0f)];
+    [timeMachinePicker setDatePickerStyle:NSTextFieldAndStepperDatePickerStyle];
+    [timeMachinePicker setDatePickerElements:NSYearMonthDayDatePickerElementFlag];
+    [timeMachinePicker setDateValue:start];
+    // The archive has nothing before it existed, and nothing from tomorrow.
+    [timeMachinePicker setMinDate:[NSCalendarDate dateWithYear:1996 month:1 day:1
+                                                          hour:12 minute:0 second:0
+                                                      timeZone:[NSTimeZone localTimeZone]]];
+    [timeMachinePicker setMaxDate:[NSDate date]];
+    [content addSubview:timeMachinePicker];
+    [timeMachinePicker release];
+
+    cancel = [[[NSButton alloc] initWithFrame:NSMakeRect(180.0f, 12.0f, 90.0f, 28.0f)] autorelease];
+    [cancel setBezelStyle:NSRoundedBezelStyle];
+    [cancel setTitle:@"Cancel"];
+    [cancel setTarget:self];
+    [cancel setAction:@selector(cancelTimeMachine:)];
+    [cancel setKeyEquivalent:@"\033"];
+    [content addSubview:cancel];
+
+    go = [[[NSButton alloc] initWithFrame:NSMakeRect(275.0f, 12.0f, 90.0f, 28.0f)] autorelease];
+    [go setBezelStyle:NSRoundedBezelStyle];
+    [go setTitle:@"Go"];
+    [go setTarget:self];
+    [go setAction:@selector(confirmTimeMachine:)];
+    [go setKeyEquivalent:@"\r"];
+    [content addSubview:go];
+
+    [NSApp beginSheet:sheet modalForWindow:[self window]
+        modalDelegate:self didEndSelector:@selector(timeMachineSheetDidEnd:returnCode:contextInfo:)
+          contextInfo:NULL];
+}
+
+- (IBAction)cancelTimeMachine:(id)sender
+{
+    [NSApp endSheet:[[sender window] isSheet] ? [sender window] : nil returnCode:0];
+}
+
+- (IBAction)confirmTimeMachine:(id)sender
+{
+    [NSApp endSheet:[sender window] returnCode:1];
+}
+
+- (void)timeMachineSheetDidEnd:(NSWindow *)sheet returnCode:(int)code contextInfo:(void *)info
+{
+    NSDate *chosen = [timeMachinePicker dateValue];
+
+    [sheet orderOut:self];
+    if (code == 1) {
+        NSURL *archived = [CPTimeMachine archiveURLForURL:[selectedTab URL] onDate:chosen];
+        if (archived != nil) {
+            // The archive fetches every image and stylesheet separately, and
+            // it is slow: apple.com from 2005 took seventy seconds for
+            // forty-three items on a G4. Saying so beats a window that looks
+            // stuck.
+            [self setStatusText:[NSString stringWithFormat:
+                @"Asking the Internet Archive for this page as it was on %@. This can take a while.",
+                [CPTimeMachine describeDate:chosen]]];
+            [selectedTab loadRequest:[NSURLRequest requestWithURL:archived]];
+        }
+    }
+    timeMachinePicker = nil;
+    [sheet release];
 }
 
 // Hand what the page is playing to VLC or MPlayer, which decode H.264 with
