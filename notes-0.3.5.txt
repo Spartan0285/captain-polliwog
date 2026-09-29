@@ -1,0 +1,51 @@
+Captain Polliwog 0.3.5
+
+Memory
+
+- Pages that fill memory no longer take the browser down with them. Some
+  sites keep making data as they sit there - Vimeo left open on a 2GB G4
+  reaches 1.7GB - and on a Mac with less, the system used to kill the
+  browser outright, with no crash report and every window lost.
+
+  The browser now answers that in stages. It empties its caches, then
+  gives up every background tab, then asks JavaScript to collect what is
+  no longer needed. If the page in front is still filling the machine
+  after three rounds of that, it stops that page's scripts and says so in
+  the status bar at the bottom. Reloading starts the page again.
+
+  Measured on a PowerBook G4 with five heavy sites open: 798,000
+  JavaScript objects released in one round, and the browser settling at
+  365MB free instead of 49MB.
+
+- A page whose scripts have been stopped keeps its text and pictures. It
+  simply stops updating. That is a poor outcome and a better one than the
+  browser disappearing.
+
+VLC
+
+- The browser now finds PowerVLC, which is VLC rebuilt for these
+  processors rather than the last universal binary VideoLAN shipped. It
+  had been looking only for an application called VLC, so PowerVLC was
+  never found, and it would have been started without an address even if
+  it had been.
+
+- Offering to download it now fetches the build for your processor - a G3
+  build for a G3, a G4 build for a G4, a G5 build for a G5 - from
+  github.com/Olsro/powervlc. The old link pointed at VideoLAN's 2010
+  build, behind two redirects.
+
+  On a G4, PowerVLC decodes 720p without dropping a frame. A G3 manages
+  it but cannot keep up, so 360p or 480p is the sensible choice there.
+
+Known
+
+- YouTube plays at 360p and there is no quality menu. That is not a
+  setting we can change: without Media Source Extensions, which this
+  engine does not have, YouTube serves a single 360p file and offers
+  nothing else. Work on a newer engine is under way and is a long road.
+
+- You cannot sign in to a Google account. Google's sign-in needs BigInt,
+  which this engine does not have.
+
+- Very large sites can still use a great deal of memory. The browser will
+  now stay up, but a Mac with 512MB will feel it.
