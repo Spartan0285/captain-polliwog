@@ -38,19 +38,6 @@ typedef struct {
     char contentType[160];
 } CPRelayConnection;
 
-// How much to ask an upstream server for at once.
-//
-// googlevideo refuses a range larger than somewhere between 4MB and 10MB with
-// 403, and refuses an open-ended range - Range: bytes=0- - outright, which is
-// exactly what VLC asks for. Measured against one file: 1KB, 64KB, 256KB, 1MB
-// and 4MB all answered 206; 10MB and the whole 25MB file answered 403. So a
-// request for the whole thing is served as a series of bounded ones, joined
-// into a single response the player sees as one stream.
-//
-// This is not YouTube-specific behaviour worth special-casing: a bounded
-// range is something any server that supports ranges will honour, and one
-// that does not support them at all falls back to the plain path below.
-#define CPRelayChunk (2 * 1024 * 1024)
 
 static BOOL CPSendAll(int socketFD, const char *data, size_t length)
 {
@@ -140,73 +127,6 @@ static size_t CPRelayData(char *data, size_t size, size_t count, void *context)
         CPSendHeaders(connection);
     // QuickTime has stopped listening: stop fetching.
     return CPSendAll(connection->client, data, length) ? length : 0;
-}
-
-// One upstream request for a bounded byte range. Returns the status, or 0 if
-// the client went away mid-stream.
-static long CPRelayFetch(const char *url, CPRelayConnection *connection,
-                         long long start, long long end, BOOL bodyToClient)
-{
-    CURL *easy = curl_easy_init();
-    char range[64];
-    long status = 0;
-
-    if (easy == NULL)
-        return 0;
-    snprintf(range, sizeof(range), "%lld-%lld", start, end);
-    connection->discardBody = !bodyToClient;
-    curl_easy_setopt(easy, CURLOPT_URL, url);
-    curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(easy, CURLOPT_MAXREDIRS, 10L);
-    curl_easy_setopt(easy, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_1_1);
-    curl_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER, 1L);
-    curl_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST, 2L);
-    curl_easy_setopt(easy, CURLOPT_SSLVERSION, (long)CURL_SSLVERSION_TLSv1_2);
-    if (CPCertificateBundle != NULL)
-        curl_easy_setopt(easy, CURLOPT_CAINFO, CPCertificateBundle);
-    if (CPUserAgent != NULL)
-        curl_easy_setopt(easy, CURLOPT_USERAGENT, CPUserAgent);
-    curl_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT, 30L);
-    curl_easy_setopt(easy, CURLOPT_LOW_SPEED_LIMIT, 1L);
-    curl_easy_setopt(easy, CURLOPT_LOW_SPEED_TIME, 60L);
-    curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, CPRelayHeader);
-    curl_easy_setopt(easy, CURLOPT_HEADERDATA, connection);
-    curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, CPRelayData);
-    curl_easy_setopt(easy, CURLOPT_WRITEDATA, connection);
-    curl_easy_setopt(easy, CURLOPT_RANGE, range);
-    curl_easy_perform(easy);
-    curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
-    curl_easy_cleanup(easy);
-    connection->discardBody = NO;
-    return status;
-}
-
-// Headers for the whole response, written by us rather than copied from the
-// server: the server is answering for one chunk and the player is being told
-// about the entire stream.
-static void CPSendSynthesisedHeaders(CPRelayConnection *connection, BOOL clientAskedForRange,
-                                     long long start, long long end, long long total)
-{
-    char head[512];
-    int length;
-
-    connection->headersSent = YES;
-    length = snprintf(head, sizeof(head),
-        "HTTP/1.1 %s\r\n"
-        "Content-Type: %s\r\n"
-        "Accept-Ranges: bytes\r\n"
-        "Content-Length: %lld\r\n",
-        clientAskedForRange ? "206 Partial Content" : "200 OK",
-        connection->contentType[0] != 0 ? connection->contentType : "application/octet-stream",
-        end - start + 1);
-    if (clientAskedForRange && length > 0 && (size_t)length < sizeof(head))
-        length += snprintf(head + length, sizeof(head) - length,
-                           "Content-Range: bytes %lld-%lld/%lld\r\n", start, end, total);
-    if (length > 0 && (size_t)length < sizeof(head))
-        length += snprintf(head + length, sizeof(head) - length, "Connection: close\r\n\r\n");
-    if (length > 0)
-        CPSendAll(connection->client, head, strlen(head));
 }
 
 static void CPSendError(int client, const char *status)
@@ -377,68 +297,6 @@ static void *CPRelayServe(void *argument)
     connection.status = 502;
     connection.total = -1;
 
-    // What the client asked for. An absent Range means the whole file, which
-    // still has to be fetched in bounded pieces.
-    {
-        long long start = 0, end = -1;
-        BOOL askedForRange = range != NULL;
-        long probeStatus;
-
-        if (range != NULL) {
-            char *dash = strchr(range, '-');
-            start = strtoll(range, NULL, 10);
-            if (dash != NULL && dash[1] != 0)
-                end = strtoll(dash + 1, NULL, 10);
-        }
-        // Only when the client did not name an end. A player that asks for a
-        // definite stretch of bytes gets exactly the request it asked for,
-        // passed straight through as it always was - that is what the engine
-        // does for the video in a page, and it works, so it is left alone.
-        // The chunked path below exists for the other kind of asking: no
-        // Range at all, or Range: bytes=0-, which is what VLC sends and what
-        // googlevideo answers with 403.
-        if (end >= 0)
-            goto plain;
-
-        // A small bounded request, to learn the length and the type. Its body
-        // is dropped. This is the one extra round trip the chunked path costs.
-        connection.synthesised = YES;
-        probeStatus = CPRelayFetch(url, &connection, start, start + 1023, NO);
-        if (probeStatus == 206 && connection.total > 0 && start < connection.total) {
-            long long position;
-            if (end < 0 || end >= connection.total)
-                end = connection.total - 1;
-            CPSendSynthesisedHeaders(&connection, askedForRange, start, end, connection.total);
-            if (!connection.headRequest) {
-                for (position = start; position <= end; position += CPRelayChunk) {
-                    long long last = position + CPRelayChunk - 1;
-                    long status;
-                    if (last > end)
-                        last = end;
-                    status = CPRelayFetch(url, &connection, position, last, YES);
-                    // 0 means the player stopped reading; anything else out of
-                    // the 2xx range means the server changed its mind, and
-                    // there is no way to tell the player now - the headers
-                    // went out long ago. Stopping is all that is left.
-                    if (status < 200 || status >= 300)
-                        break;
-                }
-            }
-            free(range);
-            free(token);
-            free(url);
-            close(client);
-            return NULL;
-        }
-        // The server does not do ranges, or refused the probe. Fall through to
-        // one plain request and pass its own headers on, which is what every
-        // server that behaves normally gets.
-        connection.synthesised = NO;
-        connection.headersSent = NO;
-        connection.headersLength = 0;
-        connection.status = 502;
-    }
-plain:
 
     easy = curl_easy_init();
     curl_easy_setopt(easy, CURLOPT_URL, url);

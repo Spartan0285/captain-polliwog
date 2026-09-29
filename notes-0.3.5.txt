@@ -41,14 +41,15 @@ Memory
 
 Video handed to a player
 
-- Preferences has a YouTube quality setting, used when you hand a video
-  to VLC or MPlayer. "Best this Mac can handle" follows the processor:
-  480p on a G3, 720p on a G4, 1080p on a G5. It only takes effect on
-  videos short enough for YouTube to serve in full - see Known below.
+- YouTube videos handed to VLC now play at up to 720p on a G4, with
+  sound, instead of 360p. Preferences has a quality setting for it:
+  "Best this Mac can handle" follows the processor - 480p on a G3, 720p
+  on a G4, 1080p on a G5 - or you can name a height yourself.
 
-- The address handed to the player is now resolved by the browser
-  rather than taken from the page, which is steadier: the page does not
-  always have a usable one, and the resolved stream can be seeked.
+- The browser works out the address itself rather than taking whatever
+  the page is playing. That is steadier, because the page does not
+  always have one that can be used, and the stream it finds can be
+  seeked.
 
 VLC
 
@@ -68,22 +69,11 @@ VLC
 
 Known
 
-- YouTube plays at 360p in the browser and there is no quality menu.
-  The reason given here before was wrong, so here is the real one.
-
-  Media Source Extensions govern whether this engine can play the
-  streams YouTube calls adaptive; they have nothing to do with which
-  streams YouTube will name. The better qualities can be asked for and
-  do come back with working addresses - the browser now does ask, when
-  you hand a video to a player.
-
-  What stops them is a limit at YouTube's end: those addresses serve
-  only the first minute or so of a video and then refuse, whoever asks.
-  Measured across six qualities of one video the cut-off fell between
-  62 and 76 seconds. So a video longer than that is handed over at
-  360p, because a picture that stops after a minute is worse than one
-  that is merely small, and a video short enough to fit can be handed
-  over at any quality you choose.
+- YouTube in the browser window still plays at 360p. Handing a video to
+  VLC is what gets you 720p; the browser's own player cannot show the
+  better streams, because they arrive as separate picture and sound and
+  joining them needs Media Source Extensions, which this engine has not
+  got.
 
 - You cannot sign in to a Google account. Google's sign-in needs BigInt,
   which this engine does not have.

@@ -13,26 +13,27 @@
 // whether the *engine* can play adaptive streams; it has nothing to do with
 // which streams YouTube is willing to name.
 //
-// What actually happens: the watch page's own playerResponse does carry
-// adaptiveFormats up to 1080p, with plain unciphered URLs - and every one of
-// them answers 403. The WEB client's formats require a PO token, a BotGuard
+// What actually happens: the watch page's own playerResponse carries
+// adaptiveFormats up to 1080p with plain unciphered URLs - and every one of
+// them answers 403. The web client's formats require a PO token, a BotGuard
 // attestation appended as &pot=..., and BotGuard cannot run in this engine.
 // Progressive itag 18 is exempt, which is why 360p works and nothing else
 // does.
 //
-// The way through is the one yt-dlp takes: ask InnerTube as a different
-// client. ANDROID_VR is the only client in yt-dlp's table with no PO token
-// policy at all and no JS player requirement, so its URLs arrive ready to
-// use - unsigned, unscrambled, and good for about six hours. The request is
-// made from inside the page, because the one ingredient that cannot be
+// The way through is to ask InnerTube as a client that is not gated that
+// way, from inside the page - because the one ingredient that cannot be
 // forged is visitorData, and the page already has it. Cookies do not
-// substitute: without visitorData the answer is LOGIN_REQUIRED, "Sign in to
-// confirm you're not a bot".
+// substitute: without visitorData the answer is LOGIN_REQUIRED.
 //
-// These are separate video and audio streams, so this does not let the
-// engine play them - <video> would need MSE for that. It lets us hand a real
-// player something better than 360p, which is where the decoding was
-// happening anyway.
+// Which client that is has changed once already and will change again. See
+// the note on CP_INNERTUBE_CLIENT in the implementation before touching
+// this: an earlier one served sixty seconds of a video and then refused, and
+// a good deal of this file used to be built around working within that.
+//
+// These are separate video and audio streams unless the video has an HLS
+// manifest, so for the ordinary case this does not let the engine play them
+// - <video> would need MSE. It lets us hand a real player something better
+// than 360p, which is where the decoding was happening anyway.
 @interface CPYouTubeFormats : NSObject
 
 // Whether this page is a YouTube watch page worth asking about.
@@ -62,17 +63,9 @@
 //                     video has one, which is uncapped - empty when not
 + (NSArray *)formatsForWebView:(WebView *)webView;
 
-// The one to hand over, given what someone asked for in Preferences.
-//
-// Above 360p YouTube serves us only the first minute or so: every adaptive
-// URL refuses any byte range ending past roughly sixty seconds of media,
-// whoever asks and however it is asked. Measured across six formats of one
-// video the wall sits at 62.2s, 63.4s, 66.8s, 66.2s, 74.7s and 76.2s, and it
-// does not move with time or with reading the part that is allowed. So a
-// video longer than that gets the progressive stream, whatever quality was
-// asked for, because a picture that stops after a minute is worse than one
-// that is only 360p. A video short enough to fit - a Short, say - can have
-// any quality on the list.
+// The one to hand over, given what someone asked for in Preferences: the
+// tallest on offer that is no taller than that, or a muxed manifest when the
+// video has one.
 + (NSDictionary *)formatToHandOverIn:(NSArray *)formats preferredHeight:(unsigned)wanted;
 
 // The tallest format this Mac should be asked to decode, by processor: a G3
