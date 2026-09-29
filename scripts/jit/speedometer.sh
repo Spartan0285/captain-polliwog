@@ -9,10 +9,16 @@
 # This used to wait out the run and then call screencapture. That never
 # worked: screencapture run from an ssh session writes no file and prints no
 # error, so every run produced no picture and no number, and the comparison
-# it was written for was thrown away twice before anyone checked. The app now
-# has CPDebugScriptInterval, which re-runs the script every few seconds and
-# logs each answer, so the score is read from the log and the run stops as
-# soon as it appears.
+# it was written for was thrown away twice before anyone checked.
+#
+# Polling the page from outside did not work either: evaluating JavaScript
+# re-entrantly into an engine that is flat out running the benchmark got 34
+# turns and then none, and thirty minutes produced no score.
+#
+# So the page watches for its own score, on its own timer, in the same event
+# loop as the benchmark - and when it appears, navigates to an address
+# carrying it. The browser logs every address it finishes, so the number
+# arrives in the log with nobody asking for it, and the run is over by then.
 #
 # Usage:
 #   speedometer.sh <host> <app-name> <label> [minutes]
@@ -40,22 +46,38 @@ DOMAIN=$(ssh -n -o ConnectTimeout=60 "$HOST" \
 # Speedometer 3 puts the final number in #result-number. The rest is for the
 # case where that changes: any element whose id mentions "result" holding
 # something that looks like a score.
+# NOTE: no // comments in this script. It is flattened to a single line
+# before being handed to the browser, and a // comment would swallow
+# everything after it - which is how a probe that looked right returned an
+# empty string and cost another run.
+#
+# The page watches for its own score on its own timer, in the same event loop
+# as the benchmark, and navigates to an address carrying the number once it
+# appears. The browser logs every address it finishes.
 cat > /tmp/speedo-probe.js <<'JS'
 (function () {
-  var el = document.getElementById('result-number'), text = '', all, i;
-  if (el) text = (el.textContent || '').replace(/\s+/g, '');
-  if (!text) {
-    all = document.querySelectorAll('[id*="result"], [class*="result-number"]');
-    for (i = 0; i < all.length; i++) {
-      var t = (all[i].textContent || '').replace(/\s+/g, '');
-      if (/^[0-9]+(\.[0-9]+)?$/.test(t)) { text = t; break; }
+  if (window.__cpScoreWatch) return 'watching';
+  window.__cpScoreWatch = setInterval(function () {
+    var el = document.getElementById('result-number'), text = '', all, i, t;
+    if (el) text = (el.textContent || '').replace(/\s+/g, '');
+    if (!text) {
+      all = document.querySelectorAll('[id*="result"], [class*="result-number"]');
+      for (i = 0; i < all.length; i++) {
+        t = (all[i].textContent || '').replace(/\s+/g, '');
+        if (/^[0-9]+(\.[0-9]+)?$/.test(t)) { text = t; break; }
+      }
     }
-  }
-  if (/^[0-9]+(\.[0-9]+)?$/.test(text)) return 'SCORE ' + text;
-  return 'running';
+    if (/^[0-9]+(\.[0-9]+)?$/.test(text)) {
+      clearInterval(window.__cpScoreWatch);
+      location.href = 'https://browserbench.org/?cpscore=' + text + '&run=__LABEL__';
+    }
+  }, 5000);
+  return 'watching';
 })()
 JS
-tr '\n' ' ' < /tmp/speedo-probe.js > /tmp/speedo-probe-1line.js
+# Each run tags its own address, so a score left in the log by the previous
+# run cannot be read as this one's.
+sed "s/__LABEL__/$LABEL/" /tmp/speedo-probe.js | tr '\n' ' ' > /tmp/speedo-probe-1line.js
 scp -O -q /tmp/speedo-probe-1line.js "$HOST:/tmp/speedo-probe.js"
 
 echo "==> $LABEL: $APP, up to $MINUTES minutes"
@@ -63,7 +85,6 @@ ssh -n -o ConnectTimeout=90 "$HOST" "
     killall CaptainPolliwog 2>/dev/null; sleep 3
     defaults write '$DOMAIN' CPDebugURL '$URL'
     defaults write '$DOMAIN' CPDebugScript -string \"\$(cat /tmp/speedo-probe.js)\"
-    defaults write '$DOMAIN' CPDebugScriptInterval -int 15
     # CPDebugScript is only evaluated from writeDebugSnapshot, which the
     # window controller only schedules when a snapshot path is set. Without
     # this the script never runs at all. The app writes this picture itself,
@@ -77,8 +98,8 @@ ssh -n -o ConnectTimeout=90 "$HOST" "
     i=0
     while [ \$i -lt $((MINUTES * 60)) ]; do
         sleep 15; i=\$((i + 15))
-        score=\$(awk -v since=\$marker '/script result: SCORE /{ line=\$0 } END { print line }' /var/log/system.log \
-                 | sed -n 's/.*script result: SCORE \\([0-9.]*\\).*/\\1/p')
+        score=\$(grep -h 'cpscore=.*run=$LABEL' /var/log/system.log /Library/Logs/Console/*/console.log \$HOME/Library/Logs/Console/*/console.log 2>/dev/null \
+                 | tail -1 | sed -n 's/.*cpscore=\\([0-9.]*\\).*/\\1/p')
         [ -n \"\$score\" ] && break
         ps -axco command | grep -qx CaptainPolliwog || { echo '  app exited early'; break; }
     done
@@ -89,7 +110,6 @@ ssh -n -o ConnectTimeout=90 "$HOST" "
     ps -axco command | grep -qx CaptainPolliwog && killall CaptainPolliwog 2>/dev/null
     defaults delete '$DOMAIN' CPDebugURL 2>/dev/null
     defaults delete '$DOMAIN' CPDebugScript 2>/dev/null
-    defaults delete '$DOMAIN' CPDebugScriptInterval 2>/dev/null
     defaults delete '$DOMAIN' CPDebugSnapshotPath 2>/dev/null
     crash=\$(ls -t \$HOME/Library/Logs/CrashReporter/CaptainPolliwog* 2>/dev/null | head -1)
     if [ -n \"\$crash\" ] && [ \$(stat -f %m \"\$crash\") -ge \$start ]; then
