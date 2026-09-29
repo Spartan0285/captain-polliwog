@@ -2457,3 +2457,36 @@ which is a second reason to check in the local copy that posts its score
 back. And the intermittent 400 is a networking bug worth a session of its
 own, starting with a capture of the raw request our libcurl sends on the
 second and third use of a connection.
+
+### The Tiger dependencies at /opt/ppc were quietly replaced
+
+Packaging a Tiger engine now fails its own symbol check:
+
+    error: this build asks 10.4 for symbols it has not got:
+      libicucore.dylib wants _close$UNIX2003
+      libicucore.dylib wants _mktime$UNIX2003
+      libicucore.dylib wants _open$UNIX2003
+      libxml2.16.dylib wants _gzdirect
+
+This is not a regression in the engine and not in anything shipped. The
+Tiger engine installed on the Pismo - unzipped and inspected with the cross
+toolchain's nm - imports none of them. The copies now sitting in
+/opt/ppc/icu and /opt/ppc/xml do:
+
+    /opt/ppc/icu/lib/libicucore.dylib   (undefined) external _close$UNIX2003 (from libSystem)
+    /opt/ppc/xml/lib/libxml2.16.dylib   (undefined) external _gzdirect (from libz)
+
+So both were rebuilt by something that did not pass -D__DARWIN_UNIX03=0,
+and libxml2 was additionally linked against a libz newer than Tiger's.
+build-icu.sh and build-xml.sh both carry the flag and both explain why, so
+whatever replaced these artifacts did not go through them - most likely the
+2.52 dependency work, which builds its own ICU and preserves mtimes, so the
+dates on the files say nothing.
+
+Two things worth keeping from this. The check in package-webkit.sh did its
+job: these are lazily bound, so without it the engine would have shipped,
+started, rendered, and disappeared on the first page that formatted a date.
+And a staged Frameworks.zip is not a build artifact to be casually deleted -
+package-webkit.sh removes the stage directory before it validates, so a
+failed packaging run destroys the last good one. The copy here was recovered
+from the G3's /Applications, which is the only other place it existed.
