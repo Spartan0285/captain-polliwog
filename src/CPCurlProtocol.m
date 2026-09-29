@@ -50,16 +50,23 @@ static const char *CPBlockedDomains[] = {
 static BOOL CPLooksLikeScript(NSURLRequest *request)
 {
     NSString *path = [[[request URL] path] lowercaseString];
-    NSString *accept = [[request allHTTPHeaderFields] objectForKey:@"Accept"];
 
-    if ([path hasSuffix:@".js"] || [path hasSuffix:@".mjs"])
-        return YES;
-    // WebKit asks for scripts with a bare */* . Documents, stylesheets and
-    // images all name their type, so this does not catch them; an XHR does,
-    // which is why the extension is tried first and this only decides the
-    // rest.
-    return accept != nil && [[accept stringByTrimmingCharactersInSet:
-        [NSCharacterSet whitespaceCharacterSet]] isEqualToString:@"*/*"];
+    // The extension, and nothing cleverer.
+    //
+    // This first read the Accept header too, on the reasoning that WebKit
+    // asks for scripts with a bare */* and names the type for everything
+    // else. It does not: fonts are requested the same way. On google.com
+    // that rule refused three fonts from fonts.gstatic.com, so a setting
+    // about scripts was quietly changing the typography - doing something
+    // other than what it says, which is the one thing a setting must not do.
+    //
+    // Nothing was lost by dropping it. Every tracker it caught on a real
+    // page - gtm.js, ads.min.js, ta.js, skimlinks.js - is named .js anyway.
+    // Some third-party scripts are served without an extension and will not
+    // be caught; that is the right way to be wrong here, because the cost of
+    // the other way is a page that renders differently and no way for anyone
+    // to guess why.
+    return [path hasSuffix:@".js"] || [path hasSuffix:@".mjs"];
 }
 
 static BOOL CPIsThirdParty(NSURLRequest *request)
