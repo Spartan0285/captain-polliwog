@@ -334,22 +334,57 @@ static int CPJSONNumber(NSString *piece, NSString *key)
 
 + (unsigned)advisableHeightCeiling
 {
-    int subtype = 0;
-    size_t length = sizeof subtype;
+    int subtype = 0, cpus = 1;
+    uint64_t hz = 0;
+    uint32_t narrow = 0;
+    size_t length;
 
-    // What each processor is asked for by default. Lower than what it can be
-    // made to decode, on purpose: a G4 will play 720p and will also drop
-    // frames doing it with anything else going on, and the point of the
-    // default is to be right without anyone thinking about it. Someone who
-    // wants more can name a height in Preferences and get it.
+    length = sizeof subtype;
     if (sysctlbyname("hw.cpusubtype", &subtype, &length, NULL, 0) != 0)
         return 480;
-    switch (subtype) {
-    case 9:             return 360;     // 750: a G3 has no vector unit and
-                                        // nothing to spare
-    case 10: case 11:   return 480;     // 7400, 7450
-    case 100:           return 1080;    // 970: room for it
-    default:            return 480;     // something we do not recognise
+    length = sizeof cpus;
+    if (sysctlbyname("hw.ncpu", &cpus, &length, NULL, 0) != 0 || cpus < 1)
+        cpus = 1;
+
+    // hw.cpufrequency is eight bytes on some of these systems and four on
+    // others, and a four-byte answer read into an eight-byte box lands in the
+    // wrong half on a big-endian machine - which would read 1.5GHz as
+    // something astronomical. So the width that comes back is checked rather
+    // than assumed.
+    length = sizeof hz;
+    if (sysctlbyname("hw.cpufrequency", &hz, &length, NULL, 0) != 0 || length != sizeof hz) {
+        length = sizeof narrow;
+        hz = (sysctlbyname("hw.cpufrequency", &narrow, &length, NULL, 0) == 0) ? narrow : 0;
+    }
+
+    // "G4" covers a 350MHz Sawtooth and a dual 1.42GHz, which do not belong
+    // at the same quality, so the clock decides rather than the family.
+    //
+    // The one anchor measured on real hardware is a 1.5GHz single G4, which
+    // handles 480p: PowerBook5,4, hw.cpufrequency 1499999994, hw.ncpu 1.
+    // Everything else here is reasoning outward from that point and should be
+    // corrected by anyone who tests a machine it gets wrong.
+    //
+    // A second processor is counted, but not at face value: H.264 decoding
+    // threads well enough to help and nowhere near twice over.
+    {
+        double effective = (double)hz * (cpus >= 2 ? 1.6 : 1.0);
+
+        switch (subtype) {
+        case 9:                             // 750: no vector unit at all
+            return 360;
+        case 10: case 11:                   // 7400, 7450
+            if (hz == 0)
+                return 480;                 // no clock to go on: the measured machine
+            return effective >= 1.2e9 ? 480 : 360;
+        case 100:                           // 970
+            if (hz == 0)
+                return 1080;
+            // Inferred, not measured - there is no G5 here to try it on.
+            return effective >= 2.0e9 ? 1080 : 720;
+        default:
+            return 480;
+        }
     }
 }
 

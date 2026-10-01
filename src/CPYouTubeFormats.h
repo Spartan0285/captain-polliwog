@@ -68,8 +68,10 @@
 // video has one.
 + (NSDictionary *)formatToHandOverIn:(NSArray *)formats preferredHeight:(unsigned)wanted;
 
-// The tallest format this Mac is asked for by default, by processor: 360p on
-// a G3, 480p on a G4, 1080p on a G5. Deliberately below what each can be made
+// The tallest format this Mac is asked for by default, from the processor and
+// its clock: 360p on a G3, 480p on a G4 above about 1.2GHz and 360p below it,
+// and 720p or 1080p on a G5 depending on the same. "G4" covers a 350MHz
+// Sawtooth and a dual 1.42GHz, which do not belong at the same quality. Deliberately below what each can be made
 // to manage - a G4 will play 720p and will also drop frames doing it with
 // anything else running - because a default should be right without anyone
 // thinking about it. Used when the preference is left at "best this Mac can
