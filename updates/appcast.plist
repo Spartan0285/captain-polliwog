@@ -283,6 +283,126 @@ Known
 			<key>version</key>
 			<string>0.3.4</string>
 		</dict>
+		<dict>
+			<key>length</key>
+			<integer>70996949</integer>
+			<key>minimumSystemVersion</key>
+			<string>10.4</string>
+			<key>notes</key>
+			<string>Captain Polliwog 0.3.5
+
+Emoji
+
+- Pages with emoji in them no longer show empty boxes. Tiger and Leopard
+  are older than emoji, so neither has ever had a font for them; the
+  browser now carries one - Noto Emoji, black and white - and uses it
+  only for itself. Nothing is added to your font book.
+
+  Black and white rather than colour because every colour emoji format
+  was invented years after this engine and none of them would draw here.
+
+- On Tiger, a single emoji could take the browser down. A heart followed
+  by the invisible character that asks for it to be drawn as emoji was
+  enough: the system's text machinery, asked to find a font for a
+  character nothing has, walked off the end of itself. 68kmla.org has
+  exactly that in its footer, which is why it closed the browser every
+  time. Fixed, and the font means those characters now draw properly
+  rather than merely failing safely.
+
+Memory
+
+- Pages that fill memory no longer take the browser down with them. Some
+  sites keep making data as they sit there - Vimeo left open on a 2GB G4
+  reaches 1.7GB - and on a Mac with less, the system used to kill the
+  browser outright, with no crash report and every window lost.
+
+  The browser now answers that in stages. It empties its caches, then
+  gives up every background tab, then asks JavaScript to collect what is
+  no longer needed. If the page in front is still filling the machine
+  after three rounds of that, it stops that page's scripts and says so in
+  the status bar at the bottom. Reloading starts the page again.
+
+  Measured on a PowerBook G4 with five heavy sites open: 798,000
+  JavaScript objects released in one round, and the browser settling at
+  365MB free instead of 49MB.
+
+- A page whose scripts have been stopped keeps its text and pictures. It
+  simply stops updating. That is a poor outcome and a better one than the
+  browser disappearing.
+
+Video handed to a player
+
+- YouTube videos handed to VLC now play with sound at the quality you
+  ask for, instead of always 360p. Preferences has the setting:
+  "Best this Mac can handle" follows the processor - 360p on a G3, 480p
+  on a G4, 1080p on a G5 - or you can name a height yourself and get it.
+
+  Those defaults are below what each Mac can be pushed to. A G4 will
+  play 720p, and will also drop frames doing it with anything else
+  running, so that is a choice to make rather than one to be handed.
+
+- The browser works out the address itself rather than taking whatever
+  the page is playing. That is steadier, because the page does not
+  always have one that can be used, and the stream it finds can be
+  seeked.
+
+VLC
+
+- The browser now finds PowerVLC, which is VLC rebuilt for these
+  processors rather than the last universal binary VideoLAN shipped. It
+  had been looking only for an application called VLC, so PowerVLC was
+  never found, and it would have been started without an address even if
+  it had been.
+
+- Offering to download it now fetches the build for your processor - a G3
+  build for a G3, a G4 build for a G4, a G5 build for a G5 - from
+  github.com/Olsro/powervlc. The old link pointed at VideoLAN's 2010
+  build, behind two redirects.
+
+  On a G4, PowerVLC decodes 720p without dropping a frame. A G3 manages
+  it but cannot keep up, so 360p or 480p is the sensible choice there.
+
+Faster, lighter
+
+- A new setting, "Run scripts sparingly", refuses scripts a page
+  invites in from elsewhere - analytics, tag managers, embeds - while
+  the site's own keep working, and stops any script that runs for more
+  than three seconds. Off unless you turn it on. On a news site it
+  saved about a second and a half of twelve; on a site that serves its
+  own code, like Google, it does nothing at all.
+
+Known
+
+- YouTube in the browser window still plays at 360p. Handing a video to
+  VLC is what gets you 720p; the browser's own player cannot show the
+  better streams, because they arrive as separate picture and sound and
+  joining them needs Media Source Extensions, which this engine has not
+  got.
+
+- You cannot sign in to a Google account. Google's sign-in needs BigInt,
+  which this engine does not have.
+
+- On Tiger, a page with video used to close the browser. The system's
+  video layer arrived in 10.5, and the engine asked whether it was
+  there in a way that could not survive the answer being no. Fixed; on
+  Tiger video now draws through the software renderer.
+
+- Very large sites can still use a great deal of memory. The browser will
+  now stay up, but a Mac with 512MB will feel it.
+
+  Checked on a PowerBook G3 with 1GB: a page allocating four megabytes a
+  second was held at 719MB for five straight minutes with the machine
+  still answering, where before it would have grown until the system
+  killed the browser outright.</string>
+			<key>sha256</key>
+			<string>e504279603742d41cb5c22a7f9a66057c46a3d0c83b5b8909a6f2e111d553dd0</string>
+			<key>signature</key>
+			<string>GB5UxmyczAn8ojp6AueAsrUgMac+pB7gsND6Iep9WPqfXwHjJdnWFnLL2JZ3oLB1pXC1z+9l6FrX0QcQM24OAQ==</string>
+			<key>url</key>
+			<string>https://github.com/Spartan0285/captain-polliwog/releases/download/v0.3.5/CaptainPolliwog-0.3.5.zip</string>
+			<key>version</key>
+			<string>0.3.5</string>
+		</dict>
 	</array>
 </dict>
 </plist>
