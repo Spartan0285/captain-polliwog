@@ -1,0 +1,88 @@
+From a5fb06d1e9f6174748e6e4cf51731ae8e5d7e6fa Mon Sep 17 00:00:00 2001
+From: Adam Cipoletti <adam@amcreativecoach.com>
+Date: Thu, 1 Oct 2026 15:07:23 -0400
+Subject: [PATCH] Engine: the check for QTMovieLayer was the thing that crashed
+
+supportsAcceleratedRendering() asked "getQTMovieLayerClass() != Nil", which
+reads as a careful test for whether the class exists. It is not. That
+accessor comes from SOFT_LINK_CLASS, whose generated initialiser ends in
+RELEASE_ASSERT(class), so on a system without QTMovieLayer the question
+cannot be asked without the answer bringing the process down. QTMovieLayer
+arrived in 10.5.
+
+On 10.4 that means any page carrying video kills the browser - release build,
+nothing unusual required. Reproduced on a PowerBook G3 running 10.4.11:
+EXC_BREAKPOINT in initQTMovieLayer, reached from setUpVideoRendering by way
+of updateStates, every time on a YouTube watch page.
+
+The fix is the pattern already sitting twenty lines above it for the other
+QTKit class: NSClassFromString, which answers Nil quietly. The software
+renderer then takes over, which is what 10.4 should have been doing all
+along. createQTMovieLayer is guarded too, because its allocator is
+soft-linked the same way.
+
+Not conditional on the system: on 10.5 the class is there and nothing
+changes. Verified on the Pismo - the page that crashed it four times now
+loads, and the crash log stayed at four entries.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ .../graphics/mac/MediaPlayerPrivateQTKit.mm   | 28 ++++++++++++++++++-
+ 1 file changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/Source/WebCore/platform/graphics/mac/MediaPlayerPrivateQTKit.mm b/Source/WebCore/platform/graphics/mac/MediaPlayerPrivateQTKit.mm
+index a51027a1..fd5e3cf9 100644
+--- a/Source/WebCore/platform/graphics/mac/MediaPlayerPrivateQTKit.mm
++++ b/Source/WebCore/platform/graphics/mac/MediaPlayerPrivateQTKit.mm
+@@ -444,6 +444,26 @@ static Class QTVideoRendererClass()
+      return QTVideoRendererWebKitOnlyClass;
+ }
+ 
++// Asks whether QTMovieLayer exists without trapping if it does not.
++//
++// The soft-linked accessor cannot be used for this. SOFT_LINK_CLASS builds an
++// initialiser that ends in RELEASE_ASSERT(class), so on a system without the
++// class the first call brings the process down - and QTMovieLayer arrived in
++// 10.5. supportsAcceleratedRendering() below asked "getQTMovieLayerClass() !=
++// Nil", which reads as a careful check and is in fact the crash: the question
++// could not be asked without the answer killing the browser.
++//
++// Reproduced on a PowerBook G3 running 10.4.11 on any page carrying video,
++// release build and all: EXC_BREAKPOINT in initQTMovieLayer, reached from
++// setUpVideoRendering by way of updateStates. The same lookup written the way
++// the renderer above does it answers Nil quietly and the software renderer
++// takes over, which is what 10.4 should have been doing all along.
++static Class QTMovieLayerClassIfPresent()
++{
++    static Class movieLayerClass = NSClassFromString(@"QTMovieLayer");
++    return movieLayerClass;
++}
++
+ void MediaPlayerPrivateQTKit::createQTVideoRenderer(QTVideoRendererMode rendererMode)
+ {
+     LOG(Media, "MediaPlayerPrivateQTKit::createQTVideoRenderer(%p)", this);
+@@ -492,6 +512,12 @@ void MediaPlayerPrivateQTKit::destroyQTVideoRenderer()
+ void MediaPlayerPrivateQTKit::createQTMovieLayer()
+ {
+     LOG(Media, "MediaPlayerPrivateQTKit::createQTMovieLayer(%p)", this);
++    // Belt and braces: the allocator below is soft-linked too and traps the
++    // same way. Nothing should reach here without the class, because
++    // preferredRenderingMode asks first, but this is the one place where
++    // being wrong costs the whole browser.
++    if (!QTMovieLayerClassIfPresent())
++        return;
+     if (!m_qtMovie)
+         return;
+ 
+@@ -1578,7 +1604,7 @@ void MediaPlayerPrivateQTKit::sawUnsupportedTracks()
+ 
+ bool MediaPlayerPrivateQTKit::supportsAcceleratedRendering() const
+ {
+-    return isReadyForVideoSetup() && getQTMovieLayerClass() != Nil;
++    return isReadyForVideoSetup() && QTMovieLayerClassIfPresent() != Nil;
+ }
+ 
+ void MediaPlayerPrivateQTKit::acceleratedRenderingStateChanged()
+-- 
+2.54.0 (Apple Git-157)
+

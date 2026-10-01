@@ -71,6 +71,15 @@ VLC
   On a G4, PowerVLC decodes 720p without dropping a frame. A G3 manages
   it but cannot keep up, so 360p or 480p is the sensible choice there.
 
+Faster, lighter
+
+- A new setting, "Run scripts sparingly", refuses scripts a page
+  invites in from elsewhere - analytics, tag managers, embeds - while
+  the site's own keep working, and stops any script that runs for more
+  than three seconds. Off unless you turn it on. On a news site it
+  saved about a second and a half of twelve; on a site that serves its
+  own code, like Google, it does nothing at all.
+
 Known
 
 - YouTube in the browser window still plays at 360p. Handing a video to
@@ -81,6 +90,11 @@ Known
 
 - You cannot sign in to a Google account. Google's sign-in needs BigInt,
   which this engine does not have.
+
+- On Tiger, a page with video used to close the browser. The system's
+  video layer arrived in 10.5, and the engine asked whether it was
+  there in a way that could not survive the answer being no. Fixed; on
+  Tiger video now draws through the software renderer.
 
 - Very large sites can still use a great deal of memory. The browser will
   now stay up, but a Mac with 512MB will feel it.
