@@ -68,9 +68,12 @@
 // video has one.
 + (NSDictionary *)formatToHandOverIn:(NSArray *)formats preferredHeight:(unsigned)wanted;
 
-// The tallest format this Mac should be asked to decode, by processor: a G3
-// cannot keep up with 720p even in PowerVLC, and a G5 can take 1080p. Used
-// when the preference is left at "best this Mac can handle".
+// The tallest format this Mac is asked for by default, by processor: 360p on
+// a G3, 480p on a G4, 1080p on a G5. Deliberately below what each can be made
+// to manage - a G4 will play 720p and will also drop frames doing it with
+// anything else running - because a default should be right without anyone
+// thinking about it. Used when the preference is left at "best this Mac can
+// handle"; naming a height in Preferences overrides it.
 + (unsigned)advisableHeightCeiling;
 
 // The entry from formats that best matches a wanted height, never taller

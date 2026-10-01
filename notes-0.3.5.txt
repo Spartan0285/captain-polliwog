@@ -41,10 +41,14 @@ Memory
 
 Video handed to a player
 
-- YouTube videos handed to VLC now play at up to 720p on a G4, with
-  sound, instead of 360p. Preferences has a quality setting for it:
-  "Best this Mac can handle" follows the processor - 480p on a G3, 720p
-  on a G4, 1080p on a G5 - or you can name a height yourself.
+- YouTube videos handed to VLC now play with sound at the quality you
+  ask for, instead of always 360p. Preferences has the setting:
+  "Best this Mac can handle" follows the processor - 360p on a G3, 480p
+  on a G4, 1080p on a G5 - or you can name a height yourself and get it.
+
+  Those defaults are below what each Mac can be pushed to. A G4 will
+  play 720p, and will also drop frames doing it with anything else
+  running, so that is a choice to make rather than one to be handed.
 
 - The browser works out the address itself rather than taking whatever
   the page is playing. That is steadier, because the page does not

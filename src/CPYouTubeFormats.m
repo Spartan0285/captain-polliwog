@@ -337,14 +337,19 @@ static int CPJSONNumber(NSString *piece, NSString *key)
     int subtype = 0;
     size_t length = sizeof subtype;
 
+    // What each processor is asked for by default. Lower than what it can be
+    // made to decode, on purpose: a G4 will play 720p and will also drop
+    // frames doing it with anything else going on, and the point of the
+    // default is to be right without anyone thinking about it. Someone who
+    // wants more can name a height in Preferences and get it.
     if (sysctlbyname("hw.cpusubtype", &subtype, &length, NULL, 0) != 0)
-        return 720;
+        return 480;
     switch (subtype) {
-    case 9:             return 480;     // 750: PowerVLC manages 720p and
-                                        // cannot keep up with it
-    case 10: case 11:   return 720;     // 7400, 7450: 720p, measured
-    case 100:           return 1080;    // 970
-    default:            return 720;
+    case 9:             return 360;     // 750: a G3 has no vector unit and
+                                        // nothing to spare
+    case 10: case 11:   return 480;     // 7400, 7450
+    case 100:           return 1080;    // 970: room for it
+    default:            return 480;     // something we do not recognise
     }
 }
 
